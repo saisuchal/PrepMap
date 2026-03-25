@@ -22,7 +22,7 @@ router.get("/admin/stats", async (req, res) => {
       stats.map((s) => ({
         subtopicId: s.subtopicId,
         subtopicTitle: s.subtopicTitle,
-        eventCount: s.eventCount,
+        eventCount: Number(s.eventCount),
       }))
     );
 

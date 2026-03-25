@@ -104,9 +104,6 @@ export default function Subtopic() {
         // User scrolled to bottom, wait 2 seconds before tracking
         timeoutId = setTimeout(() => {
           if (!sessionStorage.getItem(`tracked_${id}`)) {
-            // Reconstruct payload from user and content context
-            // Note: In a real app we'd pass config/topic IDs through state/URL, 
-            // relying on basic mapping here or ensuring backend accepts partial for this demo
             trackEventMutation.mutate({
               data: {
                 userId: user.id,
