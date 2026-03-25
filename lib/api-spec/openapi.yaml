@@ -2,8 +2,8 @@ openapi: 3.1.0
 info:
   # Do not change the title, if the title changes, the import paths will be broken
   title: Api
-  version: 0.1.0
-  description: Exam Roadmap Platform API
+  version: 0.2.0
+  description: GP-Max Exam Roadmap Platform API
 servers:
   - url: /api
     description: Base API path
@@ -61,17 +61,48 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
 
+  /auth/reset-password:
+    post:
+      operationId: resetPassword
+      tags: [auth]
+      summary: Reset password for a student
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ResetPasswordRequest"
+      responses:
+        "200":
+          description: Password reset successful
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
+        "401":
+          description: Invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
   /configs:
     get:
       operationId: getConfigs
       tags: [configs]
-      summary: Get active exam configurations
+      summary: Get exam configurations
       parameters:
         - name: universityId
           in: query
           required: true
           schema:
             type: string
+        - name: status
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [draft, live]
       responses:
         "200":
           description: List of configs
@@ -210,11 +241,29 @@ components:
           type: string
         year:
           type: string
+        role:
+          type: string
+          enum: [admin, student]
       required:
         - id
         - universityId
         - branch
         - year
+        - role
+
+    ResetPasswordRequest:
+      type: object
+      properties:
+        collegeId:
+          type: string
+        currentPassword:
+          type: string
+        newPassword:
+          type: string
+      required:
+        - collegeId
+        - currentPassword
+        - newPassword
 
     Config:
       type: object
@@ -232,8 +281,13 @@ components:
         exam:
           type: string
           enum: [mid1, mid2, endsem]
-        isActive:
-          type: boolean
+        status:
+          type: string
+          enum: [draft, live]
+        createdBy:
+          type: string
+        createdAt:
+          type: string
       required:
         - id
         - universityId
@@ -241,7 +295,8 @@ components:
         - branch
         - subject
         - exam
-        - isActive
+        - status
+        - createdBy
 
     Node:
       type: object
@@ -258,11 +313,34 @@ components:
         parentId:
           type: string
           nullable: true
+        explanation:
+          type: string
+          nullable: true
+        sortOrder:
+          type: string
       required:
         - id
         - configId
         - title
         - type
+
+    SubtopicQuestion:
+      type: object
+      properties:
+        id:
+          type: integer
+        markType:
+          type: string
+          enum: ["2", "5"]
+        question:
+          type: string
+        answer:
+          type: string
+      required:
+        - id
+        - markType
+        - question
+        - answer
 
     SubtopicContent:
       type: object
@@ -273,22 +351,15 @@ components:
           type: string
         explanation:
           type: string
-        twoMarkQuestion:
-          type: string
-        twoMarkAnswer:
-          type: string
-        fiveMarkQuestion:
-          type: string
-        fiveMarkAnswer:
-          type: string
+        questions:
+          type: array
+          items:
+            $ref: "#/components/schemas/SubtopicQuestion"
       required:
         - id
         - nodeId
         - explanation
-        - twoMarkQuestion
-        - twoMarkAnswer
-        - fiveMarkQuestion
-        - fiveMarkAnswer
+        - questions
 
     EventPayload:
       type: object

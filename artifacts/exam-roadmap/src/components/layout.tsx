@@ -1,6 +1,6 @@
 import { ReactNode } from "react";
 import { Link, useLocation } from "wouter";
-import { LogOut, BookOpen, User, Settings } from "lucide-react";
+import { LogOut, Zap, User, Settings, Home } from "lucide-react";
 import { getStoredUser, removeStoredUser } from "@/lib/auth";
 import { Button } from "./ui/button";
 
@@ -19,27 +19,36 @@ export function Layout({ children }: { children: ReactNode }) {
     <div className="min-h-screen bg-background flex flex-col">
       <header className="sticky top-0 z-50 w-full glass-panel border-b border-border/40">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
-          <Link href="/" className="flex items-center gap-2 group">
+          <Link href={user.role === "admin" ? "/admin" : "/"} className="flex items-center gap-2 group">
             <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-primary to-blue-600 flex items-center justify-center text-white shadow-lg shadow-primary/20 group-hover:scale-105 transition-transform">
-              <BookOpen className="w-5 h-5" />
+              <Zap className="w-5 h-5" />
             </div>
             <span className="font-display font-bold text-xl tracking-tight text-foreground">
-              Aura<span className="text-primary">Prep</span>
+              GP-<span className="text-primary">Max</span>
             </span>
           </Link>
           
           <div className="flex items-center gap-4">
-            <Link href="/admin" className="text-sm font-medium text-muted-foreground hover:text-foreground transition-colors flex items-center gap-1.5">
-              <Settings className="w-4 h-4" />
-              <span className="hidden sm:inline">Admin</span>
-            </Link>
+            {user.role === "admin" ? (
+              <Link href="/admin" className="text-sm font-medium text-muted-foreground hover:text-foreground transition-colors flex items-center gap-1.5">
+                <Settings className="w-4 h-4" />
+                <span className="hidden sm:inline">Dashboard</span>
+              </Link>
+            ) : (
+              <Link href="/" className="text-sm font-medium text-muted-foreground hover:text-foreground transition-colors flex items-center gap-1.5">
+                <Home className="w-4 h-4" />
+                <span className="hidden sm:inline">Home</span>
+              </Link>
+            )}
             
             <div className="h-6 w-px bg-border mx-2"></div>
             
             <div className="flex items-center gap-3">
               <div className="hidden sm:flex flex-col items-end">
                 <span className="text-sm font-semibold leading-none">{user.id}</span>
-                <span className="text-xs text-muted-foreground leading-none mt-1">{user.branch} • {user.year}</span>
+                <span className="text-xs text-muted-foreground leading-none mt-1">
+                  {user.role === "admin" ? "Admin" : `${user.branch} • Year ${user.year}`}
+                </span>
               </div>
               <div className="w-9 h-9 rounded-full bg-secondary flex items-center justify-center border border-border text-primary">
                 <User className="w-4 h-4" />

@@ -1,6 +1,6 @@
 import { Router, type IRouter } from "express";
 import { GetSubtopicContentParams, GetSubtopicContentResponse } from "@workspace/api-zod";
-import { db, subtopicContentsTable } from "@workspace/db";
+import { db, subtopicContentsTable, subtopicQuestionsTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
 
 const router: IRouter = Router();
@@ -20,14 +20,21 @@ router.get("/subtopics/:id", async (req, res) => {
       return;
     }
 
+    const questions = await db
+      .select()
+      .from(subtopicQuestionsTable)
+      .where(eq(subtopicQuestionsTable.nodeId, id));
+
     const response = GetSubtopicContentResponse.parse({
       id: content.id,
       nodeId: content.nodeId,
       explanation: content.explanation,
-      twoMarkQuestion: content.twoMarkQuestion,
-      twoMarkAnswer: content.twoMarkAnswer,
-      fiveMarkQuestion: content.fiveMarkQuestion,
-      fiveMarkAnswer: content.fiveMarkAnswer,
+      questions: questions.map((q) => ({
+        id: q.id,
+        markType: q.markType,
+        question: q.question,
+        answer: q.answer,
+      })),
     });
 
     res.json(response);

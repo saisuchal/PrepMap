@@ -7,6 +7,7 @@ import { Layout } from "@/components/layout";
 import { getStoredUser } from "@/lib/auth";
 
 import Login from "@/pages/login";
+import ResetPassword from "@/pages/reset-password";
 import Home from "@/pages/home";
 import Roadmap from "@/pages/roadmap";
 import Subtopic from "@/pages/subtopic";
@@ -21,22 +22,26 @@ const queryClient = new QueryClient({
   }
 });
 
-function ProtectedRoute({ component: Component }: { component: React.ComponentType }) {
+function ProtectedRoute({ component: Component, requireRole }: { component: React.ComponentType; requireRole?: "admin" | "student" }) {
   const user = getStoredUser();
   if (!user) return <Redirect to="/login" />;
+  if (requireRole && user.role !== requireRole) {
+    return <Redirect to={user.role === "admin" ? "/admin" : "/"} />;
+  }
   return <Component />;
 }
 
-function ProtectedHome() { return <ProtectedRoute component={Home} />; }
-function ProtectedRoadmap() { return <ProtectedRoute component={Roadmap} />; }
-function ProtectedSubtopic() { return <ProtectedRoute component={Subtopic} />; }
-function ProtectedAdmin() { return <ProtectedRoute component={Admin} />; }
+function ProtectedHome() { return <ProtectedRoute component={Home} requireRole="student" />; }
+function ProtectedRoadmap() { return <ProtectedRoute component={Roadmap} requireRole="student" />; }
+function ProtectedSubtopic() { return <ProtectedRoute component={Subtopic} requireRole="student" />; }
+function ProtectedAdmin() { return <ProtectedRoute component={Admin} requireRole="admin" />; }
 
 function AppRouter() {
   return (
     <Layout>
       <Switch>
         <Route path="/login" component={Login} />
+        <Route path="/reset-password" component={ResetPassword} />
         <Route path="/" component={ProtectedHome} />
         <Route path="/roadmap" component={ProtectedRoadmap} />
         <Route path="/subtopic/:id" component={ProtectedSubtopic} />

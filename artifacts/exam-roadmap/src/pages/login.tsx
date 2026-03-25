@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
-import { useLocation } from "wouter";
-import { BookOpen, GraduationCap, Lock, ArrowRight } from "lucide-react";
+import { useLocation, Link } from "wouter";
+import { Zap, GraduationCap, Lock, ArrowRight } from "lucide-react";
 import { motion } from "framer-motion";
 import { useLogin } from "@workspace/api-client-react";
 import { setStoredUser, getStoredUser } from "@/lib/auth";
@@ -10,25 +10,26 @@ import { Input } from "@/components/ui/input";
 export default function Login() {
   const [, setLocation] = useLocation();
   const [collegeId, setCollegeId] = useState("");
-  const [password, setPassword] = useState("1234567890"); // Hardcoded as per req
+  const [password, setPassword] = useState("");
   const loginMutation = useLogin();
 
   useEffect(() => {
-    if (getStoredUser()) {
-      setLocation("/");
+    const user = getStoredUser();
+    if (user) {
+      setLocation(user.role === "admin" ? "/admin" : "/");
     }
   }, [setLocation]);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!collegeId.trim()) return;
+    if (!collegeId.trim() || !password.trim()) return;
 
     loginMutation.mutate(
       { data: { collegeId, password } },
       {
         onSuccess: (data) => {
           setStoredUser(data);
-          setLocation("/");
+          setLocation(data.role === "admin" ? "/admin" : "/");
         }
       }
     );
@@ -36,11 +37,10 @@ export default function Login() {
 
   return (
     <div className="min-h-screen w-full flex items-center justify-center bg-background relative overflow-hidden">
-      {/* Decorative background image generated via requirements.yaml */}
       <div className="absolute inset-0 z-0 opacity-[0.15] mix-blend-multiply pointer-events-none">
         <img 
           src={`${import.meta.env.BASE_URL}images/academic-bg.png`} 
-          alt="Abstract academic background" 
+          alt="" 
           className="w-full h-full object-cover"
         />
       </div>
@@ -57,12 +57,14 @@ export default function Login() {
         <div className="bg-white/80 backdrop-blur-xl rounded-3xl p-8 sm:p-10 border border-white shadow-[0_8px_40px_rgb(0,0,0,0.06)]">
           <div className="flex justify-center mb-8">
             <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-primary to-blue-600 flex items-center justify-center text-white shadow-xl shadow-primary/25">
-              <BookOpen className="w-8 h-8" />
+              <Zap className="w-8 h-8" />
             </div>
           </div>
           
           <div className="text-center mb-8">
-            <h1 className="text-3xl font-display font-bold text-foreground">Welcome to AuraPrep</h1>
+            <h1 className="text-3xl font-display font-bold text-foreground">
+              Welcome to <span className="text-primary">GP-Max</span>
+            </h1>
             <p className="mt-2 text-muted-foreground text-sm">Sign in with your college credentials to access your exam roadmap.</p>
           </div>
 
@@ -73,7 +75,7 @@ export default function Login() {
                 College Roll ID
               </label>
               <Input
-                placeholder="e.g. 21BXX0000"
+                placeholder="e.g. STU001"
                 value={collegeId}
                 onChange={(e) => setCollegeId(e.target.value)}
                 autoFocus
@@ -88,20 +90,19 @@ export default function Login() {
               </label>
               <Input
                 type="password"
+                placeholder="Enter your password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                className="bg-white/50 focus:bg-white text-muted-foreground"
-                readOnly
+                className="bg-white/50 focus:bg-white"
               />
-              <p className="text-xs text-muted-foreground text-right">Password is preset by your institution</p>
             </div>
 
             <Button 
               type="submit" 
               className="w-full h-14 text-base mt-4 group"
-              disabled={loginMutation.isPending || !collegeId.trim()}
+              disabled={loginMutation.isPending || !collegeId.trim() || !password.trim()}
             >
-              {loginMutation.isPending ? "Authenticating..." : "Access Roadmap"}
+              {loginMutation.isPending ? "Authenticating..." : "Sign In"}
               {!loginMutation.isPending && (
                 <ArrowRight className="w-5 h-5 ml-2 group-hover:translate-x-1 transition-transform" />
               )}
@@ -109,10 +110,16 @@ export default function Login() {
 
             {loginMutation.isError && (
               <p className="text-sm text-destructive text-center font-medium p-3 bg-destructive/10 rounded-xl">
-                Failed to authenticate. Please check your ID.
+                Invalid credentials. Please check your ID and password.
               </p>
             )}
           </form>
+
+          <div className="mt-6 text-center">
+            <Link href="/reset-password" className="text-sm text-primary hover:underline">
+              Reset your password
+            </Link>
+          </div>
         </div>
       </motion.div>
     </div>

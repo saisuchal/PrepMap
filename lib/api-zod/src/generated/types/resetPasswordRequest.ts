@@ -6,7 +6,8 @@
  * OpenAPI spec version: 0.2.0
  */
 
-export interface LoginRequest {
+export interface ResetPasswordRequest {
   collegeId: string;
-  password: string;
+  currentPassword: string;
+  newPassword: string;
 }

@@ -16,6 +16,7 @@ pnpm workspace monorepo using TypeScript. Each package manages its own dependenc
 - **API codegen**: Orval (from OpenAPI spec)
 - **Build**: esbuild (CJS bundle)
 - **Frontend**: React + Vite + Tailwind CSS v4
+- **Auth**: bcrypt password hashing (cost factor 10)
 
 ## Structure
 
@@ -23,7 +24,7 @@ pnpm workspace monorepo using TypeScript. Each package manages its own dependenc
 artifacts-monorepo/
 ├── artifacts/              # Deployable applications
 │   ├── api-server/         # Express API server
-│   └── exam-roadmap/       # Exam Roadmap Platform (React + Vite)
+│   └── exam-roadmap/       # GP-Max Platform (React + Vite)
 ├── lib/                    # Shared libraries
 │   ├── api-spec/           # OpenAPI spec + Orval codegen config
 │   ├── api-client-react/   # Generated React Query hooks
@@ -38,33 +39,39 @@ artifacts-monorepo/
 └── package.json
 ```
 
-## Application: AuraPrep (Exam Roadmap Platform)
+## Application: GP-Max (Exam Roadmap Platform)
 
-An exam-oriented roadmap platform where students navigate a hierarchical syllabus and view subtopics with explanations and 2-mark/5-mark Q&A. Event tracking records when a student consumes a subtopic.
+A roadmap.sh-inspired last-minute exam prep platform for college students. Two roles: Admin (manages configs, content) and Student (navigates visual topic tree, reads Q&A, silently tracked).
+
+Config = University + Branch + Year + Subject + Exam point (Mid-1, Mid-2, End Sem).
 
 ### Features
 
-- **Login**: College ID + hardcoded password ("1234567890"), user stored in localStorage
-- **Config Selection**: University > Year > Branch > Exam type selection
-- **Roadmap Tree**: Expandable tree: Units > Topics > Subtopics
-- **Subtopic Page**: Explanation + 2-mark Q&A + 5-mark Q&A with toggle-to-reveal answers
+- **Login**: College ID + bcrypt-hashed password, role-based redirect (admin → /admin, student → /)
+- **Password Reset**: Change password with current password verification
+- **Config Selection**: University > Year > Branch > Exam type selection (students see only "live" configs)
+- **Roadmap Tree**: Expandable tree: Units > Topics > Subtopics (sorted by sortOrder)
+- **Subtopic Page**: Explanation + dynamic 2-mark/5-mark Q&A from subtopicQuestions table with toggle-to-reveal answers
 - **Event Tracking**: IntersectionObserver-based scroll tracking (2s dwell) fires SUBTOPIC_CONSUMED event
-- **Admin Page**: Lists subtopics with per-subtopic event counts
+- **Admin Dashboard**: Platform analytics with per-subtopic event counts
+- **Role-based routing**: Admin routes protected from students, student routes protected from admins
 
 ### Database Schema (Drizzle ORM)
 
-- `users` — id (college_id), university_id, branch, year
-- `configs` — id, university_id, year, branch, subject, exam, is_active
-- `nodes` — id, config_id, title, type (unit/topic/subtopic), parent_id
-- `subtopic_contents` — id, node_id, explanation, two_mark_question/answer, five_mark_question/answer
+- `users` — id (college_id), university_id, branch, year, role ("admin"/"student"), password (bcrypt hash)
+- `configs` — id, university_id, year, branch, subject, exam, status ("draft"/"live"), created_by, syllabus_file_url, paper_file_urls, created_at
+- `nodes` — id, config_id, title, type (unit/topic/subtopic), parent_id, explanation, sort_order
+- `subtopic_contents` — id, node_id, explanation
+- `subtopic_questions` — id (serial), node_id, mark_type ("2"/"5"), question, answer
 - `events` — id, user_id, university_id, year, branch, exam, config_id, topic_id, subtopic_id, timestamp
 
 ### API Endpoints
 
-- `POST /api/auth/login` — Login with college ID + password
-- `GET /api/configs?universityId=X` — Get active configs for university
-- `GET /api/nodes?configId=X` — Get syllabus tree nodes for config
-- `GET /api/subtopics/:id` — Get subtopic content by node ID
+- `POST /api/auth/login` — Login with college ID + password, returns user with role
+- `POST /api/auth/reset-password` — Reset password with collegeId, currentPassword, newPassword
+- `GET /api/configs?universityId=X&status=live` — Get configs (defaults to live for students)
+- `GET /api/nodes?configId=X` — Get syllabus tree nodes for config (includes explanation, sortOrder)
+- `GET /api/subtopics/:id` — Get subtopic content with questions array
 - `POST /api/events` — Track subtopic consumed event
 - `GET /api/admin/stats` — Get per-subtopic event counts
 
@@ -74,7 +81,13 @@ JNTU Hyderabad, JNTU Kakinada, Osmania University, Anna University, VTU Belgaum
 
 ### Seed Data
 
-Run `pnpm --filter @workspace/scripts run seed` to populate sample data (users, configs, nodes with DS and OS content, subtopic Q&A).
+Run `pnpm --filter @workspace/scripts run seed` to populate sample data.
+Default password for all seed users: "1234567890"
+Users: STU001 (student), STU002 (student), STU003 (student), ADMIN (admin)
+
+### Auth Storage
+
+localStorage key: "gpmax_user" stores LoginResponse {id, universityId, branch, year, role}
 
 ## TypeScript & Composite Projects
 
@@ -97,11 +110,11 @@ Express 5 API server with routes for auth, configs, nodes, subtopics, events, an
 
 ### `artifacts/exam-roadmap` (`@workspace/exam-roadmap`)
 
-React + Vite frontend with wouter routing, Tailwind CSS, Framer Motion animations.
+React + Vite frontend with wouter routing, Tailwind CSS, Framer Motion animations. GP-Max branding with Zap icon.
 
 ### `lib/db` (`@workspace/db`)
 
-Drizzle ORM schema + DB connection for users, configs, nodes, subtopic_contents, events tables.
+Drizzle ORM schema + DB connection for users, configs, nodes, subtopic_contents, subtopic_questions, events tables.
 
 ### `lib/api-spec` (`@workspace/api-spec`)
 

@@ -6,10 +6,9 @@
  * OpenAPI spec version: 0.2.0
  */
 
-export type ConfigExam = (typeof ConfigExam)[keyof typeof ConfigExam];
+export type ConfigStatus = (typeof ConfigStatus)[keyof typeof ConfigStatus];
 
-export const ConfigExam = {
-  mid1: "mid1",
-  mid2: "mid2",
-  endsem: "endsem",
+export const ConfigStatus = {
+  draft: "draft",
+  live: "live",
 } as const;

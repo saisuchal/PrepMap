@@ -87,7 +87,6 @@ export default function Subtopic() {
   const trackEventMutation = useTrackEvent();
   const [isTracked, setIsTracked] = useState(false);
 
-  // Check initial track state from session
   useEffect(() => {
     if (id && sessionStorage.getItem(`tracked_${id}`)) {
       setIsTracked(true);
@@ -101,7 +100,6 @@ export default function Subtopic() {
     
     const observer = new IntersectionObserver(([entry]) => {
       if (entry.isIntersecting) {
-        // User scrolled to bottom, wait 2 seconds before tracking
         timeoutId = setTimeout(() => {
           if (!sessionStorage.getItem(`tracked_${id}`)) {
             trackEventMutation.mutate({
@@ -140,6 +138,9 @@ export default function Subtopic() {
 
   if (!id) return null;
 
+  const twoMarkQuestions = content?.questions?.filter(q => q.markType === "2") || [];
+  const fiveMarkQuestions = content?.questions?.filter(q => q.markType === "5") || [];
+
   return (
     <div className="w-full max-w-3xl mx-auto pb-32">
       <div className="flex items-center justify-between mb-8">
@@ -172,7 +173,6 @@ export default function Subtopic() {
           animate={{ opacity: 1, y: 0 }}
           className="space-y-10"
         >
-          {/* Explanation Section */}
           <section className="bg-card rounded-3xl p-6 sm:p-10 shadow-lg shadow-black/5 border border-border">
             <div className="flex items-center gap-3 mb-6 pb-6 border-b border-border">
               <div className="w-12 h-12 rounded-xl bg-primary/10 flex items-center justify-center text-primary">
@@ -185,27 +185,33 @@ export default function Subtopic() {
             </div>
           </section>
 
-          {/* Q&A Sections */}
-          <section className="space-y-6">
-            <div className="flex items-center gap-2 px-2">
-              <MessageSquare className="w-5 h-5 text-primary" />
-              <h2 className="text-xl font-display font-bold text-foreground">Practice Questions</h2>
-            </div>
-            
-            <QuestionBlock 
-              label="2 Marks" 
-              question={content.twoMarkQuestion} 
-              answer={content.twoMarkAnswer} 
-            />
-            
-            <QuestionBlock 
-              label="5 Marks" 
-              question={content.fiveMarkQuestion} 
-              answer={content.fiveMarkAnswer} 
-            />
-          </section>
+          {(twoMarkQuestions.length > 0 || fiveMarkQuestions.length > 0) && (
+            <section className="space-y-6">
+              <div className="flex items-center gap-2 px-2">
+                <MessageSquare className="w-5 h-5 text-primary" />
+                <h2 className="text-xl font-display font-bold text-foreground">Practice Questions</h2>
+              </div>
+              
+              {twoMarkQuestions.map((q) => (
+                <QuestionBlock 
+                  key={q.id}
+                  label="2 Marks" 
+                  question={q.question} 
+                  answer={q.answer} 
+                />
+              ))}
+              
+              {fiveMarkQuestions.map((q) => (
+                <QuestionBlock 
+                  key={q.id}
+                  label="5 Marks" 
+                  question={q.question} 
+                  answer={q.answer} 
+                />
+              ))}
+            </section>
+          )}
 
-          {/* Observer Target */}
           <div ref={observerRef} className="h-10 w-full flex items-center justify-center">
              <div className="w-1/2 h-px bg-gradient-to-r from-transparent via-border to-transparent" />
           </div>

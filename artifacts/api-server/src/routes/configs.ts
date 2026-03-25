@@ -7,12 +7,19 @@ const router: IRouter = Router();
 
 router.get("/configs", async (req, res) => {
   try {
-    const { universityId } = GetConfigsQueryParams.parse(req.query);
+    const { universityId, status } = GetConfigsQueryParams.parse(req.query);
+
+    const conditions = [eq(configsTable.universityId, universityId)];
+    if (status) {
+      conditions.push(eq(configsTable.status, status));
+    } else {
+      conditions.push(eq(configsTable.status, "live"));
+    }
 
     const configs = await db
       .select()
       .from(configsTable)
-      .where(and(eq(configsTable.universityId, universityId), eq(configsTable.isActive, true)));
+      .where(and(...conditions));
 
     const response = GetConfigsResponse.parse(
       configs.map((c) => ({
@@ -22,7 +29,9 @@ router.get("/configs", async (req, res) => {
         branch: c.branch,
         subject: c.subject,
         exam: c.exam,
-        isActive: c.isActive,
+        status: c.status,
+        createdBy: c.createdBy,
+        createdAt: c.createdAt?.toISOString(),
       }))
     );
 

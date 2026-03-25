@@ -8,6 +8,8 @@ export const nodesTable = pgTable("nodes", {
   title: text("title").notNull(),
   type: text("type").notNull(),
   parentId: text("parent_id"),
+  explanation: text("explanation"),
+  sortOrder: text("sort_order").notNull().default("0"),
 });
 
 export const insertNodeSchema = createInsertSchema(nodesTable);

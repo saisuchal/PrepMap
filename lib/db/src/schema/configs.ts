@@ -1,4 +1,4 @@
-import { pgTable, text, boolean } from "drizzle-orm/pg-core";
+import { pgTable, text, timestamp } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 
@@ -9,7 +9,11 @@ export const configsTable = pgTable("configs", {
   branch: text("branch").notNull(),
   subject: text("subject").notNull(),
   exam: text("exam").notNull(),
-  isActive: boolean("is_active").notNull().default(true),
+  status: text("status").notNull().default("draft"),
+  createdBy: text("created_by").notNull(),
+  syllabusFileUrl: text("syllabus_file_url"),
+  paperFileUrls: text("paper_file_urls"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
 });
 
 export const insertConfigSchema = createInsertSchema(configsTable);

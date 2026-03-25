@@ -21,6 +21,8 @@ router.get("/nodes", async (req, res) => {
         title: n.title,
         type: n.type,
         parentId: n.parentId,
+        explanation: n.explanation,
+        sortOrder: n.sortOrder,
       }))
     );
 

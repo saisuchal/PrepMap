@@ -7,6 +7,8 @@ export const usersTable = pgTable("users", {
   universityId: text("university_id").notNull(),
   branch: text("branch").notNull(),
   year: text("year").notNull(),
+  role: text("role").notNull().default("student"),
+  password: text("password").notNull(),
 });
 
 export const insertUserSchema = createInsertSchema(usersTable);
