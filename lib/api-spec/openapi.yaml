@@ -3,20 +3,31 @@ info:
   # Do not change the title, if the title changes, the import paths will be broken
   title: Api
   version: 0.1.0
-  description: API specification
+  description: Exam Roadmap Platform API
 servers:
   - url: /api
     description: Base API path
 tags:
   - name: health
     description: Health operations
+  - name: auth
+    description: Authentication
+  - name: configs
+    description: Exam configurations
+  - name: nodes
+    description: Syllabus nodes (units, topics, subtopics)
+  - name: subtopics
+    description: Subtopic content
+  - name: events
+    description: Event tracking
+  - name: admin
+    description: Admin operations
 paths:
   /healthz:
     get:
       operationId: healthCheck
       tags: [health]
       summary: Health check
-      description: Returns server health status
       responses:
         "200":
           description: Healthy
@@ -24,6 +35,133 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/HealthStatus"
+
+  /auth/login:
+    post:
+      operationId: login
+      tags: [auth]
+      summary: Login with college ID
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LoginRequest"
+      responses:
+        "200":
+          description: Login successful
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LoginResponse"
+        "401":
+          description: Invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /configs:
+    get:
+      operationId: getConfigs
+      tags: [configs]
+      summary: Get active exam configurations
+      parameters:
+        - name: universityId
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: List of configs
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Config"
+
+  /nodes:
+    get:
+      operationId: getNodes
+      tags: [nodes]
+      summary: Get syllabus nodes for a config
+      parameters:
+        - name: configId
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: List of nodes
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Node"
+
+  /subtopics/{id}:
+    get:
+      operationId: getSubtopicContent
+      tags: [subtopics]
+      summary: Get subtopic content by ID
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Subtopic content
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SubtopicContent"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /events:
+    post:
+      operationId: trackEvent
+      tags: [events]
+      summary: Track a subtopic consumed event
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EventPayload"
+      responses:
+        "201":
+          description: Event tracked
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
+
+  /admin/stats:
+    get:
+      operationId: getAdminStats
+      tags: [admin]
+      summary: Get subtopic event counts for admin
+      responses:
+        "200":
+          description: Admin stats
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/SubtopicStat"
+
 components:
   schemas:
     HealthStatus:
@@ -34,3 +172,163 @@ components:
       required:
         - status
 
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+      required:
+        - error
+
+    SuccessResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+      required:
+        - success
+
+    LoginRequest:
+      type: object
+      properties:
+        collegeId:
+          type: string
+        password:
+          type: string
+      required:
+        - collegeId
+        - password
+
+    LoginResponse:
+      type: object
+      properties:
+        id:
+          type: string
+        universityId:
+          type: string
+        branch:
+          type: string
+        year:
+          type: string
+      required:
+        - id
+        - universityId
+        - branch
+        - year
+
+    Config:
+      type: object
+      properties:
+        id:
+          type: string
+        universityId:
+          type: string
+        year:
+          type: string
+        branch:
+          type: string
+        subject:
+          type: string
+        exam:
+          type: string
+          enum: [mid1, mid2, endsem]
+        isActive:
+          type: boolean
+      required:
+        - id
+        - universityId
+        - year
+        - branch
+        - subject
+        - exam
+        - isActive
+
+    Node:
+      type: object
+      properties:
+        id:
+          type: string
+        configId:
+          type: string
+        title:
+          type: string
+        type:
+          type: string
+          enum: [unit, topic, subtopic]
+        parentId:
+          type: string
+          nullable: true
+      required:
+        - id
+        - configId
+        - title
+        - type
+
+    SubtopicContent:
+      type: object
+      properties:
+        id:
+          type: string
+        nodeId:
+          type: string
+        explanation:
+          type: string
+        twoMarkQuestion:
+          type: string
+        twoMarkAnswer:
+          type: string
+        fiveMarkQuestion:
+          type: string
+        fiveMarkAnswer:
+          type: string
+      required:
+        - id
+        - nodeId
+        - explanation
+        - twoMarkQuestion
+        - twoMarkAnswer
+        - fiveMarkQuestion
+        - fiveMarkAnswer
+
+    EventPayload:
+      type: object
+      properties:
+        userId:
+          type: string
+        universityId:
+          type: string
+        year:
+          type: string
+        branch:
+          type: string
+        exam:
+          type: string
+        configId:
+          type: string
+        topicId:
+          type: string
+        subtopicId:
+          type: string
+      required:
+        - userId
+        - universityId
+        - year
+        - branch
+        - exam
+        - configId
+        - topicId
+        - subtopicId
+
+    SubtopicStat:
+      type: object
+      properties:
+        subtopicId:
+          type: string
+        subtopicTitle:
+          type: string
+        eventCount:
+          type: integer
+      required:
+        - subtopicId
+        - subtopicTitle
+        - eventCount

@@ -15,82 +15,106 @@ pnpm workspace monorepo using TypeScript. Each package manages its own dependenc
 - **Validation**: Zod (`zod/v4`), `drizzle-zod`
 - **API codegen**: Orval (from OpenAPI spec)
 - **Build**: esbuild (CJS bundle)
+- **Frontend**: React + Vite + Tailwind CSS v4
 
 ## Structure
 
 ```text
 artifacts-monorepo/
 ├── artifacts/              # Deployable applications
-│   └── api-server/         # Express API server
+│   ├── api-server/         # Express API server
+│   └── exam-roadmap/       # Exam Roadmap Platform (React + Vite)
 ├── lib/                    # Shared libraries
 │   ├── api-spec/           # OpenAPI spec + Orval codegen config
 │   ├── api-client-react/   # Generated React Query hooks
 │   ├── api-zod/            # Generated Zod schemas from OpenAPI
 │   └── db/                 # Drizzle ORM schema + DB connection
-├── scripts/                # Utility scripts (single workspace package)
-│   └── src/                # Individual .ts scripts, run via `pnpm --filter @workspace/scripts run <script>`
-├── pnpm-workspace.yaml     # pnpm workspace (artifacts/*, lib/*, lib/integrations/*, scripts)
-├── tsconfig.base.json      # Shared TS options (composite, bundler resolution, es2022)
-├── tsconfig.json           # Root TS project references
-└── package.json            # Root package with hoisted devDeps
+├── scripts/                # Utility scripts
+│   └── src/
+│       └── seed.ts         # Database seed script
+├── pnpm-workspace.yaml
+├── tsconfig.base.json
+├── tsconfig.json
+└── package.json
 ```
+
+## Application: AuraPrep (Exam Roadmap Platform)
+
+An exam-oriented roadmap platform where students navigate a hierarchical syllabus and view subtopics with explanations and 2-mark/5-mark Q&A. Event tracking records when a student consumes a subtopic.
+
+### Features
+
+- **Login**: College ID + hardcoded password ("1234567890"), user stored in localStorage
+- **Config Selection**: University > Year > Branch > Exam type selection
+- **Roadmap Tree**: Expandable tree: Units > Topics > Subtopics
+- **Subtopic Page**: Explanation + 2-mark Q&A + 5-mark Q&A with toggle-to-reveal answers
+- **Event Tracking**: IntersectionObserver-based scroll tracking (2s dwell) fires SUBTOPIC_CONSUMED event
+- **Admin Page**: Lists subtopics with per-subtopic event counts
+
+### Database Schema (Drizzle ORM)
+
+- `users` — id (college_id), university_id, branch, year
+- `configs` — id, university_id, year, branch, subject, exam, is_active
+- `nodes` — id, config_id, title, type (unit/topic/subtopic), parent_id
+- `subtopic_contents` — id, node_id, explanation, two_mark_question/answer, five_mark_question/answer
+- `events` — id, user_id, university_id, year, branch, exam, config_id, topic_id, subtopic_id, timestamp
+
+### API Endpoints
+
+- `POST /api/auth/login` — Login with college ID + password
+- `GET /api/configs?universityId=X` — Get active configs for university
+- `GET /api/nodes?configId=X` — Get syllabus tree nodes for config
+- `GET /api/subtopics/:id` — Get subtopic content by node ID
+- `POST /api/events` — Track subtopic consumed event
+- `GET /api/admin/stats` — Get per-subtopic event counts
+
+### Static Universities
+
+JNTU Hyderabad, JNTU Kakinada, Osmania University, Anna University, VTU Belgaum
+
+### Seed Data
+
+Run `pnpm --filter @workspace/scripts run seed` to populate sample data (users, configs, nodes with DS and OS content, subtopic Q&A).
 
 ## TypeScript & Composite Projects
 
-Every package extends `tsconfig.base.json` which sets `composite: true`. The root `tsconfig.json` lists all packages as project references. This means:
+Every package extends `tsconfig.base.json` which sets `composite: true`. The root `tsconfig.json` lists all packages as project references.
 
-- **Always typecheck from the root** — run `pnpm run typecheck` (which runs `tsc --build --emitDeclarationOnly`). This builds the full dependency graph so that cross-package imports resolve correctly. Running `tsc` inside a single package will fail if its dependencies haven't been built yet.
-- **`emitDeclarationOnly`** — we only emit `.d.ts` files during typecheck; actual JS bundling is handled by esbuild/tsx/vite...etc, not `tsc`.
-- **Project references** — when package A depends on package B, A's `tsconfig.json` must list B in its `references` array. `tsc --build` uses this to determine build order and skip up-to-date packages.
+- **Always typecheck from the root** — run `pnpm run typecheck`
+- **`emitDeclarationOnly`** — only emit `.d.ts` files during typecheck
+- **Project references** — package A depends on B → A's `tsconfig.json` lists B in references
 
 ## Root Scripts
 
-- `pnpm run build` — runs `typecheck` first, then recursively runs `build` in all packages that define it
+- `pnpm run build` — runs `typecheck` first, then recursively runs `build` in all packages
 - `pnpm run typecheck` — runs `tsc --build --emitDeclarationOnly` using project references
 
 ## Packages
 
 ### `artifacts/api-server` (`@workspace/api-server`)
 
-Express 5 API server. Routes live in `src/routes/` and use `@workspace/api-zod` for request and response validation and `@workspace/db` for persistence.
+Express 5 API server with routes for auth, configs, nodes, subtopics, events, and admin stats.
 
-- Entry: `src/index.ts` — reads `PORT`, starts Express
-- App setup: `src/app.ts` — mounts CORS, JSON/urlencoded parsing, routes at `/api`
-- Routes: `src/routes/index.ts` mounts sub-routers; `src/routes/health.ts` exposes `GET /health` (full path: `/api/health`)
-- Depends on: `@workspace/db`, `@workspace/api-zod`
-- `pnpm --filter @workspace/api-server run dev` — run the dev server
-- `pnpm --filter @workspace/api-server run build` — production esbuild bundle (`dist/index.cjs`)
-- Build bundles an allowlist of deps (express, cors, pg, drizzle-orm, zod, etc.) and externalizes the rest
+### `artifacts/exam-roadmap` (`@workspace/exam-roadmap`)
+
+React + Vite frontend with wouter routing, Tailwind CSS, Framer Motion animations.
 
 ### `lib/db` (`@workspace/db`)
 
-Database layer using Drizzle ORM with PostgreSQL. Exports a Drizzle client instance and schema models.
-
-- `src/index.ts` — creates a `Pool` + Drizzle instance, exports schema
-- `src/schema/index.ts` — barrel re-export of all models
-- `src/schema/<modelname>.ts` — table definitions with `drizzle-zod` insert schemas (no models definitions exist right now)
-- `drizzle.config.ts` — Drizzle Kit config (requires `DATABASE_URL`, automatically provided by Replit)
-- Exports: `.` (pool, db, schema), `./schema` (schema only)
-
-Production migrations are handled by Replit when publishing. In development, we just use `pnpm --filter @workspace/db run push`, and we fallback to `pnpm --filter @workspace/db run push-force`.
+Drizzle ORM schema + DB connection for users, configs, nodes, subtopic_contents, events tables.
 
 ### `lib/api-spec` (`@workspace/api-spec`)
 
-Owns the OpenAPI 3.1 spec (`openapi.yaml`) and the Orval config (`orval.config.ts`). Running codegen produces output into two sibling packages:
-
-1. `lib/api-client-react/src/generated/` — React Query hooks + fetch client
-2. `lib/api-zod/src/generated/` — Zod schemas
-
-Run codegen: `pnpm --filter @workspace/api-spec run codegen`
+OpenAPI 3.1 spec + Orval codegen config. Run codegen: `pnpm --filter @workspace/api-spec run codegen`
 
 ### `lib/api-zod` (`@workspace/api-zod`)
 
-Generated Zod schemas from the OpenAPI spec (e.g. `HealthCheckResponse`). Used by `api-server` for response validation.
+Generated Zod schemas from OpenAPI spec.
 
 ### `lib/api-client-react` (`@workspace/api-client-react`)
 
-Generated React Query hooks and fetch client from the OpenAPI spec (e.g. `useHealthCheck`, `healthCheck`).
+Generated React Query hooks from OpenAPI spec.
 
 ### `scripts` (`@workspace/scripts`)
 
-Utility scripts package. Each script is a `.ts` file in `src/` with a corresponding npm script in `package.json`. Run scripts via `pnpm --filter @workspace/scripts run <script>`. Scripts can import any workspace package (e.g., `@workspace/db`) by adding it as a dependency in `scripts/package.json`.
+Utility scripts including database seeder.
