@@ -512,8 +512,6 @@ function ContentModal({
 }
 
 function QuestionCard({ label, question, answer }: { label: string; question: string; answer: string }) {
-  const [revealed, setRevealed] = useState(false);
-
   return (
     <div className="bg-card border border-border rounded-xl overflow-hidden shadow-sm">
       <div className="p-4 border-b border-border bg-secondary/20">
@@ -525,19 +523,7 @@ function QuestionCard({ label, question, answer }: { label: string; question: st
         </div>
       </div>
       <div className="p-4">
-        <AnimatePresence initial={false} mode="wait">
-          {!revealed ? (
-            <motion.div key="btn" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="flex justify-center py-2">
-              <Button variant="outline" size="sm" onClick={() => setRevealed(true)} className="rounded-full text-xs">
-                Reveal Answer
-              </Button>
-            </motion.div>
-          ) : (
-            <motion.div key="ans" initial={{ height: 0, opacity: 0 }} animate={{ height: "auto", opacity: 1 }} transition={{ duration: 0.25 }}>
-              <div className="text-sm text-foreground/80 whitespace-pre-line leading-relaxed">{answer}</div>
-            </motion.div>
-          )}
-        </AnimatePresence>
+        <div className="text-sm text-foreground/80 whitespace-pre-line leading-relaxed">{answer}</div>
       </div>
     </div>
   );
