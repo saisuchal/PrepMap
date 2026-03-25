@@ -675,7 +675,7 @@ export default function ConfigDetail() {
 
   if (configsLoading) {
     return (
-      <div className="w-full max-w-4xl mx-auto pt-4 pb-20">
+      <div className="w-full max-w-4xl mx-auto pt-4 pb-20 px-4 sm:px-6 lg:px-8">
         <Button variant="ghost" onClick={() => setLocation("/admin")} className="gap-2 mb-6">
           <ArrowLeft className="w-4 h-4" /> Back to Dashboard
         </Button>
@@ -688,7 +688,7 @@ export default function ConfigDetail() {
 
   if (!config) {
     return (
-      <div className="w-full max-w-4xl mx-auto pt-4 pb-20">
+      <div className="w-full max-w-4xl mx-auto pt-4 pb-20 px-4 sm:px-6 lg:px-8">
         <Button variant="ghost" onClick={() => setLocation("/admin")} className="gap-2 mb-6">
           <ArrowLeft className="w-4 h-4" /> Back to Dashboard
         </Button>

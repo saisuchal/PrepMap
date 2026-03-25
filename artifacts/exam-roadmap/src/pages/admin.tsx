@@ -331,7 +331,7 @@ function AnalyticsTab() {
 
 export default function Admin() {
   return (
-    <div className="w-full max-w-6xl mx-auto pt-4 pb-20">
+    <div className="w-full max-w-6xl mx-auto pt-4 pb-20 px-4 sm:px-6 lg:px-8">
       <div className="mb-8">
         <h1 className="text-3xl font-display font-bold text-foreground flex items-center gap-3">
           <Settings className="w-8 h-8 text-primary" />

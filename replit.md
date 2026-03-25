@@ -49,10 +49,10 @@ Config = University + Branch + Year + Subject + Exam point (Mid-1, Mid-2, End Se
 
 - **Login**: College ID + bcrypt-hashed password, role-based redirect (admin → /admin, student → /)
 - **Password Reset**: Change password with current password verification
-- **Config Selection**: University > Year > Branch > Exam type selection (students see only "live" configs)
-- **Roadmap Tree**: Expandable tree: Units > Topics > Subtopics (sorted by sortOrder)
-- **Subtopic Page**: Explanation + dynamic 2-mark/5-mark Q&A from subtopicQuestions table with toggle-to-reveal answers
-- **Event Tracking**: IntersectionObserver-based scroll tracking (2s dwell) fires SUBTOPIC_CONSUMED event
+- **Config Selection**: University > Year > Branch > Subject cascading dropdowns, then 3 exam nodes (Mid-1, Mid-2, End Sem) with availability indicators (students see only "live" configs)
+- **Visual Roadmap Tree**: Roadmap.sh-inspired visual mind-map with SVG connector lines, color-coded nodes (blue=units, violet=topics, green=subtopics), pannable/zoomable canvas with zoom controls
+- **Content Modals**: Click topic node → modal with explanation. Click subtopic → modal with explanation + 2-mark/5-mark Q&A with reveal-answer toggles
+- **Event Tracking**: IntersectionObserver-based tracking in subtopic modal (2s dwell at bottom of Q&A) fires SUBTOPIC_CONSUMED event, tracked per session via sessionStorage
 - **Admin Dashboard**: Tabbed interface (Configs | Analytics) with config management, file upload, AI generation, publish flow, and content review
 - **Admin Config Management**: Create configs, upload syllabus/papers (presigned URL flow), trigger AI generation with progress polling, publish to students, review generated content tree
 - **Role-based routing**: Admin routes protected from students, student routes protected from admins

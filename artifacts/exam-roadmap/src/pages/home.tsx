@@ -1,83 +1,109 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { useLocation } from "wouter";
-import { motion } from "framer-motion";
-import { BookOpen, Map, ArrowRight, Building2, Calendar, Compass, GraduationCap } from "lucide-react";
+import { motion, AnimatePresence } from "framer-motion";
+import { Building2, Calendar, GraduationCap, BookOpen, ChevronRight, Lock, Sparkles, Zap } from "lucide-react";
 import { UNIVERSITIES, EXAM_TYPES } from "@/lib/constants";
 import { useGetConfigs } from "@workspace/api-client-react";
-import { Button } from "@/components/ui/button";
 
 export default function Home() {
   const [, setLocation] = useLocation();
   const [selectedUni, setSelectedUni] = useState(UNIVERSITIES[0].id);
   const [selectedYear, setSelectedYear] = useState("");
   const [selectedBranch, setSelectedBranch] = useState("");
-  const [selectedExam, setSelectedExam] = useState("");
+  const [selectedSubject, setSelectedSubject] = useState("");
 
   const { data: configs, isLoading } = useGetConfigs({ universityId: selectedUni }, {
     query: { enabled: !!selectedUni }
   });
 
-  // Extract unique available options based on fetched configs
-  const availableYears = Array.from(new Set(configs?.map(c => c.year) || [])).sort();
-  const availableBranches = Array.from(new Set(configs?.filter(c => !selectedYear || c.year === selectedYear).map(c => c.branch) || [])).sort();
-  const availableExams = Array.from(new Set(configs?.filter(c => 
-    (!selectedYear || c.year === selectedYear) && 
-    (!selectedBranch || c.branch === selectedBranch)
-  ).map(c => c.exam) || []));
+  const availableYears = useMemo(() =>
+    Array.from(new Set(configs?.map(c => c.year) || [])).sort(),
+    [configs]
+  );
 
-  // Reset dependent fields when parents change
+  const availableBranches = useMemo(() =>
+    Array.from(new Set(
+      configs?.filter(c => !selectedYear || c.year === selectedYear).map(c => c.branch) || []
+    )).sort(),
+    [configs, selectedYear]
+  );
+
+  const availableSubjects = useMemo(() =>
+    Array.from(new Set(
+      configs?.filter(c =>
+        (!selectedYear || c.year === selectedYear) &&
+        (!selectedBranch || c.branch === selectedBranch)
+      ).map(c => c.subject) || []
+    )).sort(),
+    [configs, selectedYear, selectedBranch]
+  );
+
+  const examConfigs = useMemo(() => {
+    if (!selectedSubject) return {};
+    const map: Record<string, typeof configs extends (infer T)[] | undefined ? T : never> = {};
+    configs?.filter(c =>
+      c.year === selectedYear &&
+      c.branch === selectedBranch &&
+      c.subject === selectedSubject
+    ).forEach(c => {
+      map[c.exam] = c;
+    });
+    return map;
+  }, [configs, selectedYear, selectedBranch, selectedSubject]);
+
   useEffect(() => {
     setSelectedYear("");
     setSelectedBranch("");
-    setSelectedExam("");
+    setSelectedSubject("");
   }, [selectedUni]);
 
   useEffect(() => {
     setSelectedBranch("");
-    setSelectedExam("");
+    setSelectedSubject("");
   }, [selectedYear]);
 
   useEffect(() => {
-    setSelectedExam("");
+    setSelectedSubject("");
   }, [selectedBranch]);
 
-  const handleNavigate = () => {
-    const config = configs?.find(c => 
-      c.year === selectedYear && 
-      c.branch === selectedBranch && 
-      c.exam === selectedExam
-    );
-    
+  const handleExamClick = (examId: string) => {
+    const config = examConfigs[examId];
     if (config) {
-      setLocation(`/roadmap?universityId=${selectedUni}&year=${selectedYear}&branch=${selectedBranch}&exam=${selectedExam}&configId=${config.id}&subject=${encodeURIComponent(config.subject)}`);
+      setLocation(`/roadmap?configId=${config.id}&subject=${encodeURIComponent(config.subject)}&exam=${examId}`);
     }
   };
 
-  const isFormComplete = selectedUni && selectedYear && selectedBranch && selectedExam;
+  const showExamNodes = selectedUni && selectedYear && selectedBranch && selectedSubject;
+
+  const examNodeData = [
+    { id: "mid1", name: "Mid Term 1", icon: "1", color: "from-blue-500 to-blue-600", bg: "bg-blue-50", border: "border-blue-200", text: "text-blue-700" },
+    { id: "mid2", name: "Mid Term 2", icon: "2", color: "from-violet-500 to-violet-600", bg: "bg-violet-50", border: "border-violet-200", text: "text-violet-700" },
+    { id: "endsem", name: "End Semester", icon: "E", color: "from-emerald-500 to-emerald-600", bg: "bg-emerald-50", border: "border-emerald-200", text: "text-emerald-700" },
+  ];
 
   return (
-    <div className="w-full max-w-4xl mx-auto pt-8 pb-20">
-      <motion.div 
+    <div className="w-full max-w-4xl mx-auto pt-4 sm:pt-8 pb-20 px-4 sm:px-0">
+      <motion.div
         initial={{ opacity: 0, y: 10 }}
         animate={{ opacity: 1, y: 0 }}
-        className="text-center mb-12"
+        className="text-center mb-8 sm:mb-12"
       >
         <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-primary/10 text-primary text-sm font-semibold tracking-wide mb-4 border border-primary/20">
-          <Compass className="w-4 h-4" /> Syllabus Navigator
+          <Sparkles className="w-4 h-4" /> Exam Roadmap
         </span>
-        <h1 className="text-4xl sm:text-5xl font-display font-bold text-foreground mb-4 leading-tight">
-          Find your exact path to <span className="text-transparent bg-clip-text bg-gradient-to-r from-primary to-blue-400">exam success</span>
+        <h1 className="text-3xl sm:text-5xl font-display font-bold text-foreground mb-3 sm:mb-4 leading-tight">
+          Your path to <span className="text-transparent bg-clip-text bg-gradient-to-r from-primary to-blue-400">exam success</span>
         </h1>
-        <p className="text-lg text-muted-foreground max-w-2xl mx-auto">
-          Select your academic details below to unlock a structured, topic-by-topic roadmap tailored for your specific exam.
+        <p className="text-base sm:text-lg text-muted-foreground max-w-2xl mx-auto">
+          Select your details below, then pick your exam to explore a structured topic roadmap.
         </p>
       </motion.div>
 
-      <motion.div 
+      <motion.div
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ delay: 0.1 }}
-        className="bg-card rounded-3xl p-6 sm:p-10 shadow-xl shadow-black/5 border border-border relative overflow-hidden"
+        className="bg-card rounded-2xl sm:rounded-3xl p-5 sm:p-10 shadow-xl shadow-black/5 border border-border relative overflow-hidden"
       >
         {isLoading && (
           <div className="absolute inset-0 bg-background/50 backdrop-blur-sm z-10 flex items-center justify-center">
@@ -85,91 +111,140 @@ export default function Home() {
           </div>
         )}
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-6 sm:gap-8">
-          {/* University */}
-          <div className="space-y-3">
-            <label className="text-sm font-semibold text-foreground flex items-center gap-2">
-              <Building2 className="w-4 h-4 text-primary" /> University
-            </label>
-            <select
-              className="w-full h-14 rounded-xl border-2 border-border bg-background px-4 text-base focus:border-primary focus:ring-4 focus:ring-primary/10 outline-none transition-all appearance-none cursor-pointer"
-              value={selectedUni}
-              onChange={(e) => setSelectedUni(e.target.value)}
-            >
-              {UNIVERSITIES.map(u => (
-                <option key={u.id} value={u.id}>{u.name}</option>
-              ))}
-            </select>
-          </div>
-
-          {/* Year */}
-          <div className="space-y-3">
-            <label className="text-sm font-semibold text-foreground flex items-center gap-2">
-              <Calendar className="w-4 h-4 text-primary" /> Academic Year
-            </label>
-            <select
-              className="w-full h-14 rounded-xl border-2 border-border bg-background px-4 text-base focus:border-primary focus:ring-4 focus:ring-primary/10 outline-none transition-all appearance-none cursor-pointer disabled:opacity-50 disabled:bg-muted"
-              value={selectedYear}
-              onChange={(e) => setSelectedYear(e.target.value)}
-              disabled={!availableYears.length}
-            >
-              <option value="" disabled>Select Year</option>
-              {availableYears.map(y => (
-                <option key={y} value={y}>{y}</option>
-              ))}
-            </select>
-          </div>
-
-          {/* Branch */}
-          <div className="space-y-3">
-            <label className="text-sm font-semibold text-foreground flex items-center gap-2">
-              <GraduationCap className="w-4 h-4 text-primary" /> Branch / Department
-            </label>
-            <select
-              className="w-full h-14 rounded-xl border-2 border-border bg-background px-4 text-base focus:border-primary focus:ring-4 focus:ring-primary/10 outline-none transition-all appearance-none cursor-pointer disabled:opacity-50 disabled:bg-muted"
-              value={selectedBranch}
-              onChange={(e) => setSelectedBranch(e.target.value)}
-              disabled={!selectedYear || !availableBranches.length}
-            >
-              <option value="" disabled>Select Branch</option>
-              {availableBranches.map(b => (
-                <option key={b} value={b}>{b}</option>
-              ))}
-            </select>
-          </div>
-
-          {/* Exam Type */}
-          <div className="space-y-3">
-            <label className="text-sm font-semibold text-foreground flex items-center gap-2">
-              <BookOpen className="w-4 h-4 text-primary" /> Exam Target
-            </label>
-            <select
-              className="w-full h-14 rounded-xl border-2 border-border bg-background px-4 text-base focus:border-primary focus:ring-4 focus:ring-primary/10 outline-none transition-all appearance-none cursor-pointer disabled:opacity-50 disabled:bg-muted"
-              value={selectedExam}
-              onChange={(e) => setSelectedExam(e.target.value)}
-              disabled={!selectedBranch || !availableExams.length}
-            >
-              <option value="" disabled>Select Exam</option>
-              {EXAM_TYPES.filter(e => availableExams.includes(e.id)).map(e => (
-                <option key={e.id} value={e.id}>{e.name}</option>
-              ))}
-            </select>
-          </div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-5 sm:gap-8">
+          <SelectField
+            icon={<Building2 className="w-4 h-4 text-primary" />}
+            label="University"
+            value={selectedUni}
+            onChange={setSelectedUni}
+            options={UNIVERSITIES.map(u => ({ value: u.id, label: u.name }))}
+          />
+          <SelectField
+            icon={<Calendar className="w-4 h-4 text-primary" />}
+            label="Academic Year"
+            value={selectedYear}
+            onChange={setSelectedYear}
+            options={availableYears.map(y => ({ value: y, label: y }))}
+            disabled={!availableYears.length}
+            placeholder="Select Year"
+          />
+          <SelectField
+            icon={<GraduationCap className="w-4 h-4 text-primary" />}
+            label="Branch / Department"
+            value={selectedBranch}
+            onChange={setSelectedBranch}
+            options={availableBranches.map(b => ({ value: b, label: b }))}
+            disabled={!selectedYear || !availableBranches.length}
+            placeholder="Select Branch"
+          />
+          <SelectField
+            icon={<BookOpen className="w-4 h-4 text-primary" />}
+            label="Subject"
+            value={selectedSubject}
+            onChange={setSelectedSubject}
+            options={availableSubjects.map(s => ({ value: s, label: s }))}
+            disabled={!selectedBranch || !availableSubjects.length}
+            placeholder="Select Subject"
+          />
         </div>
 
-        <div className="mt-10 pt-8 border-t border-border flex justify-end">
-          <Button 
-            size="lg" 
-            className="w-full sm:w-auto min-w-[200px] h-14 group"
-            disabled={!isFormComplete}
-            onClick={handleNavigate}
-          >
-            <Map className="w-5 h-5 mr-2" />
-            Generate Roadmap
-            <ArrowRight className="w-5 h-5 ml-2 group-hover:translate-x-1 transition-transform" />
-          </Button>
-        </div>
+        <AnimatePresence mode="wait">
+          {showExamNodes && (
+            <motion.div
+              key="exam-nodes"
+              initial={{ opacity: 0, height: 0 }}
+              animate={{ opacity: 1, height: "auto" }}
+              exit={{ opacity: 0, height: 0 }}
+              transition={{ duration: 0.3 }}
+            >
+              <div className="mt-8 sm:mt-10 pt-6 sm:pt-8 border-t border-border">
+                <h2 className="text-lg sm:text-xl font-display font-bold text-foreground mb-2 flex items-center gap-2">
+                  <Zap className="w-5 h-5 text-primary" />
+                  Choose Your Exam
+                </h2>
+                <p className="text-sm text-muted-foreground mb-6">Click an exam to view its topic roadmap</p>
+
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                  {examNodeData.map((examNode, idx) => {
+                    const config = examConfigs[examNode.id];
+                    const isAvailable = !!config;
+
+                    return (
+                      <motion.button
+                        key={examNode.id}
+                        initial={{ opacity: 0, y: 20 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        transition={{ delay: idx * 0.1 }}
+                        onClick={() => isAvailable && handleExamClick(examNode.id)}
+                        disabled={!isAvailable}
+                        className={`
+                          relative group rounded-2xl p-5 sm:p-6 text-left transition-all duration-200 border-2
+                          ${isAvailable
+                            ? `${examNode.bg} ${examNode.border} hover:shadow-lg hover:scale-[1.02] cursor-pointer`
+                            : 'bg-muted/50 border-border/50 opacity-60 cursor-not-allowed'
+                          }
+                        `}
+                      >
+                        <div className={`w-12 h-12 rounded-xl bg-gradient-to-br ${isAvailable ? examNode.color : 'from-gray-300 to-gray-400'} flex items-center justify-center text-white text-xl font-bold mb-4 shadow-lg`}>
+                          {examNode.icon}
+                        </div>
+                        <h3 className={`text-lg font-display font-bold mb-1 ${isAvailable ? examNode.text : 'text-muted-foreground'}`}>
+                          {examNode.name}
+                        </h3>
+                        <p className="text-xs text-muted-foreground">
+                          {isAvailable ? "Roadmap available" : "Not available yet"}
+                        </p>
+                        {isAvailable ? (
+                          <ChevronRight className={`absolute top-1/2 right-4 -translate-y-1/2 w-5 h-5 ${examNode.text} opacity-0 group-hover:opacity-100 group-hover:translate-x-1 transition-all`} />
+                        ) : (
+                          <Lock className="absolute top-4 right-4 w-4 h-4 text-muted-foreground/50" />
+                        )}
+                      </motion.button>
+                    );
+                  })}
+                </div>
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
       </motion.div>
+    </div>
+  );
+}
+
+function SelectField({
+  icon,
+  label,
+  value,
+  onChange,
+  options,
+  disabled,
+  placeholder,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  value: string;
+  onChange: (val: string) => void;
+  options: { value: string; label: string }[];
+  disabled?: boolean;
+  placeholder?: string;
+}) {
+  return (
+    <div className="space-y-2 sm:space-y-3">
+      <label className="text-sm font-semibold text-foreground flex items-center gap-2">
+        {icon} {label}
+      </label>
+      <select
+        className="w-full h-12 sm:h-14 rounded-xl border-2 border-border bg-background px-4 text-base focus:border-primary focus:ring-4 focus:ring-primary/10 outline-none transition-all appearance-none cursor-pointer disabled:opacity-50 disabled:bg-muted"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        disabled={disabled}
+      >
+        {placeholder && <option value="" disabled>{placeholder}</option>}
+        {options.map(o => (
+          <option key={o.value} value={o.value}>{o.label}</option>
+        ))}
+      </select>
     </div>
   );
 }
