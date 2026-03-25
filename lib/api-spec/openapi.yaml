@@ -441,15 +441,12 @@ components:
         exam:
           type: string
           enum: [mid1, mid2, endsem]
-        createdBy:
-          type: string
       required:
         - universityId
         - year
         - branch
         - subject
         - exam
-        - createdBy
 
     UploadConfigFilesRequest:
       type: object

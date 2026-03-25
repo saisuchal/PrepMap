@@ -8,32 +8,18 @@ import {
   GetGenerationStatusResponse,
   PublishConfigParams,
 } from "@workspace/api-zod";
-import { db, configsTable, usersTable } from "@workspace/db";
+import { db, configsTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
 import { randomUUID } from "crypto";
 import { runGeneration, getProgress } from "../lib/generator";
+import { requireAdmin } from "../middleware/adminAuth";
 
 const router: IRouter = Router();
 
-async function isAdmin(userId: string | undefined): Promise<boolean> {
-  if (!userId) return false;
-  const [user] = await db
-    .select({ role: usersTable.role })
-    .from(usersTable)
-    .where(eq(usersTable.id, userId))
-    .limit(1);
-  return user?.role === "admin";
-}
-
-router.post("/configs", async (req, res) => {
+router.post("/configs", requireAdmin, async (req, res) => {
   try {
     const body = CreateConfigBody.parse(req.body);
-
-    if (!(await isAdmin(body.createdBy))) {
-      res.status(403).json({ error: "Admin access required" });
-      return;
-    }
-
+    const userId = (req as any).userId as string;
     const id = randomUUID().substring(0, 8);
 
     await db.insert(configsTable).values({
@@ -44,7 +30,7 @@ router.post("/configs", async (req, res) => {
       subject: body.subject,
       exam: body.exam,
       status: "draft",
-      createdBy: body.createdBy,
+      createdBy: userId,
     });
 
     const [config] = await db
@@ -70,7 +56,7 @@ router.post("/configs", async (req, res) => {
   }
 });
 
-router.post("/configs/:id/upload", async (req, res) => {
+router.post("/configs/:id/upload", requireAdmin, async (req, res) => {
   try {
     const { id } = UploadConfigFilesParams.parse(req.params);
     const body = UploadConfigFilesBody.parse(req.body);
@@ -112,7 +98,7 @@ router.post("/configs/:id/upload", async (req, res) => {
   }
 });
 
-router.post("/configs/:id/generate", async (req, res) => {
+router.post("/configs/:id/generate", requireAdmin, async (req, res) => {
   try {
     const { id } = TriggerGenerationParams.parse(req.params);
 
@@ -164,7 +150,7 @@ router.get("/configs/:id/generation-status", async (req, res) => {
   }
 });
 
-router.post("/configs/:id/publish", async (req, res) => {
+router.post("/configs/:id/publish", requireAdmin, async (req, res) => {
   try {
     const { id } = PublishConfigParams.parse(req.params);
 

@@ -2,10 +2,11 @@ import { Router, type IRouter } from "express";
 import { GetAdminStatsResponse } from "@workspace/api-zod";
 import { db, eventsTable, nodesTable } from "@workspace/db";
 import { eq, sql, count } from "drizzle-orm";
+import { requireAdmin } from "../middleware/adminAuth";
 
 const router: IRouter = Router();
 
-router.get("/admin/stats", async (req, res) => {
+router.get("/admin/stats", requireAdmin, async (req, res) => {
   try {
     const stats = await db
       .select({

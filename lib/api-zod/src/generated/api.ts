@@ -73,7 +73,6 @@ export const CreateConfigBody = zod.object({
   branch: zod.string(),
   subject: zod.string(),
   exam: zod.enum(["mid1", "mid2", "endsem"]),
-  createdBy: zod.string(),
 });
 
 /**

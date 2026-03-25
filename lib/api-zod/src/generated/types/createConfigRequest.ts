@@ -13,5 +13,4 @@ export interface CreateConfigRequest {
   branch: string;
   subject: string;
   exam: CreateConfigRequestExam;
-  createdBy: string;
 }

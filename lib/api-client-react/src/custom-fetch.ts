@@ -355,6 +355,18 @@ export async function customFetch<T = unknown>(
     }
   }
 
+  if (typeof window !== "undefined" && !headers.has("x-user-id")) {
+    try {
+      const stored = window.localStorage.getItem("gpmax_user");
+      if (stored) {
+        const user = JSON.parse(stored);
+        if (user?.id) {
+          headers.set("x-user-id", user.id);
+        }
+      }
+    } catch {}
+  }
+
   const requestInfo = { method, url: resolveUrl(input) };
 
   const response = await fetch(input, { ...init, method, headers });

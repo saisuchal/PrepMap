@@ -115,6 +115,10 @@ Users: STU001 (student), STU002 (student), STU003 (student), ADMIN (admin)
 
 localStorage key: "gpmax_user" stores LoginResponse {id, universityId, branch, year, role}
 
+### Server-side Auth
+
+Admin endpoints protected by `requireAdmin` middleware (artifacts/api-server/src/middleware/adminAuth.ts). Reads `x-user-id` header, verifies user exists and has admin role. The custom-fetch client auto-injects `x-user-id` from localStorage `gpmax_user` on every request.
+
 ## TypeScript & Composite Projects
 
 Every package extends `tsconfig.base.json` which sets `composite: true`. The root `tsconfig.json` lists all packages as project references.
