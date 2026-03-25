@@ -281,14 +281,25 @@ function PublishSection({
   const publishConfig = usePublishConfig();
   const { toast } = useToast();
 
-  const handlePublish = () => {
+  const isLive = status === "live";
+
+  const handleToggle = () => {
     publishConfig.mutate({ id: configId }, {
       onSuccess: () => {
         onPublished();
-        toast({ title: "Published", description: "Config is now live and visible to students." });
+        toast({
+          title: isLive ? "Unpublished" : "Published",
+          description: isLive
+            ? "Config is now a draft and hidden from students."
+            : "Config is now live and visible to students.",
+        });
       },
       onError: () => {
-        toast({ title: "Publish failed", description: "Could not publish config.", variant: "destructive" });
+        toast({
+          title: isLive ? "Unpublish failed" : "Publish failed",
+          description: "Could not update config status.",
+          variant: "destructive",
+        });
       },
     });
   };
@@ -301,34 +312,48 @@ function PublishSection({
       </h3>
 
       <div className="flex items-center gap-3 mb-4">
-        <Badge variant={status === "live" ? "default" : "secondary"} className="text-sm px-3 py-1">
-          {status === "live" ? (
+        <Badge variant={isLive ? "default" : "secondary"} className="text-sm px-3 py-1">
+          {isLive ? (
             <><CheckCircle2 className="w-3.5 h-3.5 mr-1.5" /> Live</>
           ) : (
             <><Clock className="w-3.5 h-3.5 mr-1.5" /> Draft</>
           )}
         </Badge>
         <span className="text-sm text-muted-foreground">
-          {status === "live" ? "Visible to students" : "Not visible to students"}
+          {isLive ? "Visible to students" : "Not visible to students"}
         </span>
       </div>
 
-      {status !== "live" && (
+      {isLive ? (
         <Button
-          onClick={handlePublish}
-          disabled={!hasContent || publishConfig.isPending}
-          className="w-full gap-2"
+          onClick={handleToggle}
+          disabled={publishConfig.isPending}
+          variant="outline"
+          className="w-full gap-2 text-destructive hover:text-destructive"
         >
           {publishConfig.isPending ? (
-            <><Loader2 className="w-4 h-4 animate-spin" /> Publishing...</>
+            <><Loader2 className="w-4 h-4 animate-spin" /> Unpublishing...</>
           ) : (
-            <><Globe className="w-4 h-4" /> Publish to Students</>
+            <><Clock className="w-4 h-4" /> Unpublish (Revert to Draft)</>
           )}
         </Button>
-      )}
-
-      {status !== "live" && !hasContent && (
-        <p className="text-xs text-muted-foreground text-center mt-2">Generate content first before publishing</p>
+      ) : (
+        <>
+          <Button
+            onClick={handleToggle}
+            disabled={!hasContent || publishConfig.isPending}
+            className="w-full gap-2"
+          >
+            {publishConfig.isPending ? (
+              <><Loader2 className="w-4 h-4 animate-spin" /> Publishing...</>
+            ) : (
+              <><Globe className="w-4 h-4" /> Publish to Students</>
+            )}
+          </Button>
+          {!hasContent && (
+            <p className="text-xs text-muted-foreground text-center mt-2">Generate content first before publishing</p>
+          )}
+        </>
       )}
     </div>
   );

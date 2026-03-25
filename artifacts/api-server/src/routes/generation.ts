@@ -167,14 +167,15 @@ router.post("/configs/:id/publish", requireAdmin, async (req, res) => {
       return;
     }
 
+    const newStatus = config.status === "live" ? "draft" : "live";
     await db
       .update(configsTable)
-      .set({ status: "live" })
+      .set({ status: newStatus })
       .where(eq(configsTable.id, id));
 
     res.json({ success: true });
   } catch (error) {
-    req.log.error({ err: error }, "Failed to publish config");
+    req.log.error({ err: error }, "Failed to toggle publish status");
     res.status(500).json({ error: "Internal server error" });
   }
 });
