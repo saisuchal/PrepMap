@@ -48,16 +48,16 @@ function AppRouter() {
       <Switch>
         <Route path="/login" component={Login} />
         <Route path="/reset-password" component={ResetPassword} />
-        <Route path="/" component={RootRedirect} />
         <Route path="/home" component={ProtectedHome} />
         <Route path="/roadmap" component={ProtectedRoadmap} />
         <Route path="/subtopic/:id" component={ProtectedSubtopic} />
         <Route path="/admin" component={ProtectedAdmin} />
+        <Route path="/" component={RootRedirect} />
         <Route>
           <div className="flex flex-col items-center justify-center min-h-[60vh] text-center">
             <h1 className="text-4xl font-display font-bold text-foreground mb-4">404</h1>
             <p className="text-muted-foreground mb-6">The page you're looking for doesn't exist.</p>
-            <a href="/" className="text-primary hover:underline font-medium">Return Home</a>
+            <a href="/home" className="text-primary hover:underline font-medium">Return Home</a>
           </div>
         </Route>
       </Switch>
