@@ -32,6 +32,7 @@ import type {
   SubtopicContent,
   SubtopicStat,
   SuccessResponse,
+  UpdateSubtopicRequest,
   UploadConfigFilesRequest,
   UploadUrlRequest,
   UploadUrlResponse,
@@ -995,6 +996,93 @@ export function useGetSubtopicContent<
 
   return { ...query, queryKey: queryOptions.queryKey };
 }
+
+/**
+ * @summary Update subtopic explanation and questions
+ */
+export const getUpdateSubtopicContentUrl = (id: string) => {
+  return `/api/subtopics/${id}`;
+};
+
+export const updateSubtopicContent = async (
+  id: string,
+  updateSubtopicRequest: UpdateSubtopicRequest,
+  options?: RequestInit,
+): Promise<SuccessResponse> => {
+  return customFetch<SuccessResponse>(getUpdateSubtopicContentUrl(id), {
+    ...options,
+    method: "PUT",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(updateSubtopicRequest),
+  });
+};
+
+export const getUpdateSubtopicContentMutationOptions = <
+  TError = ErrorType<ErrorResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof updateSubtopicContent>>,
+    TError,
+    { id: string; data: BodyType<UpdateSubtopicRequest> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof updateSubtopicContent>>,
+  TError,
+  { id: string; data: BodyType<UpdateSubtopicRequest> },
+  TContext
+> => {
+  const mutationKey = ["updateSubtopicContent"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof updateSubtopicContent>>,
+    { id: string; data: BodyType<UpdateSubtopicRequest> }
+  > = (props) => {
+    const { id, data } = props ?? {};
+
+    return updateSubtopicContent(id, data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type UpdateSubtopicContentMutationResult = NonNullable<
+  Awaited<ReturnType<typeof updateSubtopicContent>>
+>;
+export type UpdateSubtopicContentMutationBody = BodyType<UpdateSubtopicRequest>;
+export type UpdateSubtopicContentMutationError = ErrorType<ErrorResponse>;
+
+/**
+ * @summary Update subtopic explanation and questions
+ */
+export const useUpdateSubtopicContent = <
+  TError = ErrorType<ErrorResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof updateSubtopicContent>>,
+    TError,
+    { id: string; data: BodyType<UpdateSubtopicRequest> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof updateSubtopicContent>>,
+  TError,
+  { id: string; data: BodyType<UpdateSubtopicRequest> },
+  TContext
+> => {
+  return useMutation(getUpdateSubtopicContentMutationOptions(options));
+};
 
 /**
  * @summary Track a subtopic consumed event

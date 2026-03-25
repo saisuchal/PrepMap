@@ -1,7 +1,13 @@
 import { Router, type IRouter } from "express";
-import { GetSubtopicContentParams, GetSubtopicContentResponse } from "@workspace/api-zod";
+import {
+  GetSubtopicContentParams,
+  GetSubtopicContentResponse,
+  UpdateSubtopicContentParams,
+  UpdateSubtopicContentBody,
+} from "@workspace/api-zod";
 import { db, subtopicContentsTable, subtopicQuestionsTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
+import { requireAdmin } from "../middleware/adminAuth";
 
 const router: IRouter = Router();
 
@@ -40,6 +46,49 @@ router.get("/subtopics/:id", async (req, res) => {
     res.json(response);
   } catch (error) {
     req.log.error({ err: error }, "Failed to fetch subtopic content");
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+router.put("/subtopics/:id", requireAdmin, async (req, res) => {
+  try {
+    const { id } = UpdateSubtopicContentParams.parse(req.params);
+    const body = UpdateSubtopicContentBody.parse(req.body);
+
+    const [content] = await db
+      .select()
+      .from(subtopicContentsTable)
+      .where(eq(subtopicContentsTable.nodeId, id))
+      .limit(1);
+
+    if (!content) {
+      res.status(404).json({ error: "Subtopic not found" });
+      return;
+    }
+
+    await db
+      .update(subtopicContentsTable)
+      .set({ explanation: body.explanation })
+      .where(eq(subtopicContentsTable.nodeId, id));
+
+    await db
+      .delete(subtopicQuestionsTable)
+      .where(eq(subtopicQuestionsTable.nodeId, id));
+
+    if (body.questions.length > 0) {
+      await db.insert(subtopicQuestionsTable).values(
+        body.questions.map((q) => ({
+          nodeId: id,
+          markType: q.markType,
+          question: q.question,
+          answer: q.answer,
+        }))
+      );
+    }
+
+    res.json({ success: true });
+  } catch (error) {
+    req.log.error({ err: error }, "Failed to update subtopic content");
     res.status(500).json({ error: "Internal server error" });
   }
 });

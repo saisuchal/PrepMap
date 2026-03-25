@@ -261,6 +261,35 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
+    put:
+      operationId: updateSubtopicContent
+      tags: [subtopics]
+      summary: Update subtopic explanation and questions
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateSubtopicRequest"
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
 
   /events:
     post:
@@ -588,6 +617,37 @@ components:
         - nodeId
         - explanation
         - questions
+
+    UpdateSubtopicRequest:
+      type: object
+      properties:
+        explanation:
+          type: string
+        questions:
+          type: array
+          items:
+            $ref: "#/components/schemas/UpdateQuestion"
+      required:
+        - explanation
+        - questions
+
+    UpdateQuestion:
+      type: object
+      properties:
+        id:
+          type: integer
+          nullable: true
+        markType:
+          type: string
+          enum: ["2", "5"]
+        question:
+          type: string
+        answer:
+          type: string
+      required:
+        - markType
+        - question
+        - answer
 
     EventPayload:
       type: object

@@ -9,21 +9,29 @@ import {
   useRequestUploadUrl,
   useGetNodes,
   useGetSubtopicContent,
+  useUpdateSubtopicContent,
 } from "@workspace/api-client-react";
 import { UNIVERSITIES, EXAM_TYPES } from "@/lib/constants";
 import {
   ArrowLeft, Upload, Sparkles, Globe, FileText, CheckCircle2,
   Clock, AlertCircle, Loader2, ChevronDown, ChevronRight,
-  BookOpen, HelpCircle,
+  BookOpen, HelpCircle, Pencil, Save, Plus, Trash2,
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
 import { Progress } from "@/components/ui/progress";
+import { Textarea } from "@/components/ui/textarea";
+import { Input } from "@/components/ui/input";
+import {
+  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
+} from "@/components/ui/select";
 import {
   Accordion, AccordionContent, AccordionItem, AccordionTrigger,
 } from "@/components/ui/accordion";
+
+const ACCEPTED_FILE_TYPES = ".pdf,.png,.jpg,.jpeg,.webp";
 
 const examLabel = (id: string) => EXAM_TYPES.find((e) => e.id === id)?.name ?? id;
 const uniLabel = (id: string) => UNIVERSITIES.find((u) => u.id === id)?.name ?? id;
@@ -31,13 +39,11 @@ const uniLabel = (id: string) => UNIVERSITIES.find((u) => u.id === id)?.name ?? 
 function FileUploadSection({
   configId,
   hasFiles,
-  syllabusUrl,
   paperUrls,
   onUploaded,
 }: {
   configId: string;
   hasFiles: boolean;
-  syllabusUrl: string | null | undefined;
   paperUrls: string[] | null | undefined;
   onUploaded: () => void;
 }) {
@@ -49,13 +55,14 @@ function FileUploadSection({
   const { toast } = useToast();
 
   const uploadSingleFile = async (file: File): Promise<string> => {
+    const contentType = file.type || "application/octet-stream";
     const { data } = await requestUrl.mutateAsync({
-      data: { name: file.name, size: file.size, contentType: file.type || "application/pdf" },
+      data: { name: file.name, size: file.size, contentType },
     });
     await fetch(data.uploadURL, {
       method: "PUT",
       body: file,
-      headers: { "Content-Type": file.type || "application/pdf" },
+      headers: { "Content-Type": contentType },
     });
     return data.objectPath;
   };
@@ -78,7 +85,7 @@ function FileUploadSection({
       setPaperFiles([]);
       onUploaded();
       toast({ title: "Files uploaded", description: "Syllabus and papers saved successfully." });
-    } catch (err) {
+    } catch {
       toast({ title: "Upload failed", description: "Something went wrong. Please try again.", variant: "destructive" });
     } finally {
       setUploading(false);
@@ -105,20 +112,21 @@ function FileUploadSection({
       <div className="space-y-4">
         <div>
           <label className="block text-sm font-medium text-foreground mb-2">
-            Syllabus PDF <span className="text-destructive">*</span>
+            Syllabus (PDF or Image) <span className="text-destructive">*</span>
           </label>
           <label className="flex items-center justify-center border-2 border-dashed border-border rounded-xl p-6 cursor-pointer hover:border-primary/40 hover:bg-primary/5 transition-all">
             <input
               type="file"
-              accept=".pdf"
+              accept={ACCEPTED_FILE_TYPES}
               className="hidden"
               onChange={(e) => setSyllabusFile(e.target.files?.[0] ?? null)}
             />
             <div className="text-center">
               <FileText className="w-8 h-8 mx-auto text-muted-foreground mb-2" />
               <p className="text-sm text-muted-foreground">
-                {syllabusFile ? syllabusFile.name : "Click to select syllabus PDF"}
+                {syllabusFile ? syllabusFile.name : "Click to select syllabus file"}
               </p>
+              <p className="text-xs text-muted-foreground mt-1">PDF, PNG, JPG, or WebP</p>
             </div>
           </label>
         </div>
@@ -130,7 +138,7 @@ function FileUploadSection({
           <label className="flex items-center justify-center border-2 border-dashed border-border rounded-xl p-6 cursor-pointer hover:border-primary/40 hover:bg-primary/5 transition-all">
             <input
               type="file"
-              accept=".pdf"
+              accept={ACCEPTED_FILE_TYPES}
               multiple
               className="hidden"
               onChange={(e) => setPaperFiles(Array.from(e.target.files ?? []))}
@@ -138,8 +146,9 @@ function FileUploadSection({
             <div className="text-center">
               <FileText className="w-8 h-8 mx-auto text-muted-foreground mb-2" />
               <p className="text-sm text-muted-foreground">
-                {paperFiles.length > 0 ? `${paperFiles.length} file(s) selected` : "Click to select paper PDFs"}
+                {paperFiles.length > 0 ? `${paperFiles.length} file(s) selected` : "Click to select paper files"}
               </p>
+              <p className="text-xs text-muted-foreground mt-1">PDF, PNG, JPG, or WebP</p>
             </div>
           </label>
         </div>
@@ -325,8 +334,34 @@ function PublishSection({
   );
 }
 
-function SubtopicViewer({ nodeId }: { nodeId: string }) {
-  const { data, isLoading } = useGetSubtopicContent(nodeId);
+interface EditableQuestion {
+  id: number | null;
+  markType: "2" | "5";
+  question: string;
+  answer: string;
+}
+
+function SubtopicEditor({ nodeId }: { nodeId: string }) {
+  const { data, isLoading, refetch } = useGetSubtopicContent(nodeId);
+  const updateContent = useUpdateSubtopicContent();
+  const { toast } = useToast();
+  const [editing, setEditing] = useState(false);
+  const [explanation, setExplanation] = useState("");
+  const [questions, setQuestions] = useState<EditableQuestion[]>([]);
+
+  useEffect(() => {
+    if (data) {
+      setExplanation(data.explanation);
+      setQuestions(
+        data.questions.map((q) => ({
+          id: q.id,
+          markType: q.markType as "2" | "5",
+          question: q.question,
+          answer: q.answer,
+        }))
+      );
+    }
+  }, [data]);
 
   if (isLoading) {
     return <div className="p-4 animate-pulse text-sm text-muted-foreground">Loading content...</div>;
@@ -334,32 +369,150 @@ function SubtopicViewer({ nodeId }: { nodeId: string }) {
 
   if (!data) return null;
 
-  return (
-    <div className="space-y-4 p-4 bg-secondary/30 rounded-xl">
-      <div>
-        <h5 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2 flex items-center gap-1.5">
-          <BookOpen className="w-3.5 h-3.5" /> Explanation
-        </h5>
-        <p className="text-sm text-foreground whitespace-pre-wrap leading-relaxed">{data.explanation}</p>
-      </div>
-      {data.questions.length > 0 && (
-        <div>
-          <h5 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2 flex items-center gap-1.5">
-            <HelpCircle className="w-3.5 h-3.5" /> Questions ({data.questions.length})
+  const handleSave = () => {
+    updateContent.mutate(
+      {
+        id: nodeId,
+        data: {
+          explanation,
+          questions: questions.map((q) => ({
+            id: q.id,
+            markType: q.markType,
+            question: q.question,
+            answer: q.answer,
+          })),
+        },
+      },
+      {
+        onSuccess: () => {
+          setEditing(false);
+          refetch();
+          toast({ title: "Content saved", description: "Subtopic content updated successfully." });
+        },
+        onError: () => {
+          toast({ title: "Save failed", description: "Could not save content changes.", variant: "destructive" });
+        },
+      }
+    );
+  };
+
+  const addQuestion = () => {
+    setQuestions([...questions, { id: null, markType: "2", question: "", answer: "" }]);
+  };
+
+  const removeQuestion = (index: number) => {
+    setQuestions(questions.filter((_, i) => i !== index));
+  };
+
+  const updateQuestion = (index: number, field: keyof EditableQuestion, value: string) => {
+    setQuestions(questions.map((q, i) => (i === index ? { ...q, [field]: value } : q)));
+  };
+
+  if (!editing) {
+    return (
+      <div className="space-y-4 p-4 bg-secondary/30 rounded-xl">
+        <div className="flex items-center justify-between">
+          <h5 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider flex items-center gap-1.5">
+            <BookOpen className="w-3.5 h-3.5" /> Explanation
           </h5>
-          <div className="space-y-3">
-            {data.questions.map((q) => (
-              <div key={q.id} className="bg-card rounded-lg p-3 border border-border">
-                <div className="flex items-center gap-2 mb-1">
-                  <Badge variant="outline" className="text-xs">{q.markType}-mark</Badge>
-                </div>
-                <p className="text-sm font-medium text-foreground mb-1">{q.question}</p>
-                <p className="text-sm text-muted-foreground whitespace-pre-wrap">{q.answer}</p>
-              </div>
-            ))}
-          </div>
+          <Button variant="ghost" size="sm" onClick={() => setEditing(true)} className="gap-1.5 h-7 text-xs">
+            <Pencil className="w-3 h-3" /> Edit
+          </Button>
         </div>
-      )}
+        <p className="text-sm text-foreground whitespace-pre-wrap leading-relaxed">{data.explanation}</p>
+        {data.questions.length > 0 && (
+          <div>
+            <h5 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2 flex items-center gap-1.5">
+              <HelpCircle className="w-3.5 h-3.5" /> Questions ({data.questions.length})
+            </h5>
+            <div className="space-y-3">
+              {data.questions.map((q) => (
+                <div key={q.id} className="bg-card rounded-lg p-3 border border-border">
+                  <div className="flex items-center gap-2 mb-1">
+                    <Badge variant="outline" className="text-xs">{q.markType}-mark</Badge>
+                  </div>
+                  <p className="text-sm font-medium text-foreground mb-1">{q.question}</p>
+                  <p className="text-sm text-muted-foreground whitespace-pre-wrap">{q.answer}</p>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-4 p-4 bg-primary/5 border border-primary/20 rounded-xl">
+      <div className="flex items-center justify-between">
+        <h5 className="text-xs font-semibold text-primary uppercase tracking-wider flex items-center gap-1.5">
+          <Pencil className="w-3.5 h-3.5" /> Editing
+        </h5>
+        <div className="flex items-center gap-2">
+          <Button variant="ghost" size="sm" onClick={() => setEditing(false)} className="h-7 text-xs">
+            Cancel
+          </Button>
+          <Button size="sm" onClick={handleSave} disabled={updateContent.isPending} className="gap-1.5 h-7 text-xs">
+            {updateContent.isPending ? <Loader2 className="w-3 h-3 animate-spin" /> : <Save className="w-3 h-3" />}
+            Save
+          </Button>
+        </div>
+      </div>
+
+      <div>
+        <label className="block text-xs font-medium text-foreground mb-1">Explanation</label>
+        <Textarea
+          value={explanation}
+          onChange={(e) => setExplanation(e.target.value)}
+          rows={6}
+          className="text-sm"
+        />
+      </div>
+
+      <div>
+        <div className="flex items-center justify-between mb-2">
+          <label className="text-xs font-medium text-foreground">Questions</label>
+          <Button variant="outline" size="sm" onClick={addQuestion} className="gap-1.5 h-7 text-xs">
+            <Plus className="w-3 h-3" /> Add Question
+          </Button>
+        </div>
+        <div className="space-y-3">
+          {questions.map((q, idx) => (
+            <div key={idx} className="bg-card rounded-lg p-3 border border-border space-y-2">
+              <div className="flex items-center justify-between">
+                <Select value={q.markType} onValueChange={(v) => updateQuestion(idx, "markType", v)}>
+                  <SelectTrigger className="w-28 h-7 text-xs">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="2">2-mark</SelectItem>
+                    <SelectItem value="5">5-mark</SelectItem>
+                  </SelectContent>
+                </Select>
+                <Button variant="ghost" size="sm" onClick={() => removeQuestion(idx)} className="h-7 w-7 p-0 text-destructive hover:text-destructive">
+                  <Trash2 className="w-3.5 h-3.5" />
+                </Button>
+              </div>
+              <Input
+                value={q.question}
+                onChange={(e) => updateQuestion(idx, "question", e.target.value)}
+                placeholder="Question"
+                className="text-sm"
+              />
+              <Textarea
+                value={q.answer}
+                onChange={(e) => updateQuestion(idx, "answer", e.target.value)}
+                placeholder="Answer"
+                rows={3}
+                className="text-sm"
+              />
+            </div>
+          ))}
+          {questions.length === 0 && (
+            <p className="text-xs text-muted-foreground text-center py-4">No questions yet. Click "Add Question" above.</p>
+          )}
+        </div>
+      </div>
     </div>
   );
 }
@@ -410,6 +563,7 @@ function ContentReviewSection({ configId }: { configId: string }) {
       </h3>
       <p className="text-sm text-muted-foreground mb-4">
         {units.length} units, {topics.length} topics, {subtopics.length} subtopics
+        <span className="text-xs ml-2">(click a subtopic to view and edit)</span>
       </p>
 
       <Accordion type="multiple" className="space-y-2">
@@ -459,7 +613,7 @@ function ContentReviewSection({ configId }: { configId: string }) {
                                       exit={{ height: 0, opacity: 0 }}
                                       className="overflow-hidden"
                                     >
-                                      <SubtopicViewer nodeId={sub.id} />
+                                      <SubtopicEditor nodeId={sub.id} />
                                     </motion.div>
                                   )}
                                 </AnimatePresence>
@@ -545,7 +699,6 @@ export default function ConfigDetail() {
         <FileUploadSection
           configId={configId}
           hasFiles={hasFiles}
-          syllabusUrl={config.syllabusFileUrl}
           paperUrls={config.paperFileUrls}
           onUploaded={() => refetch()}
         />

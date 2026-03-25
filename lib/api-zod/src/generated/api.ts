@@ -167,6 +167,29 @@ export const GetSubtopicContentResponse = zod.object({
 });
 
 /**
+ * @summary Update subtopic explanation and questions
+ */
+export const UpdateSubtopicContentParams = zod.object({
+  id: zod.coerce.string(),
+});
+
+export const UpdateSubtopicContentBody = zod.object({
+  explanation: zod.string(),
+  questions: zod.array(
+    zod.object({
+      id: zod.number().nullish(),
+      markType: zod.enum(["2", "5"]),
+      question: zod.string(),
+      answer: zod.string(),
+    }),
+  ),
+});
+
+export const UpdateSubtopicContentResponse = zod.object({
+  success: zod.boolean(),
+});
+
+/**
  * @summary Track a subtopic consumed event
  */
 export const TrackEventBody = zod.object({

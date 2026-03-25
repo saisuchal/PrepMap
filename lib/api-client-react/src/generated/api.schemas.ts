@@ -155,6 +155,26 @@ export interface SubtopicContent {
   questions: SubtopicQuestion[];
 }
 
+export type UpdateQuestionMarkType =
+  (typeof UpdateQuestionMarkType)[keyof typeof UpdateQuestionMarkType];
+
+export const UpdateQuestionMarkType = {
+  NUMBER_2: "2",
+  NUMBER_5: "5",
+} as const;
+
+export interface UpdateQuestion {
+  id?: number | null;
+  markType: UpdateQuestionMarkType;
+  question: string;
+  answer: string;
+}
+
+export interface UpdateSubtopicRequest {
+  explanation: string;
+  questions: UpdateQuestion[];
+}
+
 export interface EventPayload {
   userId: string;
   universityId: string;
