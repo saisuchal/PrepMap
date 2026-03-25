@@ -5,14 +5,13 @@
  * GP-Max Exam Roadmap Platform API
  * OpenAPI spec version: 0.3.0
  */
+import type { CreateConfigRequestExam } from "./createConfigRequestExam";
 
-export interface EventPayload {
-  userId: string;
+export interface CreateConfigRequest {
   universityId: string;
   year: string;
   branch: string;
-  exam: string;
-  configId: string;
-  topicId: string;
-  subtopicId: string;
+  subject: string;
+  exam: CreateConfigRequestExam;
+  createdBy: string;
 }

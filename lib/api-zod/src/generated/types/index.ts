@@ -3,14 +3,18 @@
  * Do not edit manually.
  * Api
  * GP-Max Exam Roadmap Platform API
- * OpenAPI spec version: 0.2.0
+ * OpenAPI spec version: 0.3.0
  */
 
 export * from "./config";
 export * from "./configExam";
 export * from "./configStatus";
+export * from "./createConfigRequest";
+export * from "./createConfigRequestExam";
 export * from "./errorResponse";
 export * from "./eventPayload";
+export * from "./generationStatus";
+export * from "./generationStatusStatus";
 export * from "./getConfigsParams";
 export * from "./getConfigsStatus";
 export * from "./getNodesParams";
@@ -26,3 +30,6 @@ export * from "./subtopicQuestion";
 export * from "./subtopicQuestionMarkType";
 export * from "./subtopicStat";
 export * from "./successResponse";
+export * from "./uploadConfigFilesRequest";
+export * from "./uploadUrlRequest";
+export * from "./uploadUrlResponse";

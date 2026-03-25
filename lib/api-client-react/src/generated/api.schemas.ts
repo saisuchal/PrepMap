@@ -3,7 +3,7 @@
  * Do not edit manually.
  * Api
  * GP-Max Exam Roadmap Platform API
- * OpenAPI spec version: 0.2.0
+ * OpenAPI spec version: 0.3.0
  */
 export interface HealthStatus {
   status: string;
@@ -44,6 +44,29 @@ export interface ResetPasswordRequest {
   newPassword: string;
 }
 
+export type CreateConfigRequestExam =
+  (typeof CreateConfigRequestExam)[keyof typeof CreateConfigRequestExam];
+
+export const CreateConfigRequestExam = {
+  mid1: "mid1",
+  mid2: "mid2",
+  endsem: "endsem",
+} as const;
+
+export interface CreateConfigRequest {
+  universityId: string;
+  year: string;
+  branch: string;
+  subject: string;
+  exam: CreateConfigRequestExam;
+  createdBy: string;
+}
+
+export interface UploadConfigFilesRequest {
+  syllabusFileUrl: string;
+  paperFileUrls: string[];
+}
+
 export type ConfigExam = (typeof ConfigExam)[keyof typeof ConfigExam];
 
 export const ConfigExam = {
@@ -69,6 +92,26 @@ export interface Config {
   status: ConfigStatus;
   createdBy: string;
   createdAt?: string;
+}
+
+export type GenerationStatusStatus =
+  (typeof GenerationStatusStatus)[keyof typeof GenerationStatusStatus];
+
+export const GenerationStatusStatus = {
+  idle: "idle",
+  parsing: "parsing",
+  generating: "generating",
+  complete: "complete",
+  error: "error",
+} as const;
+
+export interface GenerationStatus {
+  configId: string;
+  status: GenerationStatusStatus;
+  progress: number;
+  total: number;
+  currentStep: string;
+  error?: string | null;
 }
 
 export type NodeType = (typeof NodeType)[keyof typeof NodeType];
@@ -126,6 +169,21 @@ export interface SubtopicStat {
   subtopicId: string;
   subtopicTitle: string;
   eventCount: number;
+}
+
+export interface UploadUrlRequest {
+  /** @minLength 1 */
+  name: string;
+  /** @minimum 1 */
+  size: number;
+  /** @minLength 1 */
+  contentType: string;
+}
+
+export interface UploadUrlResponse {
+  uploadURL: string;
+  objectPath: string;
+  metadata?: UploadUrlRequest;
 }
 
 export type GetConfigsParams = {

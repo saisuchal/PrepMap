@@ -3,7 +3,7 @@
  * Do not edit manually.
  * Api
  * GP-Max Exam Roadmap Platform API
- * OpenAPI spec version: 0.2.0
+ * OpenAPI spec version: 0.3.0
  */
 import type { ConfigExam } from "./configExam";
 import type { ConfigStatus } from "./configStatus";

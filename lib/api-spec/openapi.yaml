@@ -2,7 +2,7 @@ openapi: 3.1.0
 info:
   # Do not change the title, if the title changes, the import paths will be broken
   title: Api
-  version: 0.2.0
+  version: 0.3.0
   description: GP-Max Exam Roadmap Platform API
 servers:
   - url: /api
@@ -22,6 +22,10 @@ tags:
     description: Event tracking
   - name: admin
     description: Admin operations
+  - name: storage
+    description: Object storage upload and serving
+  - name: generation
+    description: AI content generation
 paths:
   /healthz:
     get:
@@ -112,6 +116,105 @@ paths:
                 type: array
                 items:
                   $ref: "#/components/schemas/Config"
+    post:
+      operationId: createConfig
+      tags: [configs]
+      summary: Create a new config
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateConfigRequest"
+      responses:
+        "201":
+          description: Config created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Config"
+
+  /configs/{id}/upload:
+    post:
+      operationId: uploadConfigFiles
+      tags: [configs]
+      summary: Upload syllabus and paper files for a config
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UploadConfigFilesRequest"
+      responses:
+        "200":
+          description: Files saved to config
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
+
+  /configs/{id}/generate:
+    post:
+      operationId: triggerGeneration
+      tags: [generation]
+      summary: Trigger AI content generation for a config
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "202":
+          description: Generation started
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
+
+  /configs/{id}/generation-status:
+    get:
+      operationId: getGenerationStatus
+      tags: [generation]
+      summary: Poll generation progress
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Generation status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GenerationStatus"
+
+  /configs/{id}/publish:
+    post:
+      operationId: publishConfig
+      tags: [configs]
+      summary: Publish a draft config to live
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Config published
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
 
   /nodes:
     get:
@@ -193,6 +296,65 @@ paths:
                 items:
                   $ref: "#/components/schemas/SubtopicStat"
 
+  /storage/uploads/request-url:
+    post:
+      tags: [storage]
+      operationId: requestUploadUrl
+      summary: Request a presigned URL for file upload
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UploadUrlRequest"
+      responses:
+        "200":
+          description: Presigned upload URL generated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UploadUrlResponse"
+
+  /storage/public-objects/{filePath}:
+    get:
+      tags: [storage]
+      operationId: getPublicObject
+      summary: Serve a public asset
+      parameters:
+        - name: filePath
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Object content
+          content:
+            "*/*":
+              schema:
+                type: string
+                format: binary
+
+  /storage/objects/{objectPath}:
+    get:
+      tags: [storage]
+      operationId: getStorageObject
+      summary: Serve an uploaded object
+      parameters:
+        - name: objectPath
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Object content
+          content:
+            "*/*":
+              schema:
+                type: string
+                format: binary
+
 components:
   schemas:
     HealthStatus:
@@ -265,6 +427,43 @@ components:
         - currentPassword
         - newPassword
 
+    CreateConfigRequest:
+      type: object
+      properties:
+        universityId:
+          type: string
+        year:
+          type: string
+        branch:
+          type: string
+        subject:
+          type: string
+        exam:
+          type: string
+          enum: [mid1, mid2, endsem]
+        createdBy:
+          type: string
+      required:
+        - universityId
+        - year
+        - branch
+        - subject
+        - exam
+        - createdBy
+
+    UploadConfigFilesRequest:
+      type: object
+      properties:
+        syllabusFileUrl:
+          type: string
+        paperFileUrls:
+          type: array
+          items:
+            type: string
+      required:
+        - syllabusFileUrl
+        - paperFileUrls
+
     Config:
       type: object
       properties:
@@ -297,6 +496,30 @@ components:
         - exam
         - status
         - createdBy
+
+    GenerationStatus:
+      type: object
+      properties:
+        configId:
+          type: string
+        status:
+          type: string
+          enum: [idle, parsing, generating, complete, error]
+        progress:
+          type: integer
+        total:
+          type: integer
+        currentStep:
+          type: string
+        error:
+          type: string
+          nullable: true
+      required:
+        - configId
+        - status
+        - progress
+        - total
+        - currentStep
 
     Node:
       type: object
@@ -403,3 +626,29 @@ components:
         - subtopicId
         - subtopicTitle
         - eventCount
+
+    UploadUrlRequest:
+      type: object
+      required: [name, size, contentType]
+      properties:
+        name:
+          type: string
+          minLength: 1
+        size:
+          type: integer
+          minimum: 1
+        contentType:
+          type: string
+          minLength: 1
+
+    UploadUrlResponse:
+      type: object
+      required: [uploadURL, objectPath]
+      properties:
+        uploadURL:
+          type: string
+          format: uri
+        objectPath:
+          type: string
+        metadata:
+          $ref: "#/components/schemas/UploadUrlRequest"

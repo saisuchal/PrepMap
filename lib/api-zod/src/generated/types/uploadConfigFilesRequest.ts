@@ -6,7 +6,7 @@
  * OpenAPI spec version: 0.3.0
  */
 
-export interface LoginRequest {
-  collegeId: string;
-  password: string;
+export interface UploadConfigFilesRequest {
+  syllabusFileUrl: string;
+  paperFileUrls: string[];
 }

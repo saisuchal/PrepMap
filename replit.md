@@ -70,10 +70,36 @@ Config = University + Branch + Year + Subject + Exam point (Mid-1, Mid-2, End Se
 - `POST /api/auth/login` — Login with college ID + password, returns user with role
 - `POST /api/auth/reset-password` — Reset password with collegeId, currentPassword, newPassword
 - `GET /api/configs?universityId=X&status=live` — Get configs (defaults to live for students)
+- `POST /api/configs` — Create new config (admin)
+- `POST /api/configs/:id/upload` — Save syllabus/paper file URLs to config
+- `POST /api/configs/:id/generate` — Trigger AI content generation (async, returns 202)
+- `GET /api/configs/:id/generation-status` — Poll generation progress
+- `POST /api/configs/:id/publish` — Publish draft config to live
 - `GET /api/nodes?configId=X` — Get syllabus tree nodes for config (includes explanation, sortOrder)
 - `GET /api/subtopics/:id` — Get subtopic content with questions array
 - `POST /api/events` — Track subtopic consumed event
 - `GET /api/admin/stats` — Get per-subtopic event counts
+- `POST /api/storage/uploads/request-url` — Get presigned upload URL for file
+- `GET /api/storage/public-objects/*` — Serve public assets
+- `GET /api/storage/objects/*` — Serve uploaded objects
+
+### AI Content Generation
+
+Claude AI (Anthropic via Replit AI Integrations proxy) generates structured roadmap content:
+1. Admin uploads syllabus PDF + optional exam papers
+2. Claude parses syllabus → structured JSON (units > topics > subtopics)
+3. Claude generates per-subtopic: explanation + 2×2-mark + 2×5-mark Q&A
+4. Rate-limited to respect 5 req/min limit (13s between requests)
+5. In-memory progress tracking per configId (status: idle/parsing/generating/complete/error)
+6. Files stored in Replit Object Storage (GCS bucket)
+
+Key files:
+- `artifacts/api-server/src/lib/claude.ts` — Anthropic client wrapper with rate limiting
+- `artifacts/api-server/src/lib/pdfExtractor.ts` — PDF text extraction via pdfjs-dist
+- `artifacts/api-server/src/lib/generator.ts` — Generation orchestrator
+- `artifacts/api-server/src/routes/generation.ts` — Generation API endpoints
+- `artifacts/api-server/src/lib/objectStorage.ts` — Object storage service
+- `artifacts/api-server/src/routes/storage.ts` — Storage upload/serve endpoints
 
 ### Static Universities
 

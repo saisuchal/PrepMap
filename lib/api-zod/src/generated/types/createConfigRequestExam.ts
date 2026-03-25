@@ -6,9 +6,10 @@
  * OpenAPI spec version: 0.3.0
  */
 
-export type ConfigExam = (typeof ConfigExam)[keyof typeof ConfigExam];
+export type CreateConfigRequestExam =
+  (typeof CreateConfigRequestExam)[keyof typeof CreateConfigRequestExam];
 
-export const ConfigExam = {
+export const CreateConfigRequestExam = {
   mid1: "mid1",
   mid2: "mid2",
   endsem: "endsem",

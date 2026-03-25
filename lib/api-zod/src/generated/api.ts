@@ -3,7 +3,7 @@
  * Do not edit manually.
  * Api
  * GP-Max Exam Roadmap Platform API
- * OpenAPI spec version: 0.2.0
+ * OpenAPI spec version: 0.3.0
  */
 import * as zod from "zod";
 
@@ -63,6 +63,68 @@ export const GetConfigsResponseItem = zod.object({
   createdAt: zod.string().optional(),
 });
 export const GetConfigsResponse = zod.array(GetConfigsResponseItem);
+
+/**
+ * @summary Create a new config
+ */
+export const CreateConfigBody = zod.object({
+  universityId: zod.string(),
+  year: zod.string(),
+  branch: zod.string(),
+  subject: zod.string(),
+  exam: zod.enum(["mid1", "mid2", "endsem"]),
+  createdBy: zod.string(),
+});
+
+/**
+ * @summary Upload syllabus and paper files for a config
+ */
+export const UploadConfigFilesParams = zod.object({
+  id: zod.coerce.string(),
+});
+
+export const UploadConfigFilesBody = zod.object({
+  syllabusFileUrl: zod.string(),
+  paperFileUrls: zod.array(zod.string()),
+});
+
+export const UploadConfigFilesResponse = zod.object({
+  success: zod.boolean(),
+});
+
+/**
+ * @summary Trigger AI content generation for a config
+ */
+export const TriggerGenerationParams = zod.object({
+  id: zod.coerce.string(),
+});
+
+/**
+ * @summary Poll generation progress
+ */
+export const GetGenerationStatusParams = zod.object({
+  id: zod.coerce.string(),
+});
+
+export const GetGenerationStatusResponse = zod.object({
+  configId: zod.string(),
+  status: zod.enum(["idle", "parsing", "generating", "complete", "error"]),
+  progress: zod.number(),
+  total: zod.number(),
+  currentStep: zod.string(),
+  error: zod.string().nullish(),
+});
+
+/**
+ * @summary Publish a draft config to live
+ */
+export const PublishConfigParams = zod.object({
+  id: zod.coerce.string(),
+});
+
+export const PublishConfigResponse = zod.object({
+  success: zod.boolean(),
+});
 
 /**
  * @summary Get syllabus nodes for a config
@@ -126,3 +188,39 @@ export const GetAdminStatsResponseItem = zod.object({
   eventCount: zod.number(),
 });
 export const GetAdminStatsResponse = zod.array(GetAdminStatsResponseItem);
+
+/**
+ * @summary Request a presigned URL for file upload
+ */
+
+export const RequestUploadUrlBody = zod.object({
+  name: zod.string().min(1),
+  size: zod.number().min(1),
+  contentType: zod.string().min(1),
+});
+
+export const RequestUploadUrlResponse = zod.object({
+  uploadURL: zod.string().url(),
+  objectPath: zod.string(),
+  metadata: zod
+    .object({
+      name: zod.string().min(1),
+      size: zod.number().min(1),
+      contentType: zod.string().min(1),
+    })
+    .optional(),
+});
+
+/**
+ * @summary Serve a public asset
+ */
+export const GetPublicObjectParams = zod.object({
+  filePath: zod.coerce.string(),
+});
+
+/**
+ * @summary Serve an uploaded object
+ */
+export const GetStorageObjectParams = zod.object({
+  objectPath: zod.coerce.string(),
+});
