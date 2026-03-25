@@ -296,7 +296,7 @@ export const useResetPassword = <
 /**
  * @summary Get exam configurations
  */
-export const getGetConfigsUrl = (params: GetConfigsParams) => {
+export const getGetConfigsUrl = (params?: GetConfigsParams) => {
   const normalizedParams = new URLSearchParams();
 
   Object.entries(params || {}).forEach(([key, value]) => {
@@ -313,7 +313,7 @@ export const getGetConfigsUrl = (params: GetConfigsParams) => {
 };
 
 export const getConfigs = async (
-  params: GetConfigsParams,
+  params?: GetConfigsParams,
   options?: RequestInit,
 ): Promise<Config[]> => {
   return customFetch<Config[]>(getGetConfigsUrl(params), {
@@ -330,7 +330,7 @@ export const getGetConfigsQueryOptions = <
   TData = Awaited<ReturnType<typeof getConfigs>>,
   TError = ErrorType<unknown>,
 >(
-  params: GetConfigsParams,
+  params?: GetConfigsParams,
   options?: {
     query?: UseQueryOptions<
       Awaited<ReturnType<typeof getConfigs>>,
@@ -368,7 +368,7 @@ export function useGetConfigs<
   TData = Awaited<ReturnType<typeof getConfigs>>,
   TError = ErrorType<unknown>,
 >(
-  params: GetConfigsParams,
+  params?: GetConfigsParams,
   options?: {
     query?: UseQueryOptions<
       Awaited<ReturnType<typeof getConfigs>>,

@@ -18,4 +18,6 @@ export interface Config {
   status: ConfigStatus;
   createdBy: string;
   createdAt?: string;
+  syllabusFileUrl?: string | null;
+  paperFileUrls?: string[] | null;
 }

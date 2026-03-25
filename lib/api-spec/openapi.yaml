@@ -98,7 +98,7 @@ paths:
       parameters:
         - name: universityId
           in: query
-          required: true
+          required: false
           schema:
             type: string
         - name: status
@@ -484,6 +484,14 @@ components:
           type: string
         createdAt:
           type: string
+        syllabusFileUrl:
+          type: string
+          nullable: true
+        paperFileUrls:
+          type: array
+          items:
+            type: string
+          nullable: true
       required:
         - id
         - universityId

@@ -53,7 +53,8 @@ Config = University + Branch + Year + Subject + Exam point (Mid-1, Mid-2, End Se
 - **Roadmap Tree**: Expandable tree: Units > Topics > Subtopics (sorted by sortOrder)
 - **Subtopic Page**: Explanation + dynamic 2-mark/5-mark Q&A from subtopicQuestions table with toggle-to-reveal answers
 - **Event Tracking**: IntersectionObserver-based scroll tracking (2s dwell) fires SUBTOPIC_CONSUMED event
-- **Admin Dashboard**: Platform analytics with per-subtopic event counts
+- **Admin Dashboard**: Tabbed interface (Configs | Analytics) with config management, file upload, AI generation, publish flow, and content review
+- **Admin Config Management**: Create configs, upload syllabus/papers (presigned URL flow), trigger AI generation with progress polling, publish to students, review generated content tree
 - **Role-based routing**: Admin routes protected from students, student routes protected from admins
 
 ### Database Schema (Drizzle ORM)
@@ -69,7 +70,7 @@ Config = University + Branch + Year + Subject + Exam point (Mid-1, Mid-2, End Se
 
 - `POST /api/auth/login` — Login with college ID + password, returns user with role
 - `POST /api/auth/reset-password` — Reset password with collegeId, currentPassword, newPassword
-- `GET /api/configs?universityId=X&status=live` — Get configs (defaults to live for students)
+- `GET /api/configs?universityId=X&status=live` — Get configs (universityId optional, defaults to live for non-admins, admins see all statuses)
 - `POST /api/configs` — Create new config (admin)
 - `POST /api/configs/:id/upload` — Save syllabus/paper file URLs to config
 - `POST /api/configs/:id/generate` — Trigger AI content generation (async, returns 202)

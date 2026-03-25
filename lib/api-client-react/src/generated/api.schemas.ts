@@ -91,6 +91,8 @@ export interface Config {
   status: ConfigStatus;
   createdBy: string;
   createdAt?: string;
+  syllabusFileUrl?: string | null;
+  paperFileUrls?: string[] | null;
 }
 
 export type GenerationStatusStatus =
@@ -186,7 +188,7 @@ export interface UploadUrlResponse {
 }
 
 export type GetConfigsParams = {
-  universityId: string;
+  universityId?: string;
   status?: GetConfigsStatus;
 };
 

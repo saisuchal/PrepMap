@@ -12,6 +12,7 @@ import Home from "@/pages/home";
 import Roadmap from "@/pages/roadmap";
 import Subtopic from "@/pages/subtopic";
 import Admin from "@/pages/admin";
+import ConfigDetail from "@/pages/config-detail";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -41,6 +42,7 @@ function ProtectedHome() { return <ProtectedRoute component={Home} requireRole="
 function ProtectedRoadmap() { return <ProtectedRoute component={Roadmap} requireRole="student" />; }
 function ProtectedSubtopic() { return <ProtectedRoute component={Subtopic} requireRole="student" />; }
 function ProtectedAdmin() { return <ProtectedRoute component={Admin} requireRole="admin" />; }
+function ProtectedConfigDetail() { return <ProtectedRoute component={ConfigDetail} requireRole="admin" />; }
 
 function AppRouter() {
   return (
@@ -51,6 +53,7 @@ function AppRouter() {
         <Route path="/home" component={ProtectedHome} />
         <Route path="/roadmap" component={ProtectedRoadmap} />
         <Route path="/subtopic/:id" component={ProtectedSubtopic} />
+        <Route path="/admin/config/:id" component={ProtectedConfigDetail} />
         <Route path="/admin" component={ProtectedAdmin} />
         <Route path="/" component={RootRedirect} />
         <Route>

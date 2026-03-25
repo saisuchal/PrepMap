@@ -1,7 +1,8 @@
 import { Router, type IRouter } from "express";
 import { GetConfigsQueryParams, GetConfigsResponse } from "@workspace/api-zod";
 import { db, configsTable } from "@workspace/db";
-import { eq, and } from "drizzle-orm";
+import { eq, and, type SQL } from "drizzle-orm";
+import { requireAdmin } from "../middleware/adminAuth";
 
 const router: IRouter = Router();
 
@@ -9,17 +10,28 @@ router.get("/configs", async (req, res) => {
   try {
     const { universityId, status } = GetConfigsQueryParams.parse(req.query);
 
-    const conditions = [eq(configsTable.universityId, universityId)];
+    const userId = req.headers["x-user-id"] as string | undefined;
+    let isAdmin = false;
+    if (userId) {
+      const { usersTable } = await import("@workspace/db");
+      const [user] = await db.select().from(usersTable).where(eq(usersTable.id, userId)).limit(1);
+      isAdmin = user?.role === "admin";
+    }
+
+    const conditions: SQL[] = [];
+    if (universityId) {
+      conditions.push(eq(configsTable.universityId, universityId));
+    }
     if (status) {
       conditions.push(eq(configsTable.status, status));
-    } else {
+    } else if (!isAdmin) {
       conditions.push(eq(configsTable.status, "live"));
     }
 
     const configs = await db
       .select()
       .from(configsTable)
-      .where(and(...conditions));
+      .where(conditions.length > 0 ? and(...conditions) : undefined);
 
     const response = GetConfigsResponse.parse(
       configs.map((c) => ({
@@ -32,6 +44,8 @@ router.get("/configs", async (req, res) => {
         status: c.status,
         createdBy: c.createdBy,
         createdAt: c.createdAt?.toISOString(),
+        syllabusFileUrl: c.syllabusFileUrl ?? null,
+        paperFileUrls: c.paperFileUrls ?? null,
       }))
     );
 

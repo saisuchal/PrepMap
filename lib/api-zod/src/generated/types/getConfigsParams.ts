@@ -8,6 +8,6 @@
 import type { GetConfigsStatus } from "./getConfigsStatus";
 
 export type GetConfigsParams = {
-  universityId: string;
+  universityId?: string;
   status?: GetConfigsStatus;
 };

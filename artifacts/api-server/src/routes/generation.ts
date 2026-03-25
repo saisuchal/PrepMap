@@ -49,6 +49,8 @@ router.post("/configs", requireAdmin, async (req, res) => {
       status: config.status,
       createdBy: config.createdBy,
       createdAt: config.createdAt?.toISOString(),
+      syllabusFileUrl: config.syllabusFileUrl ?? null,
+      paperFileUrls: config.paperFileUrls ?? null,
     });
   } catch (error) {
     req.log.error({ err: error }, "Failed to create config");

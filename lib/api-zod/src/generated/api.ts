@@ -47,7 +47,7 @@ export const ResetPasswordResponse = zod.object({
  * @summary Get exam configurations
  */
 export const GetConfigsQueryParams = zod.object({
-  universityId: zod.coerce.string(),
+  universityId: zod.coerce.string().optional(),
   status: zod.enum(["draft", "live"]).optional(),
 });
 
@@ -61,6 +61,8 @@ export const GetConfigsResponseItem = zod.object({
   status: zod.enum(["draft", "live"]),
   createdBy: zod.string(),
   createdAt: zod.string().optional(),
+  syllabusFileUrl: zod.string().nullish(),
+  paperFileUrls: zod.array(zod.string()).nullish(),
 });
 export const GetConfigsResponse = zod.array(GetConfigsResponseItem);
 
