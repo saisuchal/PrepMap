@@ -16,7 +16,7 @@ export default function Login() {
   useEffect(() => {
     const user = getStoredUser();
     if (user) {
-      setLocation(user.role === "admin" ? "/admin" : "/");
+      setLocation(user.role === "admin" ? "/admin" : "/home");
     }
   }, [setLocation]);
 
@@ -29,7 +29,7 @@ export default function Login() {
       {
         onSuccess: (data) => {
           setStoredUser(data);
-          setLocation(data.role === "admin" ? "/admin" : "/");
+          setLocation(data.role === "admin" ? "/admin" : "/home");
         }
       }
     );

@@ -19,7 +19,7 @@ export function Layout({ children }: { children: ReactNode }) {
     <div className="min-h-screen bg-background flex flex-col">
       <header className="sticky top-0 z-50 w-full glass-panel border-b border-border/40">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
-          <Link href={user.role === "admin" ? "/admin" : "/"} className="flex items-center gap-2 group">
+          <Link href={user.role === "admin" ? "/admin" : "/home"} className="flex items-center gap-2 group">
             <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-primary to-blue-600 flex items-center justify-center text-white shadow-lg shadow-primary/20 group-hover:scale-105 transition-transform">
               <Zap className="w-5 h-5" />
             </div>
@@ -35,7 +35,7 @@ export function Layout({ children }: { children: ReactNode }) {
                 <span className="hidden sm:inline">Dashboard</span>
               </Link>
             ) : (
-              <Link href="/" className="text-sm font-medium text-muted-foreground hover:text-foreground transition-colors flex items-center gap-1.5">
+              <Link href="/home" className="text-sm font-medium text-muted-foreground hover:text-foreground transition-colors flex items-center gap-1.5">
                 <Home className="w-4 h-4" />
                 <span className="hidden sm:inline">Home</span>
               </Link>

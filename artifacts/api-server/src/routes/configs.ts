@@ -10,11 +10,7 @@ router.get("/configs", async (req, res) => {
     const { universityId, status } = GetConfigsQueryParams.parse(req.query);
 
     const conditions = [eq(configsTable.universityId, universityId)];
-    if (status) {
-      conditions.push(eq(configsTable.status, status));
-    } else {
-      conditions.push(eq(configsTable.status, "live"));
-    }
+    conditions.push(eq(configsTable.status, "live"));
 
     const configs = await db
       .select()

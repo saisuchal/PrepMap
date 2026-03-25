@@ -12,7 +12,7 @@ export const configsTable = pgTable("configs", {
   status: text("status").notNull().default("draft"),
   createdBy: text("created_by").notNull(),
   syllabusFileUrl: text("syllabus_file_url"),
-  paperFileUrls: text("paper_file_urls"),
+  paperFileUrls: text("paper_file_urls").array(),
   createdAt: timestamp("created_at").notNull().defaultNow(),
 });
 

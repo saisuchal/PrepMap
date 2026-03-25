@@ -26,9 +26,15 @@ function ProtectedRoute({ component: Component, requireRole }: { component: Reac
   const user = getStoredUser();
   if (!user) return <Redirect to="/login" />;
   if (requireRole && user.role !== requireRole) {
-    return <Redirect to={user.role === "admin" ? "/admin" : "/"} />;
+    return <Redirect to={user.role === "admin" ? "/admin" : "/home"} />;
   }
   return <Component />;
+}
+
+function RootRedirect() {
+  const user = getStoredUser();
+  if (!user) return <Redirect to="/login" />;
+  return <Redirect to={user.role === "admin" ? "/admin" : "/home"} />;
 }
 
 function ProtectedHome() { return <ProtectedRoute component={Home} requireRole="student" />; }
@@ -42,7 +48,8 @@ function AppRouter() {
       <Switch>
         <Route path="/login" component={Login} />
         <Route path="/reset-password" component={ResetPassword} />
-        <Route path="/" component={ProtectedHome} />
+        <Route path="/" component={RootRedirect} />
+        <Route path="/home" component={ProtectedHome} />
         <Route path="/roadmap" component={ProtectedRoadmap} />
         <Route path="/subtopic/:id" component={ProtectedSubtopic} />
         <Route path="/admin" component={ProtectedAdmin} />
