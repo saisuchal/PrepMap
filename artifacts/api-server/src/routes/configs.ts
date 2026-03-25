@@ -22,7 +22,7 @@ router.get("/configs", async (req, res) => {
     if (universityId) {
       conditions.push(eq(configsTable.universityId, universityId));
     }
-    if (status) {
+    if (isAdmin && status) {
       conditions.push(eq(configsTable.status, status));
     } else if (!isAdmin) {
       conditions.push(eq(configsTable.status, "live"));
