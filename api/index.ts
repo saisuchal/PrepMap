@@ -1,4 +1,5 @@
-// @ts-expect-error build artifact is generated during Vercel build step
-import app from "../artifacts/api-server/dist/app.mjs";
-
-export default app;
+export default async function handler(req: any, res: any) {
+  const mod = await import("../artifacts/api-server/dist/app.mjs");
+  const app = mod.default as (req: any, res: any) => unknown;
+  return app(req, res);
+}
