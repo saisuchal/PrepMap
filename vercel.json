@@ -5,8 +5,12 @@
   "outputDirectory": "artifacts/exam-roadmap/dist/public",
   "routes": [
     {
+      "src": "/api$",
+      "dest": "/api/index"
+    },
+    {
       "src": "/api/(.*)",
-      "dest": "/api/$1"
+      "dest": "/api/[...path]"
     },
     {
       "handle": "filesystem"
