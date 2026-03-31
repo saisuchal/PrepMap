@@ -3,7 +3,7 @@ import { useLocation } from "wouter";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   ArrowLeft, Layers, BookOpen, FileText, MessageSquare,
-  CheckCircle2, AlertCircle, ZoomIn, ZoomOut, Maximize2, X, List, Plus, Minus, Star
+  CheckCircle2, AlertCircle, ZoomIn, ZoomOut, Maximize2, X, List, Plus, Minus, Star, ChevronRight
 } from "lucide-react";
 import { useGetAppMetadata, useGetConfigs, useGetNodes, useGetQuestionBank, useGetSubtopicContent, useTrackEvent } from "@/api-client";
 import { buildTree, type TreeNode } from "@/lib/utils";
@@ -466,8 +466,25 @@ export default function Roadmap() {
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [questionBankOpen, setQuestionBankOpen] = useState(false);
   const [viewMode, setViewMode] = useState<"list" | "map">("map");
+  const [expandedMobileUnitIds, setExpandedMobileUnitIds] = useState<Set<string>>(new Set());
+  const [expandedMobileTopicIds, setExpandedMobileTopicIds] = useState<Set<string>>(new Set());
   const [completionVersion, setCompletionVersion] = useState(0);
-  const selectedNode = allNodes.find(n => n.id === selectedNodeId);
+  const selectedNode = useMemo(() => {
+    if (!selectedNodeId) return null;
+    const laidNode = allNodes.find((n) => n.id === selectedNodeId);
+    if (laidNode) return laidNode;
+    const rawNode = (nodes ?? []).find((n) => n.id === selectedNodeId);
+    if (!rawNode) return null;
+    return {
+      ...rawNode,
+      x: 0,
+      y: 0,
+      w: 0,
+      h: 0,
+      layoutChildren: [],
+      children: [],
+    } as LayoutNode;
+  }, [selectedNodeId, allNodes, nodes]);
 
   const completion = useMemo(() => {
     const doneSubtopics = new Set<string>();
@@ -535,9 +552,17 @@ export default function Roadmap() {
 
   useEffect(() => {
     if (selectedNodeId && !allNodes.some((n) => n.id === selectedNodeId)) {
-      setSelectedNodeId(null);
+      if (!(nodes ?? []).some((n) => n.id === selectedNodeId)) {
+        setSelectedNodeId(null);
+      }
     }
-  }, [selectedNodeId, allNodes]);
+  }, [selectedNodeId, allNodes, nodes]);
+
+  useEffect(() => {
+    if (!configId) return;
+    setExpandedMobileUnitIds(new Set());
+    setExpandedMobileTopicIds(new Set());
+  }, [configId]);
 
   const toggleTopicCollapse = useCallback((topicId: string) => {
     setCollapsedTopicIds((prev) => {
@@ -606,6 +631,12 @@ export default function Roadmap() {
     window.addEventListener("resize", onResize);
     return () => window.removeEventListener("resize", onResize);
   }, []);
+
+  useEffect(() => {
+    if (isMobileViewport && viewMode === "list") {
+      setViewMode("map");
+    }
+  }, [isMobileViewport, viewMode]);
 
   useEffect(() => {
     if (!configId) return;
@@ -747,24 +778,38 @@ export default function Roadmap() {
             </div>
           </div>
           <div className="flex items-center gap-1 shrink-0">
-            <Button
-              variant={viewMode === "list" ? "default" : "outline"}
-              size="sm"
-              className="h-8 px-3 gap-1.5"
-              onClick={() => setViewMode("list")}
-            >
-              <List className="w-3.5 h-3.5" />
-              List
-            </Button>
-            <Button
-              variant={viewMode === "map" ? "default" : "outline"}
-              size="sm"
-              className="h-8 px-3 gap-1.5"
-              onClick={() => setViewMode("map")}
-            >
-              <Layers className="w-3.5 h-3.5" />
-              Map
-            </Button>
+            {isMobileViewport ? (
+              <Button
+                variant="default"
+                size="sm"
+                className="h-8 px-3 gap-1.5"
+                onClick={() => setViewMode("map")}
+              >
+                <List className="w-3.5 h-3.5" />
+                List
+              </Button>
+            ) : (
+              <>
+                <Button
+                  variant={viewMode === "list" ? "default" : "outline"}
+                  size="sm"
+                  className="h-8 px-3 gap-1.5"
+                  onClick={() => setViewMode("list")}
+                >
+                  <List className="w-3.5 h-3.5" />
+                  List
+                </Button>
+                <Button
+                  variant={viewMode === "map" ? "default" : "outline"}
+                  size="sm"
+                  className="h-8 px-3 gap-1.5"
+                  onClick={() => setViewMode("map")}
+                >
+                  <Layers className="w-3.5 h-3.5" />
+                  Map
+                </Button>
+              </>
+            )}
           </div>
         </div>
 
@@ -877,6 +922,153 @@ export default function Roadmap() {
                         </div>
                       ))}
                     </div>
+                  </section>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      ) : isMobileViewport ? (
+        <div className="flex-1 overflow-y-auto bg-slate-50 p-3 space-y-3">
+          <button
+            type="button"
+            onClick={() => setQuestionBankOpen(true)}
+            className="w-full rounded-xl border border-blue-300 bg-blue-50 px-3 py-3 text-left shadow-sm"
+          >
+            <div className="flex items-center gap-2">
+              <div className="w-7 h-7 rounded-md bg-blue-500 flex items-center justify-center shrink-0">
+                <MessageSquare className="w-4 h-4 text-white" />
+              </div>
+              <span className="text-sm font-semibold text-blue-700">Question Bank</span>
+            </div>
+          </button>
+
+          <div className="rounded-xl border border-border bg-card px-3 py-2.5">
+            <h2 className="text-sm font-semibold text-foreground">Units</h2>
+            <p className="text-xs text-muted-foreground mt-1">
+              Click on topics/subtopics to view explanations. Use Expand to reveal subtopics.
+            </p>
+          </div>
+
+          {isLoading ? (
+            <div className="h-[50vh] flex items-center justify-center">
+              <div className="flex flex-col items-center gap-3">
+                <div className="w-10 h-10 rounded-full border-4 border-primary border-t-transparent animate-spin" />
+                <p className="text-sm text-muted-foreground">Loading roadmap...</p>
+              </div>
+            </div>
+          ) : isError ? (
+            <div className="p-6 bg-destructive/10 text-destructive rounded-xl border border-destructive/20 text-center">
+              <AlertCircle className="w-8 h-8 mx-auto mb-2 opacity-60" />
+              <p className="font-medium">Failed to load roadmap</p>
+            </div>
+          ) : tree.length === 0 ? (
+            <div className="p-6 rounded-xl border border-border bg-card text-center">
+              <Layers className="w-10 h-10 text-muted-foreground mx-auto mb-2 opacity-20" />
+              <p className="text-muted-foreground">No content available yet.</p>
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {tree.map((unit) => {
+                const unitExpanded = expandedMobileUnitIds.has(unit.id);
+                const topicCount = unit.children.length;
+                const subtopicCount = unit.children.reduce((acc, t) => acc + t.children.length, 0);
+                return (
+                  <section key={unit.id} className="bg-card border border-blue-200 rounded-xl overflow-hidden shadow-sm">
+                    <button
+                      type="button"
+                      className="w-full px-3 py-3 text-left bg-blue-50/50 border-b border-blue-100"
+                      onClick={() =>
+                        setExpandedMobileUnitIds((prev) => {
+                          if (prev.has(unit.id)) return new Set<string>();
+                          return new Set<string>([unit.id]);
+                        })
+                      }
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-2">
+                            <span className="text-sm font-semibold text-foreground break-words">{unit.title}</span>
+                            {completion.doneUnits.has(unit.id) && (
+                              <CheckCircle2 className="w-4 h-4 text-green-600 shrink-0" />
+                            )}
+                          </div>
+                          <p className="text-xs text-muted-foreground mt-1">
+                            {topicCount} topics | {subtopicCount} subtopics
+                          </p>
+                        </div>
+                        <span className="text-xs text-blue-700 font-semibold">{unitExpanded ? "Hide" : "Show"}</span>
+                      </div>
+                    </button>
+
+                    {unitExpanded && (
+                      <div className="p-2 space-y-2">
+                        {unit.children.map((topic) => {
+                          const topicExpanded = expandedMobileTopicIds.has(topic.id);
+                          return (
+                            <div key={topic.id} className="rounded-lg border border-violet-200 bg-violet-50/50 overflow-hidden">
+                              <div className="px-2.5 py-2 flex items-center gap-2">
+                                <button
+                                  type="button"
+                                  className="flex-1 text-left min-w-0"
+                                  onClick={() => setSelectedNodeId(topic.id)}
+                                >
+                                  <div className="flex items-center gap-2">
+                                    <span className="text-sm font-semibold text-violet-800 break-words">{topic.title}</span>
+                                    {completion.doneTopics.has(topic.id) && (
+                                      <CheckCircle2 className="w-3.5 h-3.5 text-green-600 shrink-0" />
+                                    )}
+                                  </div>
+                                </button>
+                                <Button
+                                  type="button"
+                                  variant="outline"
+                                  size="sm"
+                                  className="h-7 w-7 p-0"
+                                  onClick={() =>
+                                    setExpandedMobileTopicIds((prev) => {
+                                      const next = new Set(prev);
+                                      if (next.has(topic.id)) next.delete(topic.id);
+                                      else next.add(topic.id);
+                                      return next;
+                                    })
+                                  }
+                                  title={topicExpanded ? "Collapse subtopics" : "Expand subtopics"}
+                                  aria-label={topicExpanded ? "Collapse subtopics" : "Expand subtopics"}
+                                >
+                                  <ChevronRight
+                                    className={`w-3.5 h-3.5 transition-transform ${topicExpanded ? "rotate-90" : "rotate-0"}`}
+                                  />
+                                </Button>
+                              </div>
+                              {topicExpanded && (
+                                <div className="px-2.5 pb-2 space-y-1.5">
+                                  {topic.children.map((sub) => {
+                                    const done = completion.doneSubtopics.has(sub.id);
+                                    return (
+                                      <button
+                                        key={sub.id}
+                                        type="button"
+                                        onClick={() => setSelectedNodeId(sub.id)}
+                                        className="w-full text-left rounded-md border border-emerald-200 bg-emerald-50 hover:bg-emerald-100 px-2 py-2"
+                                      >
+                                        <div className="flex items-start gap-2">
+                                          <FileText className="w-3.5 h-3.5 text-emerald-700 mt-0.5 shrink-0" />
+                                          <span className="text-xs font-medium text-emerald-800 leading-snug flex-1 break-words">
+                                            {sub.title}
+                                          </span>
+                                          {done && <CheckCircle2 className="w-3.5 h-3.5 text-green-600 shrink-0" />}
+                                        </div>
+                                      </button>
+                                    );
+                                  })}
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
                   </section>
                 );
               })}
@@ -1520,11 +1712,11 @@ function QuestionBankModal({
                   </div>
                 )}
                 <div className="p-4 border-b border-blue-100 bg-blue-50/60">
-                  <div className="flex items-start gap-2">
-                    <span className="shrink-0 px-2 py-0.5 rounded-md bg-slate-100 text-slate-700 text-[10px] font-bold uppercase tracking-wider">
-                      Q{selectedQuestion.number}
-                    </span>
-                    <div className="shrink-0 flex flex-col items-start gap-1">
+                  <div className="space-y-3">
+                    <div className="flex items-center gap-2 flex-wrap min-w-0">
+                      <span className="shrink-0 px-2 py-0.5 rounded-md bg-slate-100 text-slate-700 text-[10px] font-bold uppercase tracking-wider">
+                        Q{selectedQuestion.number}
+                      </span>
                       <span className="px-2 py-0.5 rounded-md bg-blue-100 text-blue-700 text-[10px] font-bold uppercase tracking-wider">
                         {selectedQuestion.label}
                       </span>
@@ -1533,16 +1725,16 @@ function QuestionBankModal({
                           Interacted
                         </span>
                       )}
+                      {selectedQuestion.starred && (
+                        <Star
+                          className="shrink-0 w-4 h-4 mt-0.5 text-amber-500 fill-amber-400"
+                          aria-label="Starred question"
+                        />
+                      )}
                     </div>
-                    {selectedQuestion.starred && (
-                      <Star
-                        className="shrink-0 w-4 h-4 mt-0.5 text-amber-500 fill-amber-400"
-                        aria-label="Starred question"
-                      />
-                    )}
-                    <div className="min-w-0">
+                    <div className="w-full rounded-lg border border-blue-100 bg-white/70 p-3">
                       <p className="text-sm font-semibold text-foreground leading-snug">{selectedQuestion.question}</p>
-                      <p className="text-xs text-muted-foreground mt-1">{selectedQuestion.context}</p>
+                      <p className="text-xs text-muted-foreground mt-1 break-words">{selectedQuestion.context}</p>
                     </div>
                   </div>
                 </div>
@@ -1670,37 +1862,37 @@ function QuestionBankCard({
         </div>
       )}
       <div className="p-4 border-b border-blue-100 bg-blue-50/60">
-        <div className="flex items-start justify-between gap-3">
-          <div className="flex items-start gap-2 min-w-0">
+        <div className="space-y-3">
+          <div className="flex items-center gap-2 flex-wrap min-w-0">
             <span className="shrink-0 px-2 py-0.5 rounded-md bg-slate-100 text-slate-700 text-[10px] font-bold uppercase tracking-wider">
               Q{questionNumber}
             </span>
-            <div className="shrink-0 flex flex-col items-start gap-1">
-              <span className="px-2 py-0.5 rounded-md bg-blue-100 text-blue-700 text-[10px] font-bold uppercase tracking-wider">
-                {label}
+            <span className="px-2 py-0.5 rounded-md bg-blue-100 text-blue-700 text-[10px] font-bold uppercase tracking-wider">
+              {label}
+            </span>
+            {interacted && (
+              <span className="px-2 py-0.5 rounded-md bg-emerald-100 text-emerald-700 text-[10px] font-bold uppercase tracking-wider">
+                Interacted
               </span>
-              {interacted && (
-                <span className="px-2 py-0.5 rounded-md bg-emerald-100 text-emerald-700 text-[10px] font-bold uppercase tracking-wider">
-                  Interacted
-                </span>
-              )}
-            </div>
+            )}
             {starred && (
               <Star
                 className="shrink-0 w-4 h-4 mt-0.5 text-amber-500 fill-amber-400"
                 aria-label="Starred question"
               />
             )}
-            <div className="min-w-0">
-              <p className="text-sm font-semibold text-foreground leading-snug">{question}</p>
-              <p className="text-xs text-muted-foreground mt-1">{context}</p>
-            </div>
           </div>
+
+          <div className="w-full rounded-lg border border-blue-100 bg-white/70 p-3">
+            <p className="text-sm font-semibold text-foreground leading-snug">{question}</p>
+            <p className="text-xs text-muted-foreground mt-1 break-words">{context}</p>
+          </div>
+
           <Button
             type="button"
             variant="outline"
             size="sm"
-            className="h-8 text-xs shrink-0 self-end"
+            className="h-9 text-xs w-full"
             onClick={onOpenDetail}
             title="Open answer in focused view"
           >
