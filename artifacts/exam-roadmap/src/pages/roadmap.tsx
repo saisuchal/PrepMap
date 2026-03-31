@@ -474,6 +474,7 @@ export default function Roadmap() {
   const [ensureVisibleTopicId, setEnsureVisibleTopicId] = useState<string | null>(null);
   const [completionVersion, setCompletionVersion] = useState(0);
   const autoFitRunKeyRef = useRef<string | null>(null);
+  const pendingExpandAllFitRef = useRef(false);
   const isDesktopMapView = viewMode === "map" && !isMobileViewport;
 
   const openNodeDetail = useCallback((nodeId: string) => {
@@ -597,10 +598,6 @@ export default function Roadmap() {
     setCollapsedTopicIds(new Set(allTopicIds));
   }, [allTopicIds]);
 
-  const expandAllTopics = useCallback(() => {
-    setCollapsedTopicIds(new Set());
-  }, []);
-
   const fitToWidth = useCallback(() => {
     if (!containerRef.current || allNodes.length === 0) return;
     const containerW = containerRef.current.clientWidth;
@@ -627,6 +624,11 @@ export default function Roadmap() {
     setZoom(fitZoom);
     setPan(nextPan);
   }, [allNodes, canvasW, clampPan]);
+
+  const expandAllTopics = useCallback(() => {
+    pendingExpandAllFitRef.current = true;
+    setCollapsedTopicIds(new Set());
+  }, []);
 
   const fitToViewport = useCallback(() => {
     if (!containerRef.current || allNodes.length === 0) return;
@@ -693,6 +695,25 @@ export default function Roadmap() {
       if (settleRaf) window.cancelAnimationFrame(settleRaf);
     };
   }, [viewMode, configId, isMobileViewport, allNodes.length, fitToWidth]);
+
+  useEffect(() => {
+    if (!pendingExpandAllFitRef.current) return;
+    if (viewMode !== "map" || allNodes.length === 0) return;
+
+    let raf1 = 0;
+    let raf2 = 0;
+    raf1 = window.requestAnimationFrame(() => {
+      raf2 = window.requestAnimationFrame(() => {
+        fitToWidth();
+        pendingExpandAllFitRef.current = false;
+      });
+    });
+
+    return () => {
+      if (raf1) window.cancelAnimationFrame(raf1);
+      if (raf2) window.cancelAnimationFrame(raf2);
+    };
+  }, [viewMode, allNodes, collapsedTopicIds, fitToWidth]);
 
   useEffect(() => {
     const onResize = () => setIsMobileViewport(window.innerWidth < 768);
@@ -2444,6 +2465,3 @@ function QuestionBankCard({
     </div>
   );
 }
-
-
-
