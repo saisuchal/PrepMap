@@ -31,6 +31,7 @@ const UNIT_GAP = 64;
 const LAYOUT_W = 1400;
 const QUESTION_BANK_LANE_H = 88;
 const QUESTION_BANK_EVENT_PREFIX = "__qb__:";
+const ZOOM_STEP = 1.1;
 
 function estimateSubtopicWidth(title: string, maxWidth: number): number {
   // Heuristic width estimate so longer titles can grow and use lane space.
@@ -254,12 +255,14 @@ type LayoutNode = TreeNode & {
 function computeLayout(units: TreeNode[]): { laid: LayoutNode[]; totalHeight: number; totalWidth: number } {
   if (units.length === 0) return { laid: [], totalHeight: 0, totalWidth: LAYOUT_W };
 
-  const leftLaneWidth = (LAYOUT_W - CANVAS_PAD * 2) * 0.5;
-  const rightLaneWidth = leftLaneWidth;
+  const innerWidth = LAYOUT_W - CANVAS_PAD * 2;
+  const unitLaneWidth = innerWidth * 0.3;
+  const topicLaneWidth = innerWidth * 0.3;
+  const subtopicLaneWidth = innerWidth - unitLaneWidth - topicLaneWidth; // 40%
   const unitX = CANVAS_PAD + 24;
-  const topicX = CANVAS_PAD + leftLaneWidth - NODE_W_TOPIC - 24;
-  const subtopicX = CANVAS_PAD + leftLaneWidth + 24;
-  const subtopicMaxW = rightLaneWidth - 48;
+  const topicX = CANVAS_PAD + unitLaneWidth + 24;
+  const subtopicX = CANVAS_PAD + unitLaneWidth + topicLaneWidth + 24;
+  const subtopicMaxW = subtopicLaneWidth - 48;
 
   const laidUnits: LayoutNode[] = [];
   let cursorY = CANVAS_PAD + QUESTION_BANK_LANE_H;
@@ -468,7 +471,20 @@ export default function Roadmap() {
   const [viewMode, setViewMode] = useState<"list" | "map">("map");
   const [expandedMobileUnitIds, setExpandedMobileUnitIds] = useState<Set<string>>(new Set());
   const [expandedMobileTopicIds, setExpandedMobileTopicIds] = useState<Set<string>>(new Set());
+  const [ensureVisibleTopicId, setEnsureVisibleTopicId] = useState<string | null>(null);
   const [completionVersion, setCompletionVersion] = useState(0);
+  const autoFitRunKeyRef = useRef<string | null>(null);
+  const isDesktopMapView = viewMode === "map" && !isMobileViewport;
+
+  const openNodeDetail = useCallback((nodeId: string) => {
+    setQuestionBankOpen(false);
+    setSelectedNodeId(nodeId);
+  }, []);
+
+  const openQuestionBank = useCallback(() => {
+    setSelectedNodeId(null);
+    setQuestionBankOpen(true);
+  }, []);
   const selectedNode = useMemo(() => {
     if (!selectedNodeId) return null;
     const laidNode = allNodes.find((n) => n.id === selectedNodeId);
@@ -532,7 +548,8 @@ export default function Roadmap() {
     let clampedY = y;
 
     if (scaledW <= containerW) {
-      clampedX = (containerW - scaledW) / 2;
+      // Keep map anchored to the left pane start instead of recentering on reload.
+      clampedX = margin;
     } else {
       const minX = containerW - scaledW - margin;
       const maxX = margin;
@@ -540,7 +557,8 @@ export default function Roadmap() {
     }
 
     if (scaledH <= containerH) {
-      clampedY = (containerH - scaledH) / 2;
+      // Keep map anchored near top instead of vertical centering.
+      clampedY = margin;
     } else {
       const minY = containerH - scaledH - margin;
       const maxY = margin;
@@ -565,13 +583,15 @@ export default function Roadmap() {
   }, [configId]);
 
   const toggleTopicCollapse = useCallback((topicId: string) => {
+    const willExpand = collapsedTopicIds.has(topicId);
     setCollapsedTopicIds((prev) => {
       const next = new Set(prev);
       if (next.has(topicId)) next.delete(topicId);
       else next.add(topicId);
       return next;
     });
-  }, []);
+    setEnsureVisibleTopicId(willExpand ? topicId : null);
+  }, [collapsedTopicIds]);
 
   const collapseAllTopics = useCallback(() => {
     setCollapsedTopicIds(new Set(allTopicIds));
@@ -584,13 +604,29 @@ export default function Roadmap() {
   const fitToWidth = useCallback(() => {
     if (!containerRef.current || allNodes.length === 0) return;
     const containerW = containerRef.current.clientWidth;
-    const fitZoom = Math.max(0.2, Math.min(2, containerW / (canvasW + 32)));
+    const margin = 24;
+    const availableW = Math.max(120, containerW - margin * 2);
+    const qbX = Math.max(CANVAS_PAD, canvasW / 2 - 110);
+    const qbW = 220;
+
+    const contentMinX = Math.min(
+      qbX,
+      ...allNodes.map((n) => n.x)
+    );
+    const contentMaxX = Math.max(
+      qbX + qbW,
+      ...allNodes.map((n) => n.x + n.w)
+    );
+    const contentW = Math.max(1, contentMaxX - contentMinX);
+
+    // Width-fit strictly against visible map content span inside the 55% pane.
+    const fitZoom = Math.max(0.2, Math.min(2, availableW / contentW));
+    const targetPanX = margin - contentMinX * fitZoom;
+    const targetPanY = margin;
+    const nextPan = clampPan(targetPanX, targetPanY, fitZoom);
     setZoom(fitZoom);
-    setPan({
-      x: (containerW - canvasW * fitZoom) / 2,
-      y: 20,
-    });
-  }, [allNodes.length, canvasW]);
+    setPan(nextPan);
+  }, [allNodes, canvasW, clampPan]);
 
   const fitToViewport = useCallback(() => {
     if (!containerRef.current || allNodes.length === 0) return;
@@ -617,14 +653,46 @@ export default function Roadmap() {
   }, [allNodes.length, canvasW, canvasH]);
 
   useEffect(() => {
-    if (viewMode === "map") {
-      if (isMobileViewport) fitToViewport();
-      else fitToWidth();
-    }
-    // Intentionally exclude fitToWidth so expand/collapse layout updates
-    // don't retrigger auto-fit and jump the viewport.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [viewMode, configId, isMobileViewport, fitToViewport]);
+    if (viewMode !== "map" || !configId || allNodes.length === 0) return;
+
+    const runKey = `${configId}:${isMobileViewport ? "mobile" : "desktop"}`;
+    if (autoFitRunKeyRef.current === runKey) return;
+
+    let cancelled = false;
+    let attempt = 0;
+    let raf = 0;
+    let settleRaf = 0;
+
+    const tryAutoFit = () => {
+      if (cancelled) return;
+      const container = containerRef.current;
+      const w = container?.clientWidth ?? 0;
+      const h = container?.clientHeight ?? 0;
+
+      // Wait until the split pane has a stable measurable size.
+      if ((w < 120 || h < 120) && attempt < 10) {
+        attempt += 1;
+        raf = window.requestAnimationFrame(tryAutoFit);
+        return;
+      }
+
+      fitToWidth();
+      // One more pass on the next frame to match manual "Fit width" behavior.
+      settleRaf = window.requestAnimationFrame(() => {
+        if (cancelled) return;
+        fitToWidth();
+        autoFitRunKeyRef.current = runKey;
+      });
+    };
+
+    raf = window.requestAnimationFrame(tryAutoFit);
+
+    return () => {
+      cancelled = true;
+      if (raf) window.cancelAnimationFrame(raf);
+      if (settleRaf) window.cancelAnimationFrame(settleRaf);
+    };
+  }, [viewMode, configId, isMobileViewport, allNodes.length, fitToWidth]);
 
   useEffect(() => {
     const onResize = () => setIsMobileViewport(window.innerWidth < 768);
@@ -736,7 +804,7 @@ export default function Roadmap() {
 
   const handleZoomOut = useCallback(() => {
     const minZoom = getMinVisibleZoom();
-    const nextZoom = zoom / 1.2;
+    const nextZoom = zoom / ZOOM_STEP;
     if (nextZoom <= minZoom) {
       resetView();
       return;
@@ -751,6 +819,55 @@ export default function Roadmap() {
       return clamped;
     });
   }, [zoom, canvasW, canvasH, clampPan]);
+
+  useEffect(() => {
+    if (!ensureVisibleTopicId) return;
+    if (viewMode !== "map" || isMobileViewport) {
+      setEnsureVisibleTopicId(null);
+      return;
+    }
+    if (!containerRef.current) return;
+
+    const topicNode = allNodes.find((n) => n.id === ensureVisibleTopicId && n.type === "topic");
+    if (!topicNode) return;
+
+    const subtopics = allNodes.filter(
+      (n) => n.type === "subtopic" && n.parentId === ensureVisibleTopicId
+    );
+    if (subtopics.length === 0) {
+      setEnsureVisibleTopicId(null);
+      return;
+    }
+
+    const minX = Math.min(topicNode.x, ...subtopics.map((n) => n.x));
+    const minY = Math.min(topicNode.y, ...subtopics.map((n) => n.y));
+    const maxX = Math.max(topicNode.x + topicNode.w, ...subtopics.map((n) => n.x + n.w));
+    const maxY = Math.max(topicNode.y + topicNode.h, ...subtopics.map((n) => n.y + n.h));
+
+    const containerW = containerRef.current.clientWidth;
+    const containerH = containerRef.current.clientHeight;
+    const pad = 18;
+
+    const screenMinX = pan.x + minX * zoom;
+    const screenMaxX = pan.x + maxX * zoom;
+    const screenMinY = pan.y + minY * zoom;
+    const screenMaxY = pan.y + maxY * zoom;
+
+    let dx = 0;
+    let dy = 0;
+
+    if (screenMinX < pad) dx = pad - screenMinX;
+    else if (screenMaxX > containerW - pad) dx = (containerW - pad) - screenMaxX;
+
+    if (screenMinY < pad) dy = pad - screenMinY;
+    else if (screenMaxY > containerH - pad) dy = (containerH - pad) - screenMaxY;
+
+    if (dx !== 0 || dy !== 0) {
+      setPan((prev) => clampPan(prev.x + dx, prev.y + dy, zoom));
+    }
+
+    setEnsureVisibleTopicId(null);
+  }, [ensureVisibleTopicId, viewMode, isMobileViewport, allNodes, pan.x, pan.y, zoom, clampPan]);
 
   if (!configId) {
     return (
@@ -808,33 +925,32 @@ export default function Roadmap() {
                   <Layers className="w-3.5 h-3.5" />
                   Map
                 </Button>
+                {viewMode === "map" && (
+                  <>
+                    <Button variant="outline" size="sm" className="h-8 px-2.5 text-xs" onClick={expandAllTopics}>
+                      Expand all
+                    </Button>
+                    <Button variant="outline" size="sm" className="h-8 px-2.5 text-xs" onClick={collapseAllTopics}>
+                      Collapse topics
+                    </Button>
+                    <Button variant="outline" size="sm" className="h-8 px-2.5 text-xs" onClick={fitToWidth}>
+                      Fit width
+                    </Button>
+                    <Button variant="outline" size="icon" className="h-8 w-8" onClick={() => setZoom(z => Math.min(2, z * ZOOM_STEP))}>
+                      <ZoomIn className="w-3.5 h-3.5" />
+                    </Button>
+                    <Button variant="outline" size="icon" className="h-8 w-8" onClick={handleZoomOut}>
+                      <ZoomOut className="w-3.5 h-3.5" />
+                    </Button>
+                    <Button variant="outline" size="icon" className="h-8 w-8" onClick={resetView}>
+                      <Maximize2 className="w-3.5 h-3.5" />
+                    </Button>
+                  </>
+                )}
               </>
             )}
           </div>
         </div>
-
-        {viewMode === "map" && (
-          <div className="hidden sm:flex items-center gap-1 mt-3">
-            <Button variant="outline" size="sm" className="h-8 px-2.5 text-xs" onClick={expandAllTopics}>
-              Expand all
-            </Button>
-            <Button variant="outline" size="sm" className="h-8 px-2.5 text-xs" onClick={collapseAllTopics}>
-              Collapse topics
-            </Button>
-            <Button variant="outline" size="sm" className="h-8 px-2.5 text-xs" onClick={fitToWidth}>
-              Fit width
-            </Button>
-            <Button variant="outline" size="icon" className="h-8 w-8" onClick={() => setZoom(z => Math.min(2, z * 1.2))}>
-              <ZoomIn className="w-3.5 h-3.5" />
-            </Button>
-            <Button variant="outline" size="icon" className="h-8 w-8" onClick={handleZoomOut}>
-              <ZoomOut className="w-3.5 h-3.5" />
-            </Button>
-            <Button variant="outline" size="icon" className="h-8 w-8" onClick={resetView}>
-              <Maximize2 className="w-3.5 h-3.5" />
-            </Button>
-          </div>
-        )}
       </div>
 
       {viewMode === "list" ? (
@@ -905,7 +1021,7 @@ export default function Roadmap() {
                                 <button
                                   key={sub.id}
                                   type="button"
-                                  onClick={() => setSelectedNodeId(sub.id)}
+                                  onClick={() => openNodeDetail(sub.id)}
                                   className="text-left rounded-lg border border-emerald-200 bg-emerald-50 hover:bg-emerald-100 transition-colors p-2.5"
                                 >
                                   <div className="flex items-start gap-2">
@@ -932,7 +1048,7 @@ export default function Roadmap() {
         <div className="flex-1 overflow-y-auto bg-slate-50 p-3 space-y-3">
           <button
             type="button"
-            onClick={() => setQuestionBankOpen(true)}
+            onClick={openQuestionBank}
             className="w-full rounded-xl border border-blue-300 bg-blue-50 px-3 py-3 text-left shadow-sm"
           >
             <div className="flex items-center gap-2">
@@ -1011,7 +1127,7 @@ export default function Roadmap() {
                                 <button
                                   type="button"
                                   className="flex-1 text-left min-w-0"
-                                  onClick={() => setSelectedNodeId(topic.id)}
+                                  onClick={() => openNodeDetail(topic.id)}
                                 >
                                   <div className="flex items-center gap-2">
                                     <span className="text-sm font-semibold text-violet-800 break-words">{topic.title}</span>
@@ -1049,7 +1165,7 @@ export default function Roadmap() {
                                       <button
                                         key={sub.id}
                                         type="button"
-                                        onClick={() => setSelectedNodeId(sub.id)}
+                                        onClick={() => openNodeDetail(sub.id)}
                                         className="w-full text-left rounded-md border border-emerald-200 bg-emerald-50 hover:bg-emerald-100 px-2 py-2"
                                       >
                                         <div className="flex items-start gap-2">
@@ -1076,9 +1192,10 @@ export default function Roadmap() {
           )}
         </div>
       ) : (
-        <div
-          ref={containerRef}
-          className="flex-1 overflow-hidden bg-[#f8fafc] relative select-none"
+        <div className="flex-1 min-h-0 flex bg-slate-50 overflow-hidden">
+          <div
+            ref={containerRef}
+            className="basis-[55%] w-[55%] max-w-[55%] grow-0 shrink-0 min-w-0 overflow-hidden bg-[#f8fafc] relative select-none border-r border-border/70"
           style={{ cursor: isDragging ? "grabbing" : "grab", touchAction: "none" }}
           onMouseDown={handleMouseDown}
           onMouseMove={handleMouseMove}
@@ -1174,7 +1291,7 @@ export default function Roadmap() {
                       width: node.w,
                       height: node.h,
                     }}
-                    onClick={() => isClickable && setSelectedNodeId(node.id)}
+                    onClick={() => isClickable && openNodeDetail(node.id)}
                   >
                     <div className={`w-6 h-6 rounded-md ${colors.bg} flex items-center justify-center shrink-0`}>
                       {node.type === "unit" && <Layers className="w-3.5 h-3.5 text-white" />}
@@ -1218,7 +1335,7 @@ export default function Roadmap() {
                   width: 220,
                   height: 58,
                 }}
-                onClick={() => setQuestionBankOpen(true)}
+                onClick={openQuestionBank}
               >
                 <div className="w-6 h-6 rounded-md bg-blue-500 flex items-center justify-center shrink-0">
                   <MessageSquare className="w-3.5 h-3.5 text-white" />
@@ -1227,6 +1344,7 @@ export default function Roadmap() {
                   Question Bank
                 </span>
               </div>
+
             </div>
           )}
 
@@ -1236,7 +1354,7 @@ export default function Roadmap() {
                 variant="outline"
                 size="icon"
                 className="h-9 w-9"
-                onClick={() => setZoom((z) => Math.min(2.2, z * 1.2))}
+                onClick={() => setZoom((z) => Math.min(2.2, z * ZOOM_STEP))}
                 title="Zoom in"
               >
                 <ZoomIn className="w-4 h-4" />
@@ -1270,11 +1388,41 @@ export default function Roadmap() {
               </Button>
             </div>
           )}
+          </div>
+
+          <div className="basis-[45%] w-[45%] max-w-[45%] grow-0 shrink-0 min-w-0 bg-card h-full overflow-hidden">
+            {questionBankOpen ? (
+              <QuestionBankPane
+                configId={configId}
+                examParam={examParam}
+                onClose={() => setQuestionBankOpen(false)}
+              />
+            ) : selectedNode ? (
+              <ContentModal
+                node={selectedNode}
+                configId={configId}
+                examParam={examParam}
+                onTracked={() => setCompletionVersion((v) => v + 1)}
+                onClose={() => setSelectedNodeId(null)}
+                embedded
+              />
+            ) : (
+              <div className="h-full flex flex-col items-center justify-center p-8 text-center">
+                <div className="w-12 h-12 rounded-xl bg-blue-50 border border-blue-200 flex items-center justify-center mb-3">
+                  <BookOpen className="w-6 h-6 text-blue-600" />
+                </div>
+                <h3 className="text-base font-semibold text-foreground">Details Pane</h3>
+                <p className="text-sm text-muted-foreground mt-2 max-w-sm">
+                  Click any topic/subtopic on the map, or open Question Bank, to view details here.
+                </p>
+              </div>
+            )}
+          </div>
         </div>
       )}
 
       <AnimatePresence>
-        {selectedNode && (
+        {!isDesktopMapView && selectedNode && (
           <ContentModal
             node={selectedNode}
             configId={configId}
@@ -1286,7 +1434,7 @@ export default function Roadmap() {
       </AnimatePresence>
 
       <AnimatePresence>
-        {questionBankOpen && (
+        {!isDesktopMapView && questionBankOpen && (
           <QuestionBankModal
             configId={configId}
             examParam={examParam}
@@ -1304,12 +1452,14 @@ function ContentModal({
   examParam,
   onTracked,
   onClose,
+  embedded = false,
 }: {
   node: LayoutNode;
   configId: string;
   examParam: string;
   onTracked?: () => void;
   onClose: () => void;
+  embedded?: boolean;
 }) {
   const isTopic = node.type === "topic";
   const isSubtopic = node.type === "subtopic";
@@ -1377,6 +1527,75 @@ function ContentModal({
   }, [content, node.id, user, isTracked, isSubtopic, trackEventMutation, configId, examParam, node.parentId, onTracked]);
 
   const colors = NODE_COLORS[node.type as keyof typeof NODE_COLORS] || NODE_COLORS.topic;
+
+  if (embedded) {
+    return (
+      <div className="h-full flex flex-col border border-border bg-card overflow-hidden">
+        <div className={`flex items-center justify-between px-5 py-4 border-b border-border shrink-0 ${colors.light}`}>
+          <div className="flex items-center gap-3 min-w-0">
+            <div className={`w-8 h-8 rounded-lg ${colors.bg} flex items-center justify-center shrink-0`}>
+              {isTopic ? <BookOpen className="w-4 h-4 text-white" /> : <FileText className="w-4 h-4 text-white" />}
+            </div>
+            <div className="min-w-0">
+              <h2 className="font-display font-bold text-foreground truncate text-base">{node.title}</h2>
+              <p className="text-xs text-muted-foreground capitalize">{node.type}</p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
+            {isTracked && (
+              <span className="text-xs font-semibold text-green-600 bg-green-50 px-2 py-1 rounded-full border border-green-200 flex items-center gap-1">
+                <CheckCircle2 className="w-3 h-3" /> Done
+              </span>
+            )}
+            <Button variant="ghost" size="icon" onClick={onClose} className="h-8 w-8">
+              <X className="w-4 h-4" />
+            </Button>
+          </div>
+        </div>
+
+        <div ref={scrollRef} className="flex-1 overflow-y-auto p-5 space-y-6">
+          {isTopic && (
+            <div className="prose prose-sm prose-slate max-w-none">
+              {node.explanation ? (
+                <AnswerRenderer answer={node.explanation} />
+              ) : (
+                <p className="text-muted-foreground italic">No explanation available for this topic.</p>
+              )}
+            </div>
+          )}
+
+          {isSubtopic && (
+            <>
+              {isLoading ? (
+                <div className="space-y-4">
+                  <div className="h-6 bg-muted animate-pulse rounded w-1/2" />
+                  <div className="h-24 bg-muted animate-pulse rounded-xl" />
+                  <div className="h-40 bg-muted animate-pulse rounded-xl" />
+                </div>
+              ) : content ? (
+                <>
+                  <section>
+                    <div className="flex items-center gap-2 mb-3">
+                      <BookOpen className="w-4 h-4 text-primary" />
+                      <h3 className="text-sm font-bold text-foreground uppercase tracking-wider">Explanation</h3>
+                    </div>
+                    <div className="prose prose-sm prose-slate max-w-none bg-secondary/30 rounded-xl p-4 border border-border">
+                      <AnswerRenderer answer={content.explanation} />
+                    </div>
+                  </section>
+                </>
+              ) : (
+                <div className="text-center py-8">
+                  <AlertCircle className="w-8 h-8 text-muted-foreground mx-auto mb-2 opacity-40" />
+                  <p className="text-muted-foreground text-sm">Content not available.</p>
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <motion.div
@@ -1712,7 +1931,7 @@ function QuestionBankModal({
                   </div>
                 )}
                 <div className="p-4 border-b border-blue-100 bg-blue-50/60">
-                  <div className="space-y-3">
+                  <div className="sm:hidden space-y-3">
                     <div className="flex items-center gap-2 flex-wrap min-w-0">
                       <span className="shrink-0 px-2 py-0.5 rounded-md bg-slate-100 text-slate-700 text-[10px] font-bold uppercase tracking-wider">
                         Q{selectedQuestion.number}
@@ -1727,12 +1946,38 @@ function QuestionBankModal({
                       )}
                       {selectedQuestion.starred && (
                         <Star
-                          className="shrink-0 w-4 h-4 mt-0.5 text-amber-500 fill-amber-400"
+                          className="shrink-0 w-3.5 h-3.5 mt-0.5 text-amber-500 fill-amber-400"
                           aria-label="Starred question"
                         />
                       )}
                     </div>
                     <div className="w-full rounded-lg border border-blue-100 bg-white/70 p-3">
+                      <p className="text-sm font-semibold text-foreground leading-snug">{selectedQuestion.question}</p>
+                      <p className="text-xs text-muted-foreground mt-1 break-words">{selectedQuestion.context}</p>
+                    </div>
+                  </div>
+
+                  <div className="hidden sm:flex items-start gap-2">
+                    <span className="shrink-0 px-2 py-0.5 rounded-md bg-slate-100 text-slate-700 text-[10px] font-bold uppercase tracking-wider">
+                      Q{selectedQuestion.number}
+                    </span>
+                    <div className="shrink-0 flex flex-col items-start gap-1">
+                      <span className="px-2 py-0.5 rounded-md bg-blue-100 text-blue-700 text-[10px] font-bold uppercase tracking-wider">
+                        {selectedQuestion.label}
+                      </span>
+                      {hasQuestionInteraction(selectedQuestion.id) && (
+                        <span className="px-2 py-0.5 rounded-md bg-emerald-100 text-emerald-700 text-[10px] font-bold uppercase tracking-wider">
+                          Interacted
+                        </span>
+                      )}
+                    </div>
+                    {selectedQuestion.starred && (
+                      <Star
+                        className="shrink-0 w-3.5 h-3.5 mt-0.5 text-amber-500 fill-amber-400"
+                        aria-label="Starred question"
+                      />
+                    )}
+                    <div className="min-w-0">
                       <p className="text-sm font-semibold text-foreground leading-snug">{selectedQuestion.question}</p>
                       <p className="text-xs text-muted-foreground mt-1 break-words">{selectedQuestion.context}</p>
                     </div>
@@ -1832,6 +2077,302 @@ function QuestionBankModal({
   );
 }
 
+function QuestionBankPane({
+  configId,
+  examParam,
+  onClose,
+}: {
+  configId: string;
+  examParam: string;
+  onClose: () => void;
+}) {
+  const { data, isLoading, isError } = useGetQuestionBank(configId);
+  const validQuestions = useMemo(
+    () => (data?.questions ?? []).filter((q) => isLikelyQuestionText(q.question)),
+    [data?.questions]
+  );
+  const seededHash = useCallback((value: string) => {
+    let h = 2166136261;
+    for (let i = 0; i < value.length; i++) {
+      h ^= value.charCodeAt(i);
+      h = Math.imul(h, 16777619);
+    }
+    return h >>> 0;
+  }, []);
+
+  const distributeStarred = useCallback(
+    <T extends { id: number; isStarred?: boolean }>(items: T[]): T[] => {
+      if (items.length <= 2) return items;
+      const starred = items
+        .filter((q) => !!q.isStarred)
+        .slice()
+        .sort((a, b) => seededHash(`${configId}:${a.id}`) - seededHash(`${configId}:${b.id}`));
+      const nonStarred = items
+        .filter((q) => !q.isStarred)
+        .slice()
+        .sort((a, b) => seededHash(`${configId}:${a.id}`) - seededHash(`${configId}:${b.id}`));
+
+      if (starred.length === 0 || nonStarred.length === 0) {
+        return [...items].sort(
+          (a, b) => seededHash(`${configId}:${a.id}`) - seededHash(`${configId}:${b.id}`),
+        );
+      }
+
+      const total = items.length;
+      const out: T[] = new Array(total);
+      const starredSlots = new Set<number>();
+      for (let i = 0; i < starred.length; i++) {
+        const slot = Math.min(total - 1, Math.floor(((i + 0.5) * total) / starred.length));
+        let s = slot;
+        while (starredSlots.has(s) && s < total - 1) s++;
+        while (starredSlots.has(s) && s > 0) s--;
+        starredSlots.add(s);
+      }
+
+      let si = 0;
+      let ni = 0;
+      for (let i = 0; i < total; i++) {
+        if (starredSlots.has(i) && si < starred.length) out[i] = starred[si++];
+        else if (ni < nonStarred.length) out[i] = nonStarred[ni++];
+        else if (si < starred.length) out[i] = starred[si++];
+      }
+      return out.filter(Boolean);
+    },
+    [configId, seededHash],
+  );
+
+  const foundational = useMemo(
+    () => distributeStarred(validQuestions.filter((q) => q.markType === "Foundational")),
+    [validQuestions, distributeStarred],
+  );
+  const applied = useMemo(
+    () => distributeStarred(validQuestions.filter((q) => q.markType === "Applied")),
+    [validQuestions, distributeStarred],
+  );
+  const foundationalNumberById = useMemo(
+    () => new Map(foundational.map((q, idx) => [q.id, idx + 1])),
+    [foundational]
+  );
+  const appliedNumberById = useMemo(
+    () => new Map(applied.map((q, idx) => [q.id, idx + 1])),
+    [applied]
+  );
+  const [selectedQuestion, setSelectedQuestion] = useState<{
+    id: number;
+    number: number;
+    label: string;
+    starred: boolean;
+    hasCodeBlock: boolean;
+    question: string;
+    context: string;
+    answer: string;
+    subtopicId: string;
+  } | null>(null);
+  const user = getStoredUser();
+  const trackEventMutation = useTrackEvent();
+  const answerTimersRef = useRef<Map<number, ReturnType<typeof setTimeout>>>(new Map());
+  const [questionInteractionVersion, setQuestionInteractionVersion] = useState(0);
+
+  const questionSessionKey = useCallback(
+    (questionId: number) => `tracked_qb_${configId}_${questionId}`,
+    [configId]
+  );
+  const hasQuestionInteraction = useCallback(
+    (questionId: number) => !!sessionStorage.getItem(questionSessionKey(questionId)),
+    [questionSessionKey, questionInteractionVersion]
+  );
+
+  useEffect(() => {
+    return () => {
+      for (const timer of answerTimersRef.current.values()) clearTimeout(timer);
+      answerTimersRef.current.clear();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!selectedQuestion) return;
+    if (!user || (user.role !== "student" && user.role !== "super_student") || !selectedQuestion.subtopicId) return;
+    const sessionKey = questionSessionKey(selectedQuestion.id);
+    if (sessionStorage.getItem(sessionKey)) return;
+    const existing = answerTimersRef.current.get(selectedQuestion.id);
+    if (existing) clearTimeout(existing);
+
+    const timer = setTimeout(() => {
+      answerTimersRef.current.delete(selectedQuestion.id);
+      if (sessionStorage.getItem(sessionKey)) return;
+      trackEventMutation.mutate(
+        {
+          data: {
+            userId: user.id,
+            universityId: user.universityId,
+            year: user.year,
+            branch: user.branch,
+            exam: examParam,
+            configId,
+            topicId: `${QUESTION_BANK_EVENT_PREFIX}${selectedQuestion.id}`,
+            subtopicId: selectedQuestion.subtopicId,
+          },
+        },
+        {
+          onSuccess: () => {
+            sessionStorage.setItem(sessionKey, "true");
+            setQuestionInteractionVersion((v) => v + 1);
+          },
+        },
+      );
+    }, 5000);
+
+    answerTimersRef.current.set(selectedQuestion.id, timer);
+    return () => {
+      const t = answerTimersRef.current.get(selectedQuestion.id);
+      if (t) {
+        clearTimeout(t);
+        answerTimersRef.current.delete(selectedQuestion.id);
+      }
+    };
+  }, [selectedQuestion, configId, examParam, questionSessionKey, trackEventMutation, user]);
+
+  return (
+    <div className="h-full flex flex-col border border-border bg-card overflow-hidden">
+      <div className="flex items-center justify-between px-5 py-4 border-b border-border shrink-0 bg-blue-50">
+        <div className="min-w-0">
+          <h2 className="font-display font-bold text-foreground truncate text-base flex items-center gap-2">
+            <MessageSquare className="w-4 h-4 text-blue-600" />
+            Question Bank
+          </h2>
+          <p className="text-xs text-muted-foreground mt-1">
+            {data ? `${validQuestions.length} total questions` : "Loading questions..."}
+          </p>
+        </div>
+        <Button variant="ghost" size="icon" onClick={onClose} className="h-8 w-8">
+          <X className="w-4 h-4" />
+        </Button>
+      </div>
+
+      <div className="flex-1 overflow-y-auto p-5 space-y-6">
+        {selectedQuestion ? (
+          <section className="space-y-3">
+            <Button variant="ghost" size="sm" className="h-8" onClick={() => setSelectedQuestion(null)}>
+              {"<- Back to Question List"}
+            </Button>
+            <div className="relative bg-card border border-blue-200 rounded-xl overflow-hidden shadow-sm">
+              {selectedQuestion.hasCodeBlock && (
+                <div className="absolute top-0 right-0 z-20 bg-rose-200 text-black text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-bl-md">
+                  Code
+                </div>
+              )}
+              <div className="p-4 border-b border-blue-100 bg-blue-50/60">
+                <div className="flex items-center gap-2 flex-wrap min-w-0">
+                  <span className="shrink-0 px-2 py-0.5 rounded-md bg-slate-100 text-slate-700 text-[10px] font-bold uppercase tracking-wider">
+                    Q{selectedQuestion.number}
+                  </span>
+                  <span className="px-2 py-0.5 rounded-md bg-blue-100 text-blue-700 text-[10px] font-bold uppercase tracking-wider">
+                    {selectedQuestion.label}
+                  </span>
+                  {hasQuestionInteraction(selectedQuestion.id) && (
+                    <span className="px-2 py-0.5 rounded-md bg-emerald-100 text-emerald-700 text-[10px] font-bold uppercase tracking-wider">
+                      Interacted
+                    </span>
+                  )}
+                  {selectedQuestion.starred && (
+                    <Star className="shrink-0 w-3.5 h-3.5 mt-0.5 text-amber-500 fill-amber-400" aria-label="Starred question" />
+                  )}
+                </div>
+              </div>
+              <div className="p-4 border-b border-blue-100 bg-white/70">
+                <p className="text-sm font-semibold text-foreground leading-snug">{selectedQuestion.question}</p>
+                <p className="text-xs text-muted-foreground mt-1 break-words">{selectedQuestion.context}</p>
+              </div>
+              <div className="p-4">
+                <AnswerRenderer answer={selectedQuestion.answer} />
+              </div>
+            </div>
+          </section>
+        ) : isLoading ? (
+          <div className="space-y-4">
+            <div className="h-6 bg-muted animate-pulse rounded w-1/3" />
+            <div className="h-24 bg-muted animate-pulse rounded-xl" />
+            <div className="h-24 bg-muted animate-pulse rounded-xl" />
+          </div>
+        ) : isError ? (
+          <div className="text-center py-8">
+            <AlertCircle className="w-8 h-8 text-muted-foreground mx-auto mb-2 opacity-40" />
+            <p className="text-muted-foreground text-sm">Failed to load question bank.</p>
+          </div>
+        ) : validQuestions.length ? (
+          <>
+            {foundational.length > 0 && (
+              <section className="space-y-3">
+                <h3 className="text-sm font-bold text-foreground uppercase tracking-wider">Foundational Questions</h3>
+                {foundational.map((q) => (
+                  <QuestionBankCard
+                    key={q.id}
+                    onOpenDetail={() =>
+                      setSelectedQuestion({
+                        id: q.id,
+                        number: foundationalNumberById.get(q.id) ?? 0,
+                        label: "Foundational",
+                        starred: !!q.isStarred,
+                        hasCodeBlock: hasCodeBlock(q.answer),
+                        question: q.question,
+                        context: `${q.unitTitle} -> ${q.topicTitle} -> ${q.subtopicTitle}`,
+                        answer: q.answer,
+                        subtopicId: q.subtopicId,
+                      })
+                    }
+                    questionNumber={foundationalNumberById.get(q.id) ?? 0}
+                    interacted={hasQuestionInteraction(q.id)}
+                    label="Foundational"
+                    starred={!!q.isStarred}
+                    hasCodeBlock={hasCodeBlock(q.answer)}
+                    question={q.question}
+                    context={`${q.unitTitle} -> ${q.topicTitle} -> ${q.subtopicTitle}`}
+                  />
+                ))}
+              </section>
+            )}
+            {applied.length > 0 && (
+              <section className="space-y-3">
+                <h3 className="text-sm font-bold text-foreground uppercase tracking-wider">Applied Questions</h3>
+                {applied.map((q) => (
+                  <QuestionBankCard
+                    key={q.id}
+                    onOpenDetail={() =>
+                      setSelectedQuestion({
+                        id: q.id,
+                        number: appliedNumberById.get(q.id) ?? 0,
+                        label: "Applied",
+                        starred: !!q.isStarred,
+                        hasCodeBlock: hasCodeBlock(q.answer),
+                        question: q.question,
+                        context: `${q.unitTitle} -> ${q.topicTitle} -> ${q.subtopicTitle}`,
+                        answer: q.answer,
+                        subtopicId: q.subtopicId,
+                      })
+                    }
+                    questionNumber={appliedNumberById.get(q.id) ?? 0}
+                    interacted={hasQuestionInteraction(q.id)}
+                    label="Applied"
+                    starred={!!q.isStarred}
+                    hasCodeBlock={hasCodeBlock(q.answer)}
+                    question={q.question}
+                    context={`${q.unitTitle} -> ${q.topicTitle} -> ${q.subtopicTitle}`}
+                  />
+                ))}
+              </section>
+            )}
+          </>
+        ) : (
+          <div className="text-center py-8">
+            <AlertCircle className="w-8 h-8 text-muted-foreground mx-auto mb-2 opacity-40" />
+            <p className="text-muted-foreground text-sm">No questions generated yet for this roadmap.</p>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function QuestionBankCard({
   questionNumber,
   interacted,
@@ -1862,48 +2403,47 @@ function QuestionBankCard({
         </div>
       )}
       <div className="p-4 border-b border-blue-100 bg-blue-50/60">
-        <div className="space-y-3">
-          <div className="flex items-center gap-2 flex-wrap min-w-0">
-            <span className="shrink-0 px-2 py-0.5 rounded-md bg-slate-100 text-slate-700 text-[10px] font-bold uppercase tracking-wider">
-              Q{questionNumber}
+        <div className="flex items-center gap-2 flex-wrap min-w-0">
+          <span className="shrink-0 px-2 py-0.5 rounded-md bg-slate-100 text-slate-700 text-[10px] font-bold uppercase tracking-wider">
+            Q{questionNumber}
+          </span>
+          <span className="px-2 py-0.5 rounded-md bg-blue-100 text-blue-700 text-[10px] font-bold uppercase tracking-wider">
+            {label}
+          </span>
+          {interacted && (
+            <span className="px-2 py-0.5 rounded-md bg-emerald-100 text-emerald-700 text-[10px] font-bold uppercase tracking-wider">
+              Interacted
             </span>
-            <span className="px-2 py-0.5 rounded-md bg-blue-100 text-blue-700 text-[10px] font-bold uppercase tracking-wider">
-              {label}
-            </span>
-            {interacted && (
-              <span className="px-2 py-0.5 rounded-md bg-emerald-100 text-emerald-700 text-[10px] font-bold uppercase tracking-wider">
-                Interacted
-              </span>
-            )}
-            {starred && (
-              <Star
-                className="shrink-0 w-4 h-4 mt-0.5 text-amber-500 fill-amber-400"
-                aria-label="Starred question"
-              />
-            )}
-          </div>
-
-          <div className="w-full rounded-lg border border-blue-100 bg-white/70 p-3">
-            <p className="text-sm font-semibold text-foreground leading-snug">{question}</p>
-            <p className="text-xs text-muted-foreground mt-1 break-words">{context}</p>
-          </div>
-
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            className="h-9 text-xs w-full"
-            onClick={onOpenDetail}
-            title="Open answer in focused view"
-          >
-            Show Answer
-          </Button>
+          )}
+          {starred && (
+            <Star
+              className="shrink-0 w-3.5 h-3.5 mt-0.5 text-amber-500 fill-amber-400"
+              aria-label="Starred question"
+            />
+          )}
         </div>
+      </div>
+
+      <div className="px-4 py-3 border-b border-blue-100 bg-white/70">
+        <p className="text-sm font-semibold text-foreground leading-snug">{question}</p>
+        <p className="text-xs text-muted-foreground mt-1 break-words">{context}</p>
+      </div>
+
+      <div className="px-4 py-3">
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="h-9 text-xs w-full"
+          onClick={onOpenDetail}
+          title="Open answer in focused view"
+        >
+          Show Answer
+        </Button>
       </div>
     </div>
   );
 }
-
 
 
 
