@@ -1,6 +1,6 @@
 import { clsx, type ClassValue } from "clsx";
 import { twMerge } from "tailwind-merge";
-import type { Node } from "@workspace/api-client-react";
+import type { Node } from "@/api-client";
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
@@ -29,3 +29,4 @@ export function buildTree(nodes: Node[]): TreeNode[] {
 
   return roots;
 }
+

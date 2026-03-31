@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import { useLocation, Link } from "wouter";
 import { Zap, GraduationCap, Lock, ArrowRight } from "lucide-react";
 import { motion } from "framer-motion";
-import { useLogin } from "@workspace/api-client-react";
+import { useLogin } from "@/api-client";
 import { setStoredUser, getStoredUser } from "@/lib/auth";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -16,6 +16,10 @@ export default function Login() {
   useEffect(() => {
     const user = getStoredUser();
     if (user) {
+      if ((user.role === "student" || user.role === "super_student") && user.onboardingRequired) {
+        setLocation("/first-login-setup");
+        return;
+      }
       setLocation(user.role === "admin" ? "/admin" : "/home");
     }
   }, [setLocation]);
@@ -29,6 +33,10 @@ export default function Login() {
       {
         onSuccess: (data) => {
           setStoredUser(data);
+          if ((data.role === "student" || data.role === "super_student") && data.onboardingRequired) {
+            setLocation("/first-login-setup");
+            return;
+          }
           setLocation(data.role === "admin" ? "/admin" : "/home");
         }
       }
@@ -63,7 +71,7 @@ export default function Login() {
           
           <div className="text-center mb-8">
             <h1 className="text-3xl font-display font-bold text-foreground">
-              Welcome to <span className="text-primary">GP-Max</span>
+              Welcome to <span className="text-primary">PrepMap</span>
             </h1>
             <p className="mt-2 text-muted-foreground text-sm">Sign in with your college credentials to access your exam roadmap.</p>
           </div>
@@ -125,3 +133,5 @@ export default function Login() {
     </div>
   );
 }
+
+

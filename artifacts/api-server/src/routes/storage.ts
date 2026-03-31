@@ -3,8 +3,13 @@ import { Readable } from "stream";
 import {
   RequestUploadUrlBody,
   RequestUploadUrlResponse,
-} from "@workspace/api-zod";
+} from "../api-zod";
 import { ObjectStorageService, ObjectNotFoundError } from "../lib/objectStorage";
+import {
+  createSupabaseSignedUploadUrl,
+  isSupabaseStorageEnabled,
+  isSupabaseStorageRequested,
+} from "../lib/supabaseStorage";
 import { ObjectPermission } from "../lib/objectAcl";
 import { requireAdmin } from "../middleware/adminAuth";
 
@@ -27,9 +32,16 @@ router.post("/storage/uploads/request-url", requireAdmin, async (req: Request, r
 
   try {
     const { name, size, contentType } = parsed.data;
-
-    const uploadURL = await objectStorageService.getObjectEntityUploadURL();
-    const objectPath = objectStorageService.normalizeObjectEntityPath(uploadURL);
+    let uploadURL: string;
+    let objectPath: string;
+    if (isSupabaseStorageEnabled() || isSupabaseStorageRequested()) {
+      const uploadInfo = await createSupabaseSignedUploadUrl({ name });
+      uploadURL = uploadInfo.uploadURL;
+      objectPath = uploadInfo.objectPath;
+    } else {
+      uploadURL = await objectStorageService.getObjectEntityUploadURL();
+      objectPath = objectStorageService.normalizeObjectEntityPath(uploadURL);
+    }
 
     res.json(
       RequestUploadUrlResponse.parse({
@@ -40,7 +52,11 @@ router.post("/storage/uploads/request-url", requireAdmin, async (req: Request, r
     );
   } catch (error) {
     req.log.error({ err: error }, "Error generating upload URL");
-    res.status(500).json({ error: "Failed to generate upload URL" });
+    const detail = error instanceof Error ? error.message : "Unknown error";
+    res.status(500).json({
+      error: "Failed to generate upload URL",
+      ...(process.env.NODE_ENV !== "production" ? { detail } : {}),
+    });
   }
 });
 
@@ -130,3 +146,4 @@ router.get("/storage/objects/*path", requireAdmin, async (req: Request, res: Res
 });
 
 export default router;
+

@@ -1,25 +1,30 @@
 import { useState } from "react";
 import { Link, useLocation } from "wouter";
-import { Zap, Lock, ArrowLeft, Check } from "lucide-react";
+import { Zap, Lock, ArrowLeft, Check, KeyRound } from "lucide-react";
 import { motion } from "framer-motion";
-import { useResetPassword } from "@workspace/api-client-react";
+import { useGetSecurityQuestion, useResetPasswordWithSecurity } from "@/api-client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 
 export default function ResetPassword() {
   const [, setLocation] = useLocation();
   const [collegeId, setCollegeId] = useState("");
-  const [currentPassword, setCurrentPassword] = useState("");
+  const [securityAnswer, setSecurityAnswer] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [success, setSuccess] = useState(false);
-  const resetMutation = useResetPassword();
+  const [lookupId, setLookupId] = useState<string | null>(null);
+  const { data: securityData, isFetching: isFetchingQuestion, isError: isQuestionError } = useGetSecurityQuestion(lookupId, {
+    enabled: !!lookupId,
+    retry: false,
+  });
+  const resetMutation = useResetPasswordWithSecurity();
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!collegeId.trim() || !currentPassword.trim() || !newPassword.trim()) return;
+    if (!collegeId.trim() || !securityAnswer.trim() || !newPassword.trim()) return;
 
     resetMutation.mutate(
-      { data: { collegeId, currentPassword, newPassword } },
+      { collegeId: collegeId.trim(), securityAnswer: securityAnswer.trim(), newPassword: newPassword.trim() },
       {
         onSuccess: () => {
           setSuccess(true);
@@ -49,7 +54,7 @@ export default function ResetPassword() {
           
           <div className="text-center mb-8">
             <h1 className="text-2xl font-display font-bold text-foreground">Reset Password</h1>
-            <p className="mt-2 text-muted-foreground text-sm">Enter your current password and choose a new one.</p>
+            <p className="mt-2 text-muted-foreground text-sm">Answer your security question and choose a new password.</p>
           </div>
 
           {success ? (
@@ -64,25 +69,50 @@ export default function ResetPassword() {
             <form onSubmit={handleSubmit} className="space-y-5">
               <div className="space-y-2">
                 <label className="text-sm font-semibold text-foreground">College Roll ID</label>
-                <Input
-                  placeholder="e.g. STU001"
-                  value={collegeId}
-                  onChange={(e) => setCollegeId(e.target.value)}
-                  autoFocus
-                  className="bg-white/50 focus:bg-white"
-                />
+                <div className="flex gap-2">
+                  <Input
+                    placeholder="e.g. STU001"
+                    value={collegeId}
+                    onChange={(e) => setCollegeId(e.target.value)}
+                    autoFocus
+                    className="bg-white/50 focus:bg-white"
+                  />
+                  <Button
+                    type="button"
+                    variant="outline"
+                    disabled={!collegeId.trim() || isFetchingQuestion}
+                    onClick={() => setLookupId(collegeId.trim())}
+                  >
+                    {isFetchingQuestion ? "Checking..." : "Get Question"}
+                  </Button>
+                </div>
               </div>
 
               <div className="space-y-2">
                 <label className="text-sm font-semibold text-foreground flex items-center gap-2">
-                  <Lock className="w-4 h-4 text-primary" />
-                  Current Password
+                  <KeyRound className="w-4 h-4 text-primary" />
+                  Security Question
                 </label>
                 <Input
-                  type="password"
-                  placeholder="Enter current password"
-                  value={currentPassword}
-                  onChange={(e) => setCurrentPassword(e.target.value)}
+                  value={securityData?.securityQuestion ?? ""}
+                  readOnly
+                  placeholder="Get question using College Roll ID"
+                  className="bg-slate-100"
+                />
+                {isQuestionError && (
+                  <p className="text-xs text-destructive">Security question not found for this account.</p>
+                )}
+              </div>
+
+              <div className="space-y-2">
+                <label className="text-sm font-semibold text-foreground flex items-center gap-2">
+                  <KeyRound className="w-4 h-4 text-primary" />
+                  Security Answer
+                </label>
+                <Input
+                  placeholder="Enter your security answer"
+                  value={securityAnswer}
+                  onChange={(e) => setSecurityAnswer(e.target.value)}
                   className="bg-white/50 focus:bg-white"
                 />
               </div>
@@ -104,16 +134,21 @@ export default function ResetPassword() {
               <Button 
                 type="submit" 
                 className="w-full h-14 text-base mt-4"
-                disabled={resetMutation.isPending || !collegeId.trim() || !currentPassword.trim() || !newPassword.trim()}
+                disabled={resetMutation.isPending || !collegeId.trim() || !securityData?.securityQuestion || !securityAnswer.trim() || !newPassword.trim()}
               >
                 {resetMutation.isPending ? "Updating..." : "Update Password"}
               </Button>
 
               {resetMutation.isError && (
                 <p className="text-sm text-destructive text-center font-medium p-3 bg-destructive/10 rounded-xl">
-                  Failed to reset password. Check your current password.
+                  Failed to reset password. Check your security answer.
                 </p>
               )}
+
+              <p className="text-xs text-muted-foreground text-center leading-relaxed">
+                Security note: Do not share your password or security answer with anyone.
+                Use a strong password and a strong security answer.
+              </p>
             </form>
           )}
 
@@ -128,3 +163,4 @@ export default function ResetPassword() {
     </div>
   );
 }
+

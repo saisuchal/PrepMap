@@ -2,9 +2,10 @@ import { useState, useEffect, useRef } from "react";
 import { useRoute, useLocation } from "wouter";
 import { motion, AnimatePresence } from "framer-motion";
 import { ArrowLeft, CheckCircle2, MessageSquare, BookOpen, AlertCircle } from "lucide-react";
-import { useGetSubtopicContent, useTrackEvent } from "@workspace/api-client-react";
+import { useGetSubtopicContent, useTrackEvent } from "@/api-client";
 import { Button } from "@/components/ui/button";
 import { getStoredUser } from "@/lib/auth";
+import { repairBrokenFormulaBullets } from "@/lib/text-format";
 
 function QuestionBlock({ 
   label, 
@@ -56,7 +57,7 @@ function QuestionBlock({
               transition={{ duration: 0.3, ease: "easeOut" }}
               className="prose prose-sm sm:prose-base prose-slate max-w-none prose-headings:font-display prose-p:leading-relaxed"
             >
-              <div className="whitespace-pre-line">{answer}</div>
+              <div className="whitespace-pre-line">{repairBrokenFormulaBullets(answer)}</div>
             </motion.div>
           )}
         </AnimatePresence>
@@ -94,7 +95,7 @@ export default function Subtopic() {
   }, [id]);
 
   useEffect(() => {
-    if (!content || !user || !id || isTracked) return;
+    if (!content || !user || (user.role !== "student" && user.role !== "super_student") || !id || isTracked) return;
 
     let timeoutId: NodeJS.Timeout;
     
@@ -138,8 +139,8 @@ export default function Subtopic() {
 
   if (!id) return null;
 
-  const twoMarkQuestions = content?.questions?.filter(q => q.markType === "2") || [];
-  const fiveMarkQuestions = content?.questions?.filter(q => q.markType === "5") || [];
+  const foundationalQuestions = content?.questions?.filter(q => q.markType === "Foundational") || [];
+  const appliedQuestions = content?.questions?.filter(q => q.markType === "Applied") || [];
 
   return (
     <div className="w-full max-w-3xl mx-auto pb-32">
@@ -181,30 +182,30 @@ export default function Subtopic() {
               <h1 className="text-2xl sm:text-3xl font-display font-bold text-foreground">Concepts & Explanation</h1>
             </div>
             <div className="prose prose-slate max-w-none prose-p:text-muted-foreground prose-p:leading-relaxed prose-strong:text-foreground text-base sm:text-lg">
-              <div className="whitespace-pre-line">{content.explanation}</div>
+              <div className="whitespace-pre-line">{repairBrokenFormulaBullets(content.explanation)}</div>
             </div>
           </section>
 
-          {(twoMarkQuestions.length > 0 || fiveMarkQuestions.length > 0) && (
+          {(foundationalQuestions.length > 0 || appliedQuestions.length > 0) && (
             <section className="space-y-6">
               <div className="flex items-center gap-2 px-2">
                 <MessageSquare className="w-5 h-5 text-primary" />
                 <h2 className="text-xl font-display font-bold text-foreground">Practice Questions</h2>
               </div>
               
-              {twoMarkQuestions.map((q) => (
+              {foundationalQuestions.map((q) => (
                 <QuestionBlock 
                   key={q.id}
-                  label="2 Marks" 
+                  label="Foundational" 
                   question={q.question} 
                   answer={q.answer} 
                 />
               ))}
               
-              {fiveMarkQuestions.map((q) => (
+              {appliedQuestions.map((q) => (
                 <QuestionBlock 
                   key={q.id}
-                  label="5 Marks" 
+                  label="Applied" 
                   question={q.question} 
                   answer={q.answer} 
                 />
@@ -220,3 +221,4 @@ export default function Subtopic() {
     </div>
   );
 }
+

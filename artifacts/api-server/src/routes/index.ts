@@ -8,6 +8,8 @@ import eventsRouter from "./events";
 import adminRouter from "./admin";
 import generationRouter from "./generation";
 import storageRouter from "./storage";
+import metadataRouter from "./metadata";
+import libraryRouter from "./library";
 
 const router: IRouter = Router();
 
@@ -20,5 +22,7 @@ router.use(eventsRouter);
 router.use(adminRouter);
 router.use(generationRouter);
 router.use(storageRouter);
+router.use(metadataRouter);
+router.use(libraryRouter);
 
 export default router;

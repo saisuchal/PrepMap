@@ -8,6 +8,7 @@ import { getStoredUser } from "@/lib/auth";
 
 import Login from "@/pages/login";
 import ResetPassword from "@/pages/reset-password";
+import FirstLoginSetup from "@/pages/first-login-setup";
 import Home from "@/pages/home";
 import Roadmap from "@/pages/roadmap";
 import Subtopic from "@/pages/subtopic";
@@ -23,10 +24,20 @@ const queryClient = new QueryClient({
   }
 });
 
-function ProtectedRoute({ component: Component, requireRole }: { component: React.ComponentType; requireRole?: "admin" | "student" }) {
+function isLearnerRole(role: string | undefined) {
+  return role === "student" || role === "super_student";
+}
+
+function ProtectedRoute({ component: Component, requireRole }: { component: React.ComponentType; requireRole?: "admin" | "learner" }) {
   const user = getStoredUser();
   if (!user) return <Redirect to="/login" />;
-  if (requireRole && user.role !== requireRole) {
+  if (isLearnerRole(user.role) && user.onboardingRequired) {
+    return <Redirect to="/first-login-setup" />;
+  }
+  const hasRequiredRole = !requireRole
+    || (requireRole === "admin" && user.role === "admin")
+    || (requireRole === "learner" && isLearnerRole(user.role));
+  if (!hasRequiredRole) {
     return <Redirect to={user.role === "admin" ? "/admin" : "/home"} />;
   }
   return <Component />;
@@ -35,12 +46,13 @@ function ProtectedRoute({ component: Component, requireRole }: { component: Reac
 function RootRedirect() {
   const user = getStoredUser();
   if (!user) return <Redirect to="/login" />;
+  if (isLearnerRole(user.role) && user.onboardingRequired) return <Redirect to="/first-login-setup" />;
   return <Redirect to={user.role === "admin" ? "/admin" : "/home"} />;
 }
 
-function ProtectedHome() { return <ProtectedRoute component={Home} requireRole="student" />; }
-function ProtectedRoadmap() { return <ProtectedRoute component={Roadmap} requireRole="student" />; }
-function ProtectedSubtopic() { return <ProtectedRoute component={Subtopic} requireRole="student" />; }
+function ProtectedHome() { return <ProtectedRoute component={Home} requireRole="learner" />; }
+function ProtectedRoadmap() { return <ProtectedRoute component={Roadmap} />; }
+function ProtectedSubtopic() { return <ProtectedRoute component={Subtopic} />; }
 function ProtectedAdmin() { return <ProtectedRoute component={Admin} requireRole="admin" />; }
 function ProtectedConfigDetail() { return <ProtectedRoute component={ConfigDetail} requireRole="admin" />; }
 
@@ -50,6 +62,7 @@ function AppRouter() {
       <Switch>
         <Route path="/login" component={Login} />
         <Route path="/reset-password" component={ResetPassword} />
+        <Route path="/first-login-setup" component={FirstLoginSetup} />
         <Route path="/home" component={ProtectedHome} />
         <Route path="/roadmap" component={ProtectedRoadmap} />
         <Route path="/subtopic/:id" component={ProtectedSubtopic} />

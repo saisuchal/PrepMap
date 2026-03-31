@@ -24,7 +24,7 @@ export function Layout({ children }: { children: ReactNode }) {
               <Zap className="w-5 h-5" />
             </div>
             <span className="font-display font-bold text-xl tracking-tight text-foreground">
-              GP-<span className="text-primary">Max</span>
+              Prep<span className="text-primary">Map</span>
             </span>
           </Link>
           

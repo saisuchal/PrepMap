@@ -9,25 +9,61 @@ import {
   setObjectAclPolicy,
 } from "./objectAcl";
 
-const REPLIT_SIDECAR_ENDPOINT = "http://127.0.0.1:1106";
+const REPLIT_SIDECAR_ENDPOINT =
+  process.env.REPLIT_SIDECAR_ENDPOINT || "http://127.0.0.1:1106";
 
-export const objectStorageClient = new Storage({
-  credentials: {
-    audience: "replit",
-    subject_token_type: "access_token",
-    token_url: `${REPLIT_SIDECAR_ENDPOINT}/token`,
-    type: "external_account",
-    credential_source: {
-      url: `${REPLIT_SIDECAR_ENDPOINT}/credential`,
-      format: {
-        type: "json",
-        subject_token_field_name: "access_token",
+function getServiceAccountCredentials():
+  | { projectId?: string; client_email?: string; private_key?: string }
+  | null {
+  const raw = process.env.GCP_SERVICE_ACCOUNT_KEY_JSON;
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as {
+      project_id?: string;
+      client_email?: string;
+      private_key?: string;
+    };
+    if (!parsed.client_email || !parsed.private_key) return null;
+    return {
+      projectId: parsed.project_id,
+      client_email: parsed.client_email,
+      private_key: parsed.private_key,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function useReplitSidecarSigning(): boolean {
+  return !!process.env.REPL_ID || process.env.OBJECT_STORAGE_SIGNER === "replit";
+}
+
+const saCreds = getServiceAccountCredentials();
+export const objectStorageClient = saCreds
+  ? new Storage({
+      projectId: saCreds.projectId,
+      credentials: {
+        client_email: saCreds.client_email,
+        private_key: saCreds.private_key,
       },
-    },
-    universe_domain: "googleapis.com",
-  },
-  projectId: "",
-});
+    })
+  : new Storage({
+      credentials: {
+        audience: "replit",
+        subject_token_type: "access_token",
+        token_url: `${REPLIT_SIDECAR_ENDPOINT}/token`,
+        type: "external_account",
+        credential_source: {
+          url: `${REPLIT_SIDECAR_ENDPOINT}/credential`,
+          format: {
+            type: "json",
+            subject_token_field_name: "access_token",
+          },
+        },
+        universe_domain: "googleapis.com",
+      },
+      projectId: "",
+    });
 
 export class ObjectNotFoundError extends Error {
   constructor() {
@@ -238,6 +274,19 @@ async function signObjectURL({
   method: "GET" | "PUT" | "DELETE" | "HEAD";
   ttlSec: number;
 }): Promise<string> {
+  if (!useReplitSidecarSigning()) {
+    const bucket = objectStorageClient.bucket(bucketName);
+    const file = bucket.file(objectName);
+    const action: "read" | "write" | "delete" =
+      method === "PUT" ? "write" : method === "DELETE" ? "delete" : "read";
+    const [signedURL] = await file.getSignedUrl({
+      version: "v4",
+      action,
+      expires: Date.now() + ttlSec * 1000,
+    });
+    return signedURL;
+  }
+
   const request = {
     bucket_name: bucketName,
     object_name: objectName,

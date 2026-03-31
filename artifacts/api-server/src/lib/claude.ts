@@ -1,17 +1,27 @@
 import Anthropic from "@anthropic-ai/sdk";
 
-const client = new Anthropic({
-  apiKey: process.env.AI_INTEGRATIONS_ANTHROPIC_API_KEY,
-  baseURL: process.env.AI_INTEGRATIONS_ANTHROPIC_BASE_URL,
-});
+const anthropicApiKey =
+  process.env.AI_INTEGRATIONS_ANTHROPIC_API_KEY || process.env.ANTHROPIC_API_KEY;
+const anthropicBaseUrl =
+  process.env.AI_INTEGRATIONS_ANTHROPIC_BASE_URL || process.env.ANTHROPIC_BASE_URL;
 
-const REQUEST_INTERVAL_MS = 13000;
+function getClient(): Anthropic {
+  if (!anthropicApiKey) {
+    throw new Error("ANTHROPIC_API_KEY is not set");
+  }
+  return new Anthropic({
+    apiKey: anthropicApiKey,
+    baseURL: anthropicBaseUrl,
+  });
+}
+
+const REQUEST_INTERVAL_MS = Number(process.env.ANTHROPIC_REQUEST_INTERVAL_MS ?? "3500");
 let lastRequestTime = 0;
 
 async function rateLimitedRequest<T>(fn: () => Promise<T>): Promise<T> {
   const now = Date.now();
   const elapsed = now - lastRequestTime;
-  if (elapsed < REQUEST_INTERVAL_MS) {
+  if (REQUEST_INTERVAL_MS > 0 && elapsed < REQUEST_INTERVAL_MS) {
     await new Promise((r) => setTimeout(r, REQUEST_INTERVAL_MS - elapsed));
   }
   lastRequestTime = Date.now();
@@ -24,7 +34,7 @@ export async function askClaude(
   maxTokens = 4000
 ): Promise<string> {
   return rateLimitedRequest(async () => {
-    const response = await client.messages.create({
+    const response = await getClient().messages.create({
       model: "claude-sonnet-4-5",
       max_tokens: maxTokens,
       system: systemPrompt,
@@ -44,7 +54,7 @@ export async function askClaudeWithImage(
   maxTokens = 4000
 ): Promise<string> {
   return rateLimitedRequest(async () => {
-    const response = await client.messages.create({
+    const response = await getClient().messages.create({
       model: "claude-sonnet-4-5",
       max_tokens: maxTokens,
       system: systemPrompt,

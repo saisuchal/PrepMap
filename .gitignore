@@ -10,6 +10,8 @@ out-tsc
 
 # dependencies
 node_modules
+.pnpm-store/
+.npm/
 
 # IDEs and editors
 /.idea
@@ -34,6 +36,8 @@ node_modules
 /libpeerconnection.log
 npm-debug.log
 yarn-error.log
+pnpm-debug.log
+*.log
 testem.log
 /typings
 
@@ -47,3 +51,14 @@ Thumbs.db
 # Replit
 .cache/
 .local/
+
+# env files
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+**/.env
+**/.env.local
+!.env.example
+!**/.env.example

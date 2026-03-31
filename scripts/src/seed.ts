@@ -1,4 +1,4 @@
-import { db, usersTable, configsTable, nodesTable, subtopicContentsTable, subtopicQuestionsTable } from "@workspace/db";
+import { db, usersTable, configsTable, nodesTable, subtopicContentsTable, subtopicQuestionsTable } from "../../artifacts/api-server/src/db";
 import { hash } from "bcrypt";
 
 const DEFAULT_PASSWORD = "1234567890";
@@ -106,3 +106,4 @@ seed().catch((err) => {
   console.error("Seed failed:", err);
   process.exit(1);
 });
+

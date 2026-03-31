@@ -1,5 +1,5 @@
 import { type Request, type Response, type NextFunction } from "express";
-import { db, usersTable } from "@workspace/db";
+import { db, usersTable } from "../db";
 import { eq } from "drizzle-orm";
 
 export async function requireAdmin(req: Request, res: Response, next: NextFunction) {
@@ -29,3 +29,4 @@ export async function requireAdmin(req: Request, res: Response, next: NextFuncti
   (req as any).userId = user.id;
   next();
 }
+

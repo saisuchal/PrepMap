@@ -2,40 +2,54 @@ import { useState, useEffect, useMemo } from "react";
 import { useLocation } from "wouter";
 import { motion, AnimatePresence } from "framer-motion";
 import { Building2, Calendar, GraduationCap, BookOpen, ChevronRight, Lock, Sparkles, Zap } from "lucide-react";
-import { UNIVERSITIES, EXAM_TYPES } from "@/lib/constants";
-import { useGetConfigs } from "@workspace/api-client-react";
+import { UNIVERSITIES, EXAM_TYPES, COMMON_BRANCH, SEMESTERS } from "@/lib/constants";
+import { useGetAppMetadata, useGetConfigs } from "@/api-client";
+import { getStoredUser } from "@/lib/auth";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 
 export default function Home() {
   const [, setLocation] = useLocation();
-  const [selectedUni, setSelectedUni] = useState(UNIVERSITIES[0].id);
+  const user = getStoredUser();
+  const isStudent = user?.role === "student" || user?.role === "super_student";
+  const { data: metadata } = useGetAppMetadata();
+  const universities = metadata?.universities?.length ? metadata.universities : UNIVERSITIES;
+  const semesters = metadata?.semesters?.length ? metadata.semesters : SEMESTERS;
+  const examTypes = metadata?.examTypes?.length ? metadata.examTypes : EXAM_TYPES;
+  const commonBranch = metadata?.commonBranch || COMMON_BRANCH;
+
+  const [selectedUni, setSelectedUni] = useState("");
   const [selectedYear, setSelectedYear] = useState("");
-  const [selectedBranch, setSelectedBranch] = useState("");
+  const selectedBranch = commonBranch;
   const [selectedSubject, setSelectedSubject] = useState("");
+
+  useEffect(() => {
+    if (isStudent && user?.universityId) {
+      setSelectedUni(user.universityId);
+      return;
+    }
+    if (!selectedUni && universities.length > 0) {
+      setSelectedUni(universities[0].id);
+    }
+  }, [isStudent, selectedUni, universities, user?.universityId]);
 
   const { data: configs, isLoading } = useGetConfigs({ universityId: selectedUni }, {
     query: { enabled: !!selectedUni }
   });
 
-  const availableYears = useMemo(() =>
-    Array.from(new Set(configs?.map(c => c.year) || [])).sort(),
-    [configs]
-  );
-
-  const availableBranches = useMemo(() =>
-    Array.from(new Set(
-      configs?.filter(c => !selectedYear || c.year === selectedYear).map(c => c.branch) || []
-    )).sort(),
-    [configs, selectedYear]
-  );
-
   const availableSubjects = useMemo(() =>
     Array.from(new Set(
       configs?.filter(c =>
         (!selectedYear || c.year === selectedYear) &&
-        (!selectedBranch || c.branch === selectedBranch)
+        c.branch.toUpperCase() === commonBranch
       ).map(c => c.subject) || []
     )).sort(),
-    [configs, selectedYear, selectedBranch]
+    [configs, selectedYear, commonBranch]
   );
 
   const examConfigs = useMemo(() => {
@@ -53,18 +67,12 @@ export default function Home() {
 
   useEffect(() => {
     setSelectedYear("");
-    setSelectedBranch("");
     setSelectedSubject("");
   }, [selectedUni]);
 
   useEffect(() => {
-    setSelectedBranch("");
     setSelectedSubject("");
   }, [selectedYear]);
-
-  useEffect(() => {
-    setSelectedSubject("");
-  }, [selectedBranch]);
 
   const handleExamClick = (examId: string) => {
     const config = examConfigs[examId];
@@ -73,13 +81,20 @@ export default function Home() {
     }
   };
 
-  const showExamNodes = selectedUni && selectedYear && selectedBranch && selectedSubject;
+  const showExamNodes = selectedUni && selectedYear && selectedSubject;
 
-  const examNodeData = [
-    { id: "mid1", name: "Mid Term 1", icon: "1", color: "from-blue-500 to-blue-600", bg: "bg-blue-50", border: "border-blue-200", text: "text-blue-700" },
-    { id: "mid2", name: "Mid Term 2", icon: "2", color: "from-violet-500 to-violet-600", bg: "bg-violet-50", border: "border-violet-200", text: "text-violet-700" },
-    { id: "endsem", name: "End Semester", icon: "E", color: "from-emerald-500 to-emerald-600", bg: "bg-emerald-50", border: "border-emerald-200", text: "text-emerald-700" },
-  ];
+  const examNodeData = useMemo(() => {
+    const colorMap: Record<string, { icon: string; color: string; bg: string; border: string; text: string }> = {
+      mid1: { icon: "1", color: "from-blue-500 to-blue-600", bg: "bg-blue-50", border: "border-blue-200", text: "text-blue-700" },
+      mid2: { icon: "2", color: "from-violet-500 to-violet-600", bg: "bg-violet-50", border: "border-violet-200", text: "text-violet-700" },
+      endsem: { icon: "E", color: "from-emerald-500 to-emerald-600", bg: "bg-emerald-50", border: "border-emerald-200", text: "text-emerald-700" },
+    };
+    return examTypes.map((e) => ({
+      id: e.id,
+      name: e.name,
+      ...(colorMap[e.id] ?? { icon: e.name.slice(0, 1).toUpperCase(), color: "from-blue-500 to-blue-600", bg: "bg-blue-50", border: "border-blue-200", text: "text-blue-700" }),
+    }));
+  }, [examTypes]);
 
   return (
     <div className="w-full max-w-4xl mx-auto pt-4 sm:pt-8 pb-20 px-4 sm:px-0">
@@ -117,25 +132,24 @@ export default function Home() {
             label="University"
             value={selectedUni}
             onChange={setSelectedUni}
-            options={UNIVERSITIES.map(u => ({ value: u.id, label: u.name }))}
+            options={universities.map(u => ({ value: u.id, label: u.name }))}
+            disabled={isStudent}
           />
           <SelectField
             icon={<Calendar className="w-4 h-4 text-primary" />}
-            label="Academic Year"
+            label="Semester"
             value={selectedYear}
             onChange={setSelectedYear}
-            options={availableYears.map(y => ({ value: y, label: y }))}
-            disabled={!availableYears.length}
-            placeholder="Select Year"
+            options={semesters.map((s) => ({ value: s.id, label: s.name }))}
+            placeholder="Select Semester"
           />
           <SelectField
             icon={<GraduationCap className="w-4 h-4 text-primary" />}
-            label="Branch / Department"
+            label="Branch"
             value={selectedBranch}
-            onChange={setSelectedBranch}
-            options={availableBranches.map(b => ({ value: b, label: b }))}
-            disabled={!selectedYear || !availableBranches.length}
-            placeholder="Select Branch"
+            onChange={() => {}}
+            options={[{ value: commonBranch, label: commonBranch }]}
+            disabled
           />
           <SelectField
             icon={<BookOpen className="w-4 h-4 text-primary" />}
@@ -143,7 +157,7 @@ export default function Home() {
             value={selectedSubject}
             onChange={setSelectedSubject}
             options={availableSubjects.map(s => ({ value: s, label: s }))}
-            disabled={!selectedBranch || !availableSubjects.length}
+            disabled={!selectedYear || !availableSubjects.length}
             placeholder="Select Subject"
           />
         </div>
@@ -234,17 +248,23 @@ function SelectField({
       <label className="text-sm font-semibold text-foreground flex items-center gap-2">
         {icon} {label}
       </label>
-      <select
-        className="w-full h-12 sm:h-14 rounded-xl border-2 border-border bg-background px-4 text-base focus:border-primary focus:ring-4 focus:ring-primary/10 outline-none transition-all appearance-none cursor-pointer disabled:opacity-50 disabled:bg-muted"
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
+      <Select
+        value={value || undefined}
+        onValueChange={onChange}
         disabled={disabled}
       >
-        {placeholder && <option value="" disabled>{placeholder}</option>}
-        {options.map(o => (
-          <option key={o.value} value={o.value}>{o.label}</option>
-        ))}
-      </select>
+        <SelectTrigger className="w-full h-12 sm:h-14 rounded-xl border-2 border-border bg-background px-4 text-base focus:border-primary focus:ring-4 focus:ring-primary/10 outline-none transition-all disabled:opacity-50 disabled:bg-muted">
+          <SelectValue placeholder={placeholder ?? "Select option"} />
+        </SelectTrigger>
+        <SelectContent className="max-h-64">
+          {options.map((o) => (
+            <SelectItem key={o.value} value={o.value}>
+              {o.label}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
     </div>
   );
 }
+

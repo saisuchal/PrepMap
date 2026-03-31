@@ -1,10 +1,24 @@
-import { useState } from "react";
-import { useGetConfigs, useCreateConfig, useGetAdminStats } from "@workspace/api-client-react";
-import { UNIVERSITIES, EXAM_TYPES } from "@/lib/constants";
+import { useEffect, useMemo, useState } from "react";
+import {
+  useGetConfigs,
+  useCreateConfig,
+  useGetAdminStats,
+  useDeleteConfig,
+  useGetAppMetadata,
+  useGetQuestionBankInteractionSummary,
+  useGetLiveConfigQuestionBankInteractionSummary,
+  useGetConfigStudentProgress,
+  useGetQuestionBank,
+  useGetLibrarySubjects,
+  useGetLibraryUnits,
+  useUpsertLibrarySubject,
+  useSaveConfigUnitLinks,
+} from "@/api-client";
+import { UNIVERSITIES, EXAM_TYPES, COMMON_BRANCH, SEMESTERS } from "@/lib/constants";
 import { useLocation } from "wouter";
 import {
   BarChart3, Users, BookOpen, Plus, Settings, FileText,
-  CheckCircle2, Clock, ChevronRight, Search, Filter,
+  CheckCircle2, Clock, ChevronRight, Search, Ban, MessageSquare, Eye,
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Button } from "@/components/ui/button";
@@ -14,45 +28,169 @@ import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger,
 } from "@/components/ui/dialog";
 import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/hooks/use-toast";
 
-const examLabel = (id: string) => EXAM_TYPES.find((e) => e.id === id)?.name ?? id;
-const uniLabel = (id: string) => UNIVERSITIES.find((u) => u.id === id)?.name ?? id;
-
 function CreateConfigDialog({ onCreated }: { onCreated: () => void }) {
+  const CUSTOM_SUBJECT_OPTION = "__create_new__";
   const [open, setOpen] = useState(false);
   const [universityId, setUniversityId] = useState("");
   const [year, setYear] = useState("");
-  const [branch, setBranch] = useState("");
   const [subject, setSubject] = useState("");
+  const [subjectSelection, setSubjectSelection] = useState(CUSTOM_SUBJECT_OPTION);
+  const [subjectDrafts, setSubjectDrafts] = useState<string[]>([]);
   const [exam, setExam] = useState("");
+  const { data: metadata } = useGetAppMetadata();
+  const universities = metadata?.universities?.length ? metadata.universities : UNIVERSITIES;
+  const semesters = metadata?.semesters?.length ? metadata.semesters : SEMESTERS;
+  const examTypes = metadata?.examTypes?.length ? metadata.examTypes : EXAM_TYPES;
+  const commonBranch = metadata?.commonBranch || COMMON_BRANCH;
+  const { data: existingConfigs } = useGetConfigs({});
   const createConfig = useCreateConfig();
+  const { data: librarySubjects } = useGetLibrarySubjects();
+  const upsertLibrarySubject = useUpsertLibrarySubject();
+  const [selectedUnitIds, setSelectedUnitIds] = useState<string[]>([]);
+  const saveConfigUnitLinks = useSaveConfigUnitLinks();
   const { toast } = useToast();
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const normalizeText = (value: string) =>
+    value.toLowerCase().replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
+
+  const selectedLibrarySubject = useMemo(() => {
+    const n = normalizeText(subject);
+    return (librarySubjects ?? []).find((s) => s.normalizedName === n) ?? null;
+  }, [librarySubjects, subject]);
+
+  const { data: libraryUnits } = useGetLibraryUnits(selectedLibrarySubject?.id ?? null);
+
+  useEffect(() => {
+    setSelectedUnitIds([]);
+  }, [subject]);
+
+  const subjectOptions = useMemo(
+    () =>
+      Array.from(new Set((librarySubjects ?? []).map((s) => s.name.trim()).filter(Boolean))).sort(
+        (a, b) => a.localeCompare(b)
+      ),
+    [librarySubjects]
+  );
+
+  const addSubjectDraft = () => {
+    const trimmed = subject.trim();
+    if (!trimmed) return;
+    const normalized = normalizeText(trimmed);
+    setSubjectDrafts((prev) => {
+      if (prev.some((s) => normalizeText(s) === normalized)) return prev;
+      return [...prev, trimmed];
+    });
+    setSubject("");
+    setSubjectSelection(CUSTOM_SUBJECT_OPTION);
+    setSelectedUnitIds([]);
+  };
+
+  const removeSubjectDraft = (index: number) => {
+    setSubjectDrafts((prev) => prev.filter((_, i) => i !== index));
+  };
+
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    createConfig.mutate(
-      { data: { universityId, year, branch, subject, exam: exam as "mid1" | "mid2" | "endsem" } },
-      {
-        onSuccess: () => {
-          setOpen(false);
-          setUniversityId("");
-          setYear("");
-          setBranch("");
-          setSubject("");
-          setExam("");
-          onCreated();
-          toast({ title: "Config created", description: `${subject} config created successfully.` });
-        },
-        onError: () => {
-          toast({ title: "Failed to create config", description: "Something went wrong. Please try again.", variant: "destructive" });
-        },
+    try {
+      const enteredSubject = subject.trim();
+      const allSubjects = [...subjectDrafts, ...(enteredSubject ? [enteredSubject] : [])];
+      const uniqueSubjects = Array.from(
+        new Map(allSubjects.map((s) => [normalizeText(s), s.trim()])).values()
+      ).filter(Boolean);
+
+      if (uniqueSubjects.length === 0) {
+        toast({
+          title: "No subjects added",
+          description: "Add at least one subject draft before creating configs.",
+        });
+        return;
       }
-    );
+
+      const existingForCombo = new Set(
+        (existingConfigs ?? [])
+          .filter(
+            (c) =>
+              c.universityId === universityId &&
+              c.year === year &&
+              c.branch === commonBranch &&
+              c.exam === exam
+          )
+          .map((c) => normalizeText(c.subject))
+      );
+
+      const pendingSubjects = uniqueSubjects.filter((s) => !existingForCombo.has(normalizeText(s)));
+      const skippedCount = uniqueSubjects.length - pendingSubjects.length;
+
+      if (pendingSubjects.length === 0) {
+        toast({
+          title: "Nothing to create",
+          description: `All selected subjects already have configs for this exam.`,
+        });
+        return;
+      }
+
+      const createdConfigIds: string[] = [];
+      for (const pendingSubject of pendingSubjects) {
+        const normalizedPending = normalizeText(pendingSubject);
+        const existingLibrarySubject =
+          (librarySubjects ?? []).find((s) => s.normalizedName === normalizedPending) ?? null;
+        if (!existingLibrarySubject) {
+          await upsertLibrarySubject.mutateAsync({ name: pendingSubject });
+        }
+
+        const created = await createConfig.mutateAsync({
+          data: {
+            universityId,
+            year,
+            branch: commonBranch,
+            subject: pendingSubject,
+            exam: exam as "mid1" | "mid2" | "endsem",
+          },
+        });
+        createdConfigIds.push(created.id);
+      }
+
+      if (selectedUnitIds.length > 0 && createdConfigIds.length === 1) {
+        for (const configId of createdConfigIds) {
+          await saveConfigUnitLinks.mutateAsync({ configId, unitIds: selectedUnitIds });
+        }
+      }
+
+      setOpen(false);
+      setUniversityId("");
+      setYear("");
+      setSubject("");
+      setSubjectSelection(CUSTOM_SUBJECT_OPTION);
+      setSubjectDrafts([]);
+      setExam("");
+      setSelectedUnitIds([]);
+      onCreated();
+      toast({
+        title: "Configs created",
+        description:
+          skippedCount > 0
+            ? `${createdConfigIds.length} created, ${skippedCount} skipped (already existed).`
+            : `${createdConfigIds.length} config drafts created successfully.`,
+      });
+    } catch {
+      toast({ title: "Failed to create config", description: "Something went wrong. Please try again.", variant: "destructive" });
+    }
   };
 
   return (
@@ -63,7 +201,7 @@ function CreateConfigDialog({ onCreated }: { onCreated: () => void }) {
           New Config
         </Button>
       </DialogTrigger>
-      <DialogContent className="sm:max-w-md">
+      <DialogContent className="w-[calc(100vw-2rem)] max-w-[56rem] overflow-x-hidden sm:max-w-[56rem]">
         <DialogHeader>
           <DialogTitle>Create Exam Config</DialogTitle>
         </DialogHeader>
@@ -71,9 +209,13 @@ function CreateConfigDialog({ onCreated }: { onCreated: () => void }) {
           <div className="space-y-2">
             <Label>University</Label>
             <Select value={universityId} onValueChange={setUniversityId}>
-              <SelectTrigger><SelectValue placeholder="Select university" /></SelectTrigger>
+              <SelectTrigger className="w-full min-w-0 max-w-full">
+                <span className="block min-w-0 truncate text-left">
+                  <SelectValue placeholder="Select university" />
+                </span>
+              </SelectTrigger>
               <SelectContent>
-                {UNIVERSITIES.map((u) => (
+                {universities.map((u) => (
                   <SelectItem key={u.id} value={u.id}>{u.name}</SelectItem>
                 ))}
               </SelectContent>
@@ -82,45 +224,149 @@ function CreateConfigDialog({ onCreated }: { onCreated: () => void }) {
 
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-2">
-              <Label>Year</Label>
+              <Label>Semester</Label>
               <Select value={year} onValueChange={setYear}>
-                <SelectTrigger><SelectValue placeholder="Year" /></SelectTrigger>
+                <SelectTrigger className="w-full min-w-0 max-w-full">
+                  <span className="block min-w-0 truncate text-left">
+                    <SelectValue placeholder="Select semester" />
+                  </span>
+                </SelectTrigger>
                 <SelectContent>
-                  {["1", "2", "3", "4"].map((y) => (
-                    <SelectItem key={y} value={y}>Year {y}</SelectItem>
+                  {semesters.map((s) => (
+                    <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>
                   ))}
                 </SelectContent>
               </Select>
             </div>
             <div className="space-y-2">
               <Label>Branch</Label>
-              <Input value={branch} onChange={(e) => setBranch(e.target.value)} placeholder="e.g. CSE" />
+              <Input value={commonBranch} readOnly disabled />
             </div>
-          </div>
-
-          <div className="space-y-2">
-            <Label>Subject</Label>
-            <Input value={subject} onChange={(e) => setSubject(e.target.value)} placeholder="e.g. Data Structures" />
           </div>
 
           <div className="space-y-2">
             <Label>Exam Type</Label>
             <Select value={exam} onValueChange={setExam}>
-              <SelectTrigger><SelectValue placeholder="Select exam" /></SelectTrigger>
+              <SelectTrigger className="w-full min-w-0 max-w-full">
+                <span className="block min-w-0 truncate text-left">
+                  <SelectValue placeholder="Select exam" />
+                </span>
+              </SelectTrigger>
               <SelectContent>
-                {EXAM_TYPES.map((e) => (
+                {examTypes.map((e) => (
                   <SelectItem key={e.id} value={e.id}>{e.name}</SelectItem>
                 ))}
               </SelectContent>
             </Select>
           </div>
 
+          <div className="space-y-2">
+            <Label>Add Subject</Label>
+            <Select
+              value={subjectSelection}
+              onValueChange={(value) => {
+                setSubjectSelection(value);
+                if (value !== CUSTOM_SUBJECT_OPTION) {
+                  setSubject(value);
+                } else {
+                  setSubject("");
+                }
+              }}
+            >
+              <SelectTrigger className="w-full min-w-0 max-w-full">
+                <span className="block min-w-0 truncate text-left">
+                  <SelectValue placeholder="Select/create subject" />
+                </span>
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={CUSTOM_SUBJECT_OPTION}>Create new subject</SelectItem>
+                {subjectOptions.map((s) => (
+                  <SelectItem key={s} value={s}>
+                    {s}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            {subjectSelection === CUSTOM_SUBJECT_OPTION && (
+              <Input value={subject} onChange={(e) => setSubject(e.target.value)} placeholder="e.g. Data Structures" />
+            )}
+            <div className="flex flex-wrap items-center gap-2">
+              <Button type="button" variant="outline" onClick={addSubjectDraft} disabled={!subject.trim()}>
+                <Plus className="w-4 h-4 mr-1" />
+                Add Subject
+              </Button>
+              <p className="min-w-0 flex-1 text-xs text-muted-foreground">
+                Add multiple subjects, then create all drafts in one go.
+              </p>
+            </div>
+            {subjectDrafts.length > 0 && (
+              <div className="rounded-md border border-border p-2 flex flex-wrap gap-2">
+                {subjectDrafts.map((s, index) => (
+                  <Badge key={`${s}-${index}`} variant="secondary" className="gap-2 pr-1">
+                    <span>{s}</span>
+                    <button
+                      type="button"
+                      className="text-xs leading-none px-1 py-0.5 rounded hover:bg-black/10"
+                      onClick={() => removeSubjectDraft(index)}
+                      aria-label={`Remove ${s}`}
+                    >
+                      x
+                    </button>
+                  </Badge>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div className="space-y-2">
+            <Label>Reusable Units (optional)</Label>
+            {subjectDrafts.length > 1 ? (
+              <p className="text-xs text-muted-foreground">Reusable units are available when creating one subject at a time.</p>
+            ) : !subject.trim() ? (
+              <p className="text-xs text-muted-foreground">Select/enter subject to see reusable units.</p>
+            ) : !selectedLibrarySubject ? (
+              <p className="text-xs text-muted-foreground">No library subject yet for this name. It will be created on config creation.</p>
+            ) : !libraryUnits || libraryUnits.length === 0 ? (
+              <p className="text-xs text-muted-foreground">No units available yet for this subject.</p>
+            ) : (
+              <div className="max-h-36 overflow-y-auto rounded-md border border-border p-2 space-y-1">
+                {libraryUnits.map((u) => (
+                  <label key={u.id} className="flex items-start gap-2 text-sm">
+                    <input
+                      type="checkbox"
+                      checked={selectedUnitIds.includes(u.id)}
+                      onChange={(e) => {
+                        const checked = e.target.checked;
+                        setSelectedUnitIds((prev) =>
+                          checked ? (prev.includes(u.id) ? prev : [...prev, u.id]) : prev.filter((id) => id !== u.id)
+                        );
+                      }}
+                    />
+                    <span>{u.unitTitle}</span>
+                  </label>
+                ))}
+              </div>
+            )}
+          </div>
+
+          
+
           <Button
             type="submit"
             className="w-full"
-            disabled={!universityId || !year || !branch || !subject || !exam || createConfig.isPending}
+            disabled={
+              !universityId ||
+              !year ||
+              !(subjectDrafts.length > 0 || subject.trim()) ||
+              !exam ||
+              createConfig.isPending ||
+              upsertLibrarySubject.isPending ||
+              saveConfigUnitLinks.isPending
+            }
           >
-            {createConfig.isPending ? "Creating..." : "Create Config"}
+            {createConfig.isPending || upsertLibrarySubject.isPending || saveConfigUnitLinks.isPending
+              ? "Creating..."
+              : "Create Config Drafts"}
           </Button>
         </form>
       </DialogContent>
@@ -129,15 +375,67 @@ function CreateConfigDialog({ onCreated }: { onCreated: () => void }) {
 }
 
 function ConfigsTab() {
+  const { data: metadata } = useGetAppMetadata();
+  const universities = metadata?.universities?.length ? metadata.universities : UNIVERSITIES;
+  const semesters = metadata?.semesters?.length ? metadata.semesters : SEMESTERS;
+  const examTypes = metadata?.examTypes?.length ? metadata.examTypes : EXAM_TYPES;
+  const uniLabel = (id: string) => universities.find((u) => u.id === id)?.name ?? id;
+  const semesterLabel = (id: string) => semesters.find((s) => s.id === id)?.name ?? id;
+  const examLabel = (id: string) => examTypes.find((e) => e.id === id)?.name ?? id;
+  const semExamLabel = (semesterId: string, examId: string) => `${semesterLabel(semesterId)} - ${examLabel(examId)}`;
   const [, setLocation] = useLocation();
-  const [filterUni, setFilterUni] = useState<string>("all");
+  const [selectedUniversityId, setSelectedUniversityId] = useState<string | null>(null);
   const [search, setSearch] = useState("");
-  const { data: configs, isLoading, refetch } = useGetConfigs(
-    filterUni !== "all" ? { universityId: filterUni } : {},
-    { query: { queryKey: ["configs", filterUni] } }
-  );
+  const [yearFilter, setYearFilter] = useState<string>("all");
+  const [branchFilter, setBranchFilter] = useState<string>("all");
+  const [examFilter, setExamFilter] = useState<string>("all");
+  const [subjectFilter, setSubjectFilter] = useState<string>("all");
+  const { data: configs, isLoading, refetch } = useGetConfigs({}, { query: { queryKey: ["configs", "all"] } });
+  const deleteConfig = useDeleteConfig();
+  const { toast } = useToast();
+  const [disableTarget, setDisableTarget] = useState<{
+    id: string;
+    subject: string;
+    year: string;
+    exam: string;
+  } | null>(null);
 
-  const filtered = (configs ?? []).filter((c) => {
+  const sortedConfigs = [...(configs ?? [])].sort((a, b) => {
+    const aTime = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+    const bTime = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+    return bTime - aTime;
+  });
+
+  const universityCards = universities
+    .map((u) => {
+      const universityConfigs = sortedConfigs.filter((c) => c.universityId === u.id);
+      return {
+        id: u.id,
+        name: u.name,
+        total: universityConfigs.length,
+        live: universityConfigs.filter((c) => c.status === "live").length,
+        draft: universityConfigs.filter((c) => c.status !== "live").length,
+      };
+    })
+    .filter((u) => {
+      if (!search.trim()) return true;
+      return u.name.toLowerCase().includes(search.toLowerCase());
+    });
+
+  const selectedUniversityConfigs = selectedUniversityId
+    ? sortedConfigs.filter((c) => c.universityId === selectedUniversityId)
+    : [];
+
+  const yearOptions = Array.from(new Set(selectedUniversityConfigs.map((c) => c.year)));
+  const branchOptions = Array.from(new Set(selectedUniversityConfigs.map((c) => c.branch))).sort((a, b) => a.localeCompare(b));
+  const examOptions = Array.from(new Set(selectedUniversityConfigs.map((c) => c.exam)));
+  const subjectOptions = Array.from(new Set(selectedUniversityConfigs.map((c) => c.subject))).sort((a, b) => a.localeCompare(b));
+
+  const filteredConfigs = selectedUniversityConfigs.filter((c) => {
+    if (yearFilter !== "all" && c.year !== yearFilter) return false;
+    if (branchFilter !== "all" && c.branch !== branchFilter) return false;
+    if (examFilter !== "all" && c.exam !== examFilter) return false;
+    if (subjectFilter !== "all" && c.subject !== subjectFilter) return false;
     if (!search) return true;
     const q = search.toLowerCase();
     return (
@@ -146,6 +444,13 @@ function ConfigsTab() {
       uniLabel(c.universityId).toLowerCase().includes(q)
     );
   });
+
+  useEffect(() => {
+    setYearFilter("all");
+    setBranchFilter("all");
+    setExamFilter("all");
+    setSubjectFilter("all");
+  }, [selectedUniversityId]);
 
   return (
     <div>
@@ -156,25 +461,92 @@ function ConfigsTab() {
             <Input
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search configs..."
+              placeholder={selectedUniversityId ? "Search subjects in this university..." : "Search universities..."}
               className="pl-9"
             />
           </div>
-          <Select value={filterUni} onValueChange={setFilterUni}>
-            <SelectTrigger className="w-[200px]">
-              <Filter className="w-4 h-4 mr-2 text-muted-foreground" />
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">All Universities</SelectItem>
-              {UNIVERSITIES.map((u) => (
-                <SelectItem key={u.id} value={u.id}>{u.name}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
         </div>
         <CreateConfigDialog onCreated={() => refetch()} />
       </div>
+      {selectedUniversityId && (
+        <div className="mb-4">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              setSelectedUniversityId(null);
+              setSearch("");
+            }}
+          >
+            {"<- Back to Universities"}
+          </Button>
+          <p className="mt-2 text-sm text-muted-foreground">
+            Showing configs for <span className="font-medium text-foreground">{uniLabel(selectedUniversityId)}</span>
+          </p>
+          <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+            <div>
+              <Select value={yearFilter} onValueChange={setYearFilter}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Year/Semester" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Semesters</SelectItem>
+                  {yearOptions.map((yearId) => (
+                    <SelectItem key={yearId} value={yearId}>
+                      {semesterLabel(yearId)}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
+              <Select value={branchFilter} onValueChange={setBranchFilter}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Branch" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Branches</SelectItem>
+                  {branchOptions.map((branch) => (
+                    <SelectItem key={branch} value={branch}>
+                      {branch}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
+              <Select value={examFilter} onValueChange={setExamFilter}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Exam" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Exams</SelectItem>
+                  {examOptions.map((examId) => (
+                    <SelectItem key={examId} value={examId}>
+                      {examLabel(examId)}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
+              <Select value={subjectFilter} onValueChange={setSubjectFilter}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Subject" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Subjects</SelectItem>
+                  {subjectOptions.map((subject) => (
+                    <SelectItem key={subject} value={subject}>
+                      {subject}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+        </div>
+      )}
 
       {isLoading ? (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -182,16 +554,54 @@ function ConfigsTab() {
             <div key={i} className="h-44 bg-card rounded-2xl border border-border animate-pulse" />
           ))}
         </div>
-      ) : filtered.length === 0 ? (
+      ) : !selectedUniversityId && universityCards.length === 0 ? (
+        <div className="flex flex-col items-center justify-center py-20 text-center">
+          <FileText className="w-12 h-12 text-muted-foreground mb-4" />
+          <h3 className="text-lg font-semibold text-foreground mb-1">No universities found</h3>
+          <p className="text-muted-foreground text-sm">Try a different search keyword.</p>
+        </div>
+      ) : selectedUniversityId && filteredConfigs.length === 0 ? (
         <div className="flex flex-col items-center justify-center py-20 text-center">
           <FileText className="w-12 h-12 text-muted-foreground mb-4" />
           <h3 className="text-lg font-semibold text-foreground mb-1">No configs found</h3>
-          <p className="text-muted-foreground text-sm">Create your first exam config to get started.</p>
+          <p className="text-muted-foreground text-sm">Create your first exam config for this university to get started.</p>
+        </div>
+      ) : !selectedUniversityId ? (
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+          <AnimatePresence>
+            {universityCards.map((u, i) => (
+              <motion.div
+                key={u.id}
+                initial={{ opacity: 0, y: 12 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: i * 0.04 }}
+                onClick={() => u.total > 0 && setSelectedUniversityId(u.id)}
+                className={`bg-card rounded-2xl border border-border p-5 transition-all ${
+                  u.total > 0
+                    ? "cursor-pointer hover:border-primary/40 hover:shadow-lg hover:shadow-primary/5"
+                    : "opacity-80"
+                }`}
+              >
+                <div className="flex items-start justify-between mb-3">
+                  <Badge variant="secondary" className="text-xs">
+                    {u.total} Config{u.total === 1 ? "" : "s"}
+                  </Badge>
+                  {u.total > 0 && <ChevronRight className="w-4 h-4 text-muted-foreground" />}
+                </div>
+                <h3 className="font-semibold text-foreground text-lg mb-2 line-clamp-2">{u.name}</h3>
+                <p className="text-sm text-muted-foreground mb-3">University-level configs</p>
+                <div className="flex items-center gap-2 text-xs">
+                  <span className="text-muted-foreground">Live: <span className="text-foreground font-medium">{u.live}</span></span>
+                  <span className="text-muted-foreground">Draft: <span className="text-foreground font-medium">{u.draft}</span></span>
+                </div>
+              </motion.div>
+            ))}
+          </AnimatePresence>
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           <AnimatePresence>
-            {filtered.map((config, i) => {
+            {filteredConfigs.map((config, i) => {
               const hasFiles = !!config.syllabusFileUrl;
               return (
                 <motion.div
@@ -210,16 +620,52 @@ function ConfigsTab() {
                         <><Clock className="w-3 h-3 mr-1" /> Draft</>
                       )}
                     </Badge>
-                    <ChevronRight className="w-4 h-4 text-muted-foreground group-hover:text-primary transition-colors" />
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs font-medium text-primary bg-primary/10 px-2 py-1 rounded-md">
+                        {semExamLabel(config.year, config.exam)}
+                      </span>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        className="h-7 w-7 text-destructive hover:text-destructive"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setDisableTarget({
+                            id: config.id,
+                            subject: config.subject,
+                            year: config.year,
+                            exam: config.exam,
+                          });
+                        }}
+                        disabled={deleteConfig.isPending}
+                        aria-label={`Disable ${config.subject}`}
+                      >
+                        <Ban className="w-4 h-4" />
+                      </Button>
+                      <ChevronRight className="w-4 h-4 text-muted-foreground group-hover:text-primary transition-colors" />
+                    </div>
                   </div>
                   <h3 className="font-semibold text-foreground text-lg mb-1 line-clamp-1">{config.subject}</h3>
                   <p className="text-sm text-muted-foreground mb-3">
-                    {uniLabel(config.universityId)} &middot; {config.branch} &middot; Year {config.year}
+                    {uniLabel(config.universityId)} &middot; {config.branch}
                   </p>
                   <div className="flex items-center justify-between">
-                    <span className="text-xs font-medium text-primary bg-primary/10 px-2 py-1 rounded-md">
-                      {examLabel(config.exam)}
-                    </span>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="h-7 text-xs gap-1.5"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setLocation(
+                          `/roadmap?configId=${encodeURIComponent(config.id)}&subject=${encodeURIComponent(config.subject)}&exam=${encodeURIComponent(config.exam)}`
+                        );
+                      }}
+                    >
+                      <Eye className="w-3.5 h-3.5" />
+                      Preview
+                    </Button>
                     <div className="flex items-center gap-2 text-xs text-muted-foreground">
                       {hasFiles && <FileText className="w-3.5 h-3.5 text-green-500" />}
                       {config.createdAt && new Date(config.createdAt).toLocaleDateString()}
@@ -231,22 +677,120 @@ function ConfigsTab() {
           </AnimatePresence>
         </div>
       )}
+
+      <AlertDialog open={!!disableTarget} onOpenChange={(open) => !open && setDisableTarget(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Disable Roadmap?</AlertDialogTitle>
+            <AlertDialogDescription>
+              {disableTarget
+                ? `Disable "${disableTarget.subject}" (${semExamLabel(disableTarget.year, disableTarget.exam)})? Students will no longer see it, but units, explanations, and question bank data will be preserved.`
+                : ""}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                if (!disableTarget) return;
+                deleteConfig.mutate(
+                  { id: disableTarget.id },
+                  {
+                    onSuccess: () => {
+                      refetch();
+                      toast({
+                        title: "Roadmap disabled",
+                        description: `${disableTarget.subject} has been disabled.`,
+                      });
+                      setDisableTarget(null);
+                    },
+                    onError: () => {
+                      toast({
+                        title: "Disable failed",
+                        description: "Could not disable this roadmap. Please try again.",
+                        variant: "destructive",
+                      });
+                    },
+                  }
+                );
+              }}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              Disable
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
 
 function AnalyticsTab() {
-  const { data: stats, isLoading } = useGetAdminStats();
+  const { data: metadata } = useGetAppMetadata();
+  const universities = metadata?.universities?.length ? metadata.universities : UNIVERSITIES;
+  const semesters = metadata?.semesters?.length ? metadata.semesters : SEMESTERS;
+  const examTypes = metadata?.examTypes?.length ? metadata.examTypes : EXAM_TYPES;
+  const uniLabel = (id: string) => universities.find((u) => u.id === id)?.name ?? id;
+  const semesterLabel = (id: string) => semesters.find((s) => s.id === id)?.name ?? id;
+  const examLabel = (id: string) => examTypes.find((e) => e.id === id)?.name ?? id;
+  const semExamLabel = (semesterId: string, examId: string) => `${semesterLabel(semesterId)} - ${examLabel(examId)}`;
+  const {
+    data: allConfigs,
+    isLoading: configsLoading,
+    isError: configsError,
+    error: configsErrorDetails,
+  } = useGetConfigs({}, { query: { queryKey: ["configs", "all"] } });
+  const { data: questionBankInteractionSummary } = useGetQuestionBankInteractionSummary();
+  const { data: liveConfigQbSummary } = useGetLiveConfigQuestionBankInteractionSummary();
+  const liveConfigs = useMemo(
+    () => (allConfigs ?? []).filter((cfg) => cfg.status === "live"),
+    [allConfigs]
+  );
+  const universityRows = useMemo(
+    () =>
+      universities.map((u) => ({
+        universityId: u.id,
+        liveConfigs: liveConfigs.filter((cfg) => cfg.universityId === u.id),
+      })),
+    [universities, liveConfigs]
+  );
+  const [selectedUniversityId, setSelectedUniversityId] = useState<string | null>(null);
+  const [selectedConfigId, setSelectedConfigId] = useState<string | null>(null);
+  const selectedUniversityRow = universityRows.find((row) => row.universityId === selectedUniversityId) ?? null;
+  const selectedUniversityConfigs = selectedUniversityRow?.liveConfigs ?? [];
+  const selectedConfig = selectedUniversityConfigs.find((cfg) => cfg.id === selectedConfigId) ?? null;
+  const qbSummaryByConfig = useMemo(() => {
+    const map = new Map<string, {
+      totalStudents: number;
+      uniqueStudents: number;
+      totalInteractions: number;
+      interactionPercent: number;
+    }>();
+    for (const row of liveConfigQbSummary?.rows ?? []) {
+      map.set(row.configId, {
+        totalStudents: row.totalStudents,
+        uniqueStudents: row.uniqueStudents,
+        totalInteractions: row.totalInteractions,
+        interactionPercent: row.interactionPercent,
+      });
+    }
+    return map;
+  }, [liveConfigQbSummary]);
+  const { data: studentProgress, isLoading: studentsLoading } = useGetConfigStudentProgress(
+    selectedConfigId
+  );
+  const { data: selectedConfigQuestionBank } = useGetQuestionBank(selectedConfigId);
+  const { data: stats } = useGetAdminStats();
 
   return (
     <div>
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-6 mb-10">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 mb-10">
         <div className="bg-card rounded-2xl p-6 border border-border shadow-sm flex items-center gap-5">
           <div className="w-14 h-14 rounded-xl bg-blue-500/10 flex items-center justify-center text-blue-600">
             <BookOpen className="w-7 h-7" />
           </div>
           <div>
-            <p className="text-sm font-semibold text-muted-foreground">Total Subtopics</p>
+            <p className="text-sm font-semibold text-muted-foreground">Tracked Subtopics</p>
             <p className="text-3xl font-display font-bold text-foreground">{stats?.length || 0}</p>
           </div>
         </div>
@@ -261,61 +805,84 @@ function AnalyticsTab() {
             </p>
           </div>
         </div>
+        <div className="bg-card rounded-2xl p-6 border border-border shadow-sm flex items-center gap-5">
+          <div className="w-14 h-14 rounded-xl bg-violet-500/10 flex items-center justify-center text-violet-600">
+            <Users className="w-7 h-7" />
+          </div>
+          <div>
+            <p className="text-sm font-semibold text-muted-foreground">Universities Covered</p>
+            <p className="text-3xl font-display font-bold text-foreground">{universities.length}</p>
+          </div>
+        </div>
+        <div className="bg-card rounded-2xl p-6 border border-border shadow-sm flex items-center gap-5">
+          <div className="w-14 h-14 rounded-xl bg-amber-500/10 flex items-center justify-center text-amber-600">
+            <MessageSquare className="w-7 h-7" />
+          </div>
+          <div>
+            <p className="text-sm font-semibold text-muted-foreground">Question Bank Interactions</p>
+            <p className="text-3xl font-display font-bold text-foreground">
+              {questionBankInteractionSummary?.questionBankInteractionCount || 0}
+            </p>
+          </div>
+        </div>
       </div>
 
       <div className="bg-card rounded-3xl border border-border shadow-lg shadow-black/5 overflow-hidden">
         <div className="px-6 py-5 border-b border-border bg-secondary/30">
-          <h2 className="text-lg font-semibold text-foreground">Content Engagement</h2>
+          <h2 className="text-lg font-semibold text-foreground">Detailed Analytics By University</h2>
         </div>
         <div className="overflow-x-auto">
           <table className="w-full text-left border-collapse">
             <thead>
               <tr className="border-b border-border text-xs uppercase tracking-wider text-muted-foreground">
-                <th className="px-6 py-4 font-semibold">Subtopic Title</th>
-                <th className="px-6 py-4 font-semibold text-right">Views / Completions</th>
-                <th className="px-6 py-4 font-semibold text-right">Engagement Level</th>
+                <th className="px-6 py-4 font-semibold">University</th>
+                <th className="px-6 py-4 font-semibold text-right">Live Configs</th>
+                <th className="px-6 py-4 font-semibold text-right">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-border/50 text-sm">
-              {isLoading ? (
+              {configsLoading ? (
                 Array.from({ length: 5 }).map((_, i) => (
                   <tr key={i}>
                     <td className="px-6 py-4"><div className="h-5 bg-muted animate-pulse rounded w-3/4" /></td>
-                    <td className="px-6 py-4"><div className="h-5 bg-muted animate-pulse rounded w-1/4 ml-auto" /></td>
-                    <td className="px-6 py-4"><div className="h-5 bg-muted animate-pulse rounded w-1/2 ml-auto" /></td>
+                    <td className="px-6 py-4"><div className="h-5 bg-muted animate-pulse rounded w-1/3 ml-auto" /></td>
+                    <td className="px-6 py-4"><div className="h-8 bg-muted animate-pulse rounded w-24 ml-auto" /></td>
                   </tr>
                 ))
-              ) : stats?.length === 0 ? (
+              ) : configsError ? (
                 <tr>
-                  <td colSpan={3} className="px-6 py-12 text-center text-muted-foreground">
-                    No analytics data available yet.
+                  <td colSpan={3} className="px-6 py-12 text-center text-destructive">
+                    Failed to load analytics: {configsErrorDetails instanceof Error ? configsErrorDetails.message : "Unknown error"}
                   </td>
                 </tr>
               ) : (
-                stats?.sort((a, b) => b.eventCount - a.eventCount).map((stat, i) => {
-                  const maxCount = Math.max(...(stats ?? []).map((s) => s.eventCount));
-                  const percentage = maxCount > 0 ? (stat.eventCount / maxCount) * 100 : 0;
+                universityRows.map((row, i) => {
                   return (
                     <motion.tr
                       initial={{ opacity: 0, y: 10 }}
                       animate={{ opacity: 1, y: 0 }}
                       transition={{ delay: i * 0.05 }}
-                      key={stat.subtopicId}
+                      key={row.universityId}
                       className="hover:bg-muted/50 transition-colors"
                     >
-                      <td className="px-6 py-4 font-medium text-foreground">{stat.subtopicTitle}</td>
-                      <td className="px-6 py-4 text-right font-display font-bold text-foreground">
-                        {stat.eventCount.toLocaleString()}
+                      <td className="px-6 py-4 font-medium text-foreground">
+                        {uniLabel(row.universityId)}
                       </td>
-                      <td className="px-6 py-4">
-                        <div className="flex items-center justify-end gap-3">
-                          <span className="text-xs font-medium text-muted-foreground w-8 text-right">
-                            {Math.round(percentage)}%
-                          </span>
-                          <div className="w-32 h-2 rounded-full bg-secondary overflow-hidden">
-                            <div className="h-full bg-primary rounded-full" style={{ width: `${percentage}%` }} />
-                          </div>
-                        </div>
+                      <td className="px-6 py-4 text-right">
+                        <span className="font-display font-bold text-foreground">{row.liveConfigs.length}</span>
+                      </td>
+                      <td className="px-6 py-4 text-right">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          disabled={row.liveConfigs.length === 0}
+                          onClick={() => {
+                            setSelectedUniversityId(row.universityId);
+                            setSelectedConfigId(null);
+                          }}
+                        >
+                          Show All Live Configs
+                        </Button>
                       </td>
                     </motion.tr>
                   );
@@ -325,6 +892,149 @@ function AnalyticsTab() {
           </table>
         </div>
       </div>
+
+      <Dialog
+        open={!!selectedUniversityId}
+        onOpenChange={(open) => {
+          if (!open) {
+            setSelectedUniversityId(null);
+            setSelectedConfigId(null);
+          }
+        }}
+      >
+        <DialogContent className="max-w-4xl">
+          <DialogHeader>
+            <DialogTitle>
+              {selectedConfig
+                ? `Student Progress - ${uniLabel(selectedUniversityId || "")} / ${selectedConfig.subject}`
+                : `Live Configs - ${uniLabel(selectedUniversityId || "")}`}
+            </DialogTitle>
+          </DialogHeader>
+
+          {!selectedConfig ? (
+            <div className="max-h-[65vh] overflow-auto border border-border rounded-xl">
+              <table className="w-full text-left border-collapse">
+                <thead className="sticky top-0 bg-card">
+                  <tr className="border-b border-border text-xs uppercase tracking-wider text-muted-foreground">
+                    <th className="px-4 py-3 font-semibold">Subject</th>
+                    <th className="px-4 py-3 font-semibold">Semester</th>
+                    <th className="px-4 py-3 font-semibold">Exam</th>
+                    <th className="px-4 py-3 font-semibold">Branch</th>
+                    <th className="px-4 py-3 font-semibold text-right">QB Interactions</th>
+                    <th className="px-4 py-3 font-semibold text-right">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-border/50 text-sm">
+                  {selectedUniversityConfigs.length === 0 ? (
+                    <tr>
+                      <td colSpan={6} className="px-4 py-8 text-center text-muted-foreground">
+                        No live configs found for this university.
+                      </td>
+                    </tr>
+                  ) : (
+                    selectedUniversityConfigs.map((cfg) => {
+                      const qb = qbSummaryByConfig.get(cfg.id);
+                      const percent = Math.round(qb?.interactionPercent ?? 0);
+                      const totalInteractions = qb?.totalInteractions ?? 0;
+                      return (
+                        <tr key={cfg.id}>
+                          <td className="px-4 py-3 font-medium text-foreground">{cfg.subject}</td>
+                          <td className="px-4 py-3 text-foreground">{semesterLabel(cfg.year)}</td>
+                          <td className="px-4 py-3 text-foreground">{examLabel(cfg.exam)}</td>
+                          <td className="px-4 py-3 text-foreground">{cfg.branch}</td>
+                          <td className="px-4 py-3 text-right">
+                            <div className="inline-flex items-center gap-2">
+                              <span className="font-semibold text-foreground">{percent}%</span>
+                              <span className="text-xs text-muted-foreground">({totalInteractions})</span>
+                            </div>
+                          </td>
+                          <td className="px-4 py-3 text-right">
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => setSelectedConfigId(cfg.id)}
+                            >
+                              Student Progress
+                            </Button>
+                          </td>
+                        </tr>
+                      );
+                    })
+                  )}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <div className="space-y-3">
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-8"
+                onClick={() => setSelectedConfigId(null)}
+              >{"<- Back to Live Configs"}</Button>
+              {studentsLoading ? (
+                <div className="py-8 text-center text-muted-foreground">Loading students...</div>
+              ) : !studentProgress ? (
+                <div className="py-8 text-center text-muted-foreground">No student progress data found.</div>
+              ) : (
+                <div className="max-h-[60vh] overflow-auto border border-border rounded-xl">
+                  <table className="w-full text-left border-collapse">
+                    <thead className="sticky top-0 bg-card">
+                      <tr className="border-b border-border text-xs uppercase tracking-wider text-muted-foreground">
+                        <th className="px-4 py-3 font-semibold">Student</th>
+                        <th className="px-4 py-3 font-semibold">Semester</th>
+                        <th className="px-4 py-3 font-semibold">Branch</th>
+                        <th className="px-4 py-3 font-semibold text-right">Sub-topic Coverage</th>
+                        <th className="px-4 py-3 font-semibold text-right">QB Interactions</th>
+                        <th className="px-4 py-3 font-semibold text-right">Last Active</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-border/50 text-sm">
+                      {studentProgress.students.map((s) => {
+                        const pct = Math.round(s.progressPercent);
+                        const totalQuestions = selectedConfigQuestionBank?.total ?? 0;
+                        const rawQbInteractions = s.questionBankInteractions ?? 0;
+                        const normalizedQbInteractions =
+                          totalQuestions > 0 ? Math.min(rawQbInteractions, totalQuestions) : 0;
+                        const qbPct =
+                          totalQuestions > 0
+                            ? Math.round((normalizedQbInteractions / totalQuestions) * 100)
+                            : 0;
+                        return (
+                          <tr key={s.userId}>
+                            <td className="px-4 py-3 font-medium text-foreground">{s.userId}</td>
+                            <td className="px-4 py-3 text-foreground">{semesterLabel(s.year)}</td>
+                            <td className="px-4 py-3 text-foreground">{s.branch}</td>
+                            <td className="px-4 py-3 text-right">
+                              <div className="inline-flex items-center gap-2">
+                                <span className="text-xs text-muted-foreground">
+                                  {s.doneSubtopics}/{s.totalSubtopics}
+                                </span>
+                                <span className="font-semibold text-foreground">{pct}%</span>
+                              </div>
+                            </td>
+                            <td className="px-4 py-3 text-right">
+                              <div className="inline-flex items-center gap-2">
+                                <span className="text-xs text-muted-foreground">
+                                  {normalizedQbInteractions}/{totalQuestions}
+                                </span>
+                                <span className="font-semibold text-foreground">{qbPct}%</span>
+                              </div>
+                            </td>
+                            <td className="px-4 py-3 text-right text-muted-foreground">
+                              {s.lastActiveAt ? new Date(s.lastActiveAt).toLocaleDateString() : "-"}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

@@ -7,19 +7,335 @@ import {
   GetGenerationStatusParams,
   GetGenerationStatusResponse,
   PublishConfigParams,
-} from "@workspace/api-zod";
-import { db, configsTable } from "@workspace/db";
-import { eq } from "drizzle-orm";
+} from "../api-zod";
+import {
+  db,
+  configsTable,
+  nodesTable,
+  subtopicContentsTable,
+  subtopicQuestionsTable,
+  configUnitLinksTable,
+  subjectsTable,
+  unitLibraryTable,
+} from "../db";
+import { and, eq, inArray } from "drizzle-orm";
 import { randomUUID } from "crypto";
-import { runGeneration, getProgress } from "../lib/generator";
+import { runGeneration, getProgress, buildLaneAConfigPackage, isLikelyQuestionText } from "../lib/generator";
 import { requireAdmin } from "../middleware/adminAuth";
+import { askAI } from "../lib/ai";
+import { repairBrokenFormulaBullets } from "../lib/textFormatting";
 
 const router: IRouter = Router();
+
+type CheapImportProgress = {
+  configId: string;
+  status: "idle" | "processing" | "complete" | "error";
+  stage: "validating" | "saving_structure" | "saving_questions" | "finalizing" | "done";
+  processedQuestions: number;
+  totalQuestions: number;
+  message: string;
+  warnings: string[];
+  saved?: {
+    units: number;
+    questions: number;
+    reusedExplanations: number;
+    generatedExplanations: number;
+  };
+  error?: string;
+};
+
+const cheapImportProgressMap = new Map<string, CheapImportProgress>();
+
+function getCheapImportProgress(configId: string): CheapImportProgress {
+  return (
+    cheapImportProgressMap.get(configId) ?? {
+      configId,
+      status: "idle",
+      stage: "validating",
+      processedQuestions: 0,
+      totalQuestions: 0,
+      message: "Idle",
+      warnings: [],
+    }
+  );
+}
+
+function setCheapImportProgress(configId: string, updates: Partial<CheapImportProgress>) {
+  const current = getCheapImportProgress(configId);
+  cheapImportProgressMap.set(configId, {
+    ...current,
+    ...updates,
+    configId,
+  });
+}
+
+function normalizeText(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
+}
+
+function explanationKey(unitTitle: string, topicTitle: string, subtopicTitle: string): string {
+  return `${normalizeText(unitTitle)}|${normalizeText(topicTitle)}|${normalizeText(subtopicTitle)}`;
+}
+
+async function generateSubtopicExplanation(
+  subject: string,
+  unitTitle: string,
+  topicTitle: string,
+  subtopicTitle: string,
+): Promise<string> {
+  const prompt = `You are an exam prep writer for "${subject}".
+
+Write a crisp explanation for:
+- Unit: ${unitTitle}
+- Topic: ${topicTitle}
+- Subtopic: ${subtopicTitle}
+
+Requirements:
+- 60-100 words
+- Simple, clean, fast to revise
+- Include: what it is, why it matters, one short example/use-case
+- Use short paragraphs or bullets
+- Use very simple English for first-year beginners
+- Keep sentences short and direct
+- Avoid jargon unless absolutely necessary
+- Return plain text only.`;
+
+  const response = await askAI(
+    "You generate concise exam-ready explanations.",
+    prompt,
+    900,
+  );
+
+  return repairBrokenFormulaBullets(response.trim());
+}
+
+async function generateTopicExplanation(
+  subject: string,
+  unitTitle: string,
+  topicTitle: string,
+): Promise<string> {
+  const prompt = `You are an exam prep writer for "${subject}".
+
+Write a crisp topic explanation for:
+- Unit: ${unitTitle}
+- Topic: ${topicTitle}
+
+Requirements:
+- 50-90 words
+- Fast to revise, clear and practical
+- Mention core idea + why it matters
+- Use very simple English for first-year beginners
+- Keep sentences short and direct
+- Avoid jargon unless absolutely necessary
+- Return plain text only.`;
+
+  const response = await askAI(
+    "You generate concise exam-ready topic explanations.",
+    prompt,
+    700,
+  );
+
+  return repairBrokenFormulaBullets(response.trim());
+}
+
+async function loadReusableExplanationMap(
+  subject: string,
+  currentConfigId: string,
+): Promise<Map<string, string>> {
+  const sameSubjectConfigs = await db
+    .select({ id: configsTable.id })
+    .from(configsTable)
+    .where(eq(configsTable.subject, subject));
+
+  const otherConfigIds = sameSubjectConfigs
+    .map((c) => c.id)
+    .filter((id) => id !== currentConfigId);
+
+  if (otherConfigIds.length === 0) return new Map();
+
+  const historicalNodes = await db
+    .select({
+      id: nodesTable.id,
+      configId: nodesTable.configId,
+      title: nodesTable.title,
+      type: nodesTable.type,
+      parentId: nodesTable.parentId,
+    })
+    .from(nodesTable)
+    .where(inArray(nodesTable.configId, otherConfigIds));
+
+  if (historicalNodes.length === 0) return new Map();
+
+  const historicalNodeIds = historicalNodes.map((n) => n.id);
+  const historicalContents = await db
+    .select({
+      nodeId: subtopicContentsTable.nodeId,
+      explanation: subtopicContentsTable.explanation,
+    })
+    .from(subtopicContentsTable)
+    .where(inArray(subtopicContentsTable.nodeId, historicalNodeIds));
+
+  const contentByNodeId = new Map(historicalContents.map((c) => [c.nodeId, c.explanation]));
+  const nodesByConfig = new Map<string, Array<typeof historicalNodes[number]>>();
+
+  for (const node of historicalNodes) {
+    const list = nodesByConfig.get(node.configId) ?? [];
+    list.push(node);
+    nodesByConfig.set(node.configId, list);
+  }
+
+  const reuse = new Map<string, string>();
+  for (const configId of otherConfigIds) {
+    const configNodes = nodesByConfig.get(configId) ?? [];
+    if (configNodes.length === 0) continue;
+
+    const nodeById = new Map(configNodes.map((n) => [n.id, n]));
+    const subtopics = configNodes.filter((n) => n.type === "subtopic");
+
+    for (const sub of subtopics) {
+      const explanation = contentByNodeId.get(sub.id);
+      if (!explanation?.trim()) continue;
+      const topic = sub.parentId ? nodeById.get(sub.parentId) : null;
+      const unit = topic?.parentId ? nodeById.get(topic.parentId) : null;
+      if (!topic || !unit) continue;
+
+      const key = explanationKey(unit.title, topic.title, sub.title);
+      if (!reuse.has(key)) {
+        reuse.set(key, explanation);
+      }
+    }
+  }
+
+  return reuse;
+}
+
+type ImportUnit = {
+  title: string;
+  topics: Array<{
+    title: string;
+    explanation?: string;
+    subtopics: Array<{
+      title: string;
+      explanation: string;
+    }>;
+  }>;
+};
+
+type ImportQuestion = {
+  markType: "Foundational" | "Applied";
+  question: string;
+  answer: string;
+  unitTitle: string;
+  topicTitle: string;
+  subtopicTitle: string;
+  isStarred?: boolean;
+};
+
+function parseImportBody(body: unknown): { units: ImportUnit[]; questions: ImportQuestion[] } {
+  const unitsRaw = Array.isArray((body as any)?.units) ? (body as any).units : [];
+  const questionsRaw = Array.isArray((body as any)?.questions) ? (body as any).questions : [];
+
+  const units: ImportUnit[] = unitsRaw
+    .map((u: any) => ({
+      title: String(u?.title || "").trim(),
+      topics: (Array.isArray(u?.topics) ? u.topics : []).map((t: any) => ({
+      title: String(t?.title || "").trim(),
+        explanation: String(t?.explanation || "").trim(),
+        subtopics: (Array.isArray(t?.subtopics) ? t.subtopics : []).map((s: any) => ({
+          title: String(s?.title || "").trim(),
+          explanation: String(s?.explanation || "").trim(),
+        })).filter((s: any) => s.title),
+      })).filter((t: any) => t.title && t.subtopics.length > 0),
+    }))
+    .filter((u: any) => u.title && u.topics.length > 0);
+
+  const questions: ImportQuestion[] = questionsRaw
+    .map((q: any) => ({
+      markType: q?.markType === "Applied" ? "Applied" : "Foundational",
+      question: String(q?.question || "").trim(),
+      answer: String(q?.answer || "").trim(),
+      unitTitle: String(q?.unitTitle || "").trim(),
+      topicTitle: String(q?.topicTitle || "").trim(),
+      subtopicTitle: String(q?.subtopicTitle || "").trim(),
+      isStarred: Boolean(q?.isStarred),
+    }))
+    .filter((q: ImportQuestion) => q.question && q.answer && isLikelyQuestionText(q.question));
+
+  return { units, questions };
+}
+
+function normalizeUploadedObjectPath(rawPath: string): string {
+  let path = rawPath.trim();
+
+  // Support clients that accidentally send "objects/..." without a leading slash.
+  if (path.startsWith("objects/")) {
+    path = `/${path}`;
+  }
+
+  // Guard against accidental double-prefixing like "/objects//objects/<id>".
+  path = path.replace(/^\/objects\/+objects\//, "/objects/");
+  path = path.replace(/^\/supabase\/+supabase\//, "/supabase/");
+
+  return path;
+}
+
+function isSupportedStoragePath(path: string): boolean {
+  return path.startsWith("/objects/") || path.startsWith("/supabase/");
+}
 
 router.post("/configs", requireAdmin, async (req, res) => {
   try {
     const body = CreateConfigBody.parse(req.body);
     const userId = (req as any).userId as string;
+
+    const [existing] = await db
+      .select()
+      .from(configsTable)
+      .where(and(
+        eq(configsTable.universityId, body.universityId),
+        eq(configsTable.year, body.year),
+        eq(configsTable.branch, body.branch),
+        eq(configsTable.subject, body.subject),
+        eq(configsTable.exam, body.exam),
+      ))
+      .limit(1);
+
+    if (existing) {
+      if (existing.status === "disabled") {
+        await db
+          .update(configsTable)
+          .set({ status: "draft" })
+          .where(eq(configsTable.id, existing.id));
+
+        const [revived] = await db
+          .select()
+          .from(configsTable)
+          .where(eq(configsTable.id, existing.id))
+          .limit(1);
+
+        res.status(200).json({
+          id: revived.id,
+          universityId: revived.universityId,
+          year: revived.year,
+          branch: revived.branch,
+          subject: revived.subject,
+          exam: revived.exam,
+          status: revived.status,
+          createdBy: revived.createdBy,
+          createdAt: revived.createdAt?.toISOString(),
+          syllabusFileUrl: revived.syllabusFileUrl ?? null,
+          paperFileUrls: revived.paperFileUrls ?? null,
+          revived: true,
+        });
+        return;
+      }
+
+      res.status(409).json({
+        error: "A config for this subject, semester, branch, and exam already exists.",
+      });
+      return;
+    }
+
     const id = randomUUID().substring(0, 8);
 
     await db.insert(configsTable).values({
@@ -54,7 +370,7 @@ router.post("/configs", requireAdmin, async (req, res) => {
     });
   } catch (error) {
     req.log.error({ err: error }, "Failed to create config");
-    res.status(500).json({ error: "Internal server error" });
+    res.status(500).json({ error: error instanceof Error ? error.message : "Internal server error" });
   }
 });
 
@@ -62,14 +378,20 @@ router.post("/configs/:id/upload", requireAdmin, async (req, res) => {
   try {
     const { id } = UploadConfigFilesParams.parse(req.params);
     const body = UploadConfigFilesBody.parse(req.body);
-
-    if (!body.syllabusFileUrl.startsWith("/objects/")) {
-      res.status(400).json({ error: "syllabusFileUrl must be a valid object path starting with /objects/" });
+    const syllabusFileUrl = normalizeUploadedObjectPath(body.syllabusFileUrl);
+    const paperFileUrls = body.paperFileUrls.map((url) => normalizeUploadedObjectPath(url));
+    if (paperFileUrls.length > 1) {
+      res.status(400).json({ error: "Only one replica paper is allowed per config. Uploading again will replace it." });
       return;
     }
-    for (const url of body.paperFileUrls) {
-      if (!url.startsWith("/objects/")) {
-        res.status(400).json({ error: "paperFileUrls must be valid object paths starting with /objects/" });
+
+    if (!isSupportedStoragePath(syllabusFileUrl)) {
+      res.status(400).json({ error: "syllabusFileUrl must start with /objects/ or /supabase/" });
+      return;
+    }
+    for (const url of paperFileUrls) {
+      if (!isSupportedStoragePath(url)) {
+        res.status(400).json({ error: "paperFileUrls must start with /objects/ or /supabase/" });
         return;
       }
     }
@@ -88,8 +410,8 @@ router.post("/configs/:id/upload", requireAdmin, async (req, res) => {
     await db
       .update(configsTable)
       .set({
-        syllabusFileUrl: body.syllabusFileUrl,
-        paperFileUrls: body.paperFileUrls,
+        syllabusFileUrl,
+        paperFileUrls,
       })
       .where(eq(configsTable.id, id));
 
@@ -115,8 +437,13 @@ router.post("/configs/:id/generate", requireAdmin, async (req, res) => {
       return;
     }
 
-    if (!config.syllabusFileUrl) {
-      res.status(400).json({ error: "No syllabus file uploaded" });
+    const linkedUnits = await db
+      .select({ id: configUnitLinksTable.id })
+      .from(configUnitLinksTable)
+      .where(eq(configUnitLinksTable.configId, id));
+
+    if (!config.syllabusFileUrl && linkedUnits.length === 0) {
+      res.status(400).json({ error: "No syllabus uploaded and no reusable units selected" });
       return;
     }
 
@@ -180,4 +507,576 @@ router.post("/configs/:id/publish", requireAdmin, async (req, res) => {
   }
 });
 
+router.post("/configs/:id/cheap/lane-a", requireAdmin, async (req, res) => {
+  try {
+    const { id } = TriggerGenerationParams.parse(req.params);
+    const pkg = await buildLaneAConfigPackage(id);
+
+    const effectiveStarTarget = pkg.replicaQuestions.length > 0 ? pkg.totalStarTarget : 0;
+    const starredReplica = pkg.replicaQuestions.filter((q) => q.isStarred).length;
+    const remainingStarsNeeded = Math.max(0, effectiveStarTarget - starredReplica);
+    const remainingQuestionsNeeded = Math.max(0, pkg.totalQuestionTarget - pkg.replicaQuestions.length);
+
+    const masterPrompt = `You are generating exam-prep content for this config.
+
+STRICT OUTPUT: Return ONLY valid JSON in this exact shape:
+{
+  "units": [
+    {
+      "title": "Unit title",
+      "topics": [
+        {
+          "title": "Topic title",
+          "explanation": "50-90 word crisp topic explanation with one tiny example/use-case",
+          "subtopics": [
+            { "title": "Subtopic title", "explanation": "60-100 word crisp explanation with one tiny example/use-case" }
+          ]
+        }
+      ]
+    }
+  ],
+  "questions": [
+    {
+      "markType": "Foundational" | "Applied",
+      "question": "Question text",
+      "answer": "Concise exam-ready answer",
+      "unitTitle": "Unit title",
+      "topicTitle": "Topic title",
+      "subtopicTitle": "Subtopic title",
+      "isStarred": true | false
+    }
+  ]
+}
+
+CONSTRAINTS:
+- Keep the same unit/topic/subtopic structure.
+- Include all mandatory replica questions exactly as given below.
+- Total questions required: ${pkg.totalQuestionTarget}
+- Total starred required: ${effectiveStarTarget}
+- Replica questions already included: ${pkg.replicaQuestions.length}
+- Remaining questions to generate: ${remainingQuestionsNeeded}
+- Remaining starred to allocate across non-replica questions: ${remainingStarsNeeded}
+- Answers must be concise and cleanly formatted.
+- No duplicates.
+- Include only real exam questions (no metadata lines like Bloom levels K1/K2, Course Outcomes, Part/Section headers, Q.No tables, or instructions like "Answer any...").
+- Return exactly one JSON object and nothing else.
+- Do not wrap output in markdown/code fences.
+- Ensure JSON is syntactically valid:
+  - Escape inner double quotes inside string values (use \\").
+  - No trailing commas.
+  - Use true/false for booleans (not strings).
+- questions array must contain exactly ${pkg.totalQuestionTarget} items.
+- Exactly ${effectiveStarTarget} items must have "isStarred": true.
+- unitTitle/topicTitle/subtopicTitle in each question must exactly match titles from STRUCTURE.
+- markType must be only "Foundational" or "Applied".
+- Keep mandatory replica questions verbatim for question text.
+- Topic/subtopic explanations must be snappy and beginner-friendly.
+- Each topic/subtopic explanation must include one tiny concrete example/use-case.
+- Explanations must use short paragraphs (not one dense block).
+- Tone requirement (strict): beginner-friendly simple English only.
+- Foundational answers: 2-4 short lines, very direct, and include one tiny real-world example when it helps understanding.
+- Applied answers: 4-7 short lines with a tiny practical example.
+- Never write one dense paragraph answer; use line breaks and simple bullets/steps where useful.
+- Decide contextually:
+  - If the subject/question is technical and code genuinely improves clarity, you may include a short fenced code block.
+  - If the subject/question is non-technical, avoid code blocks and use short step-wise explanation with a tiny practical example.
+- If original marks are known from replica/sections, map marks to labels as:
+  1-3 marks => Foundational, 4+ marks => Applied.
+
+FINAL SELF-CHECK BEFORE OUTPUT (must pass all):
+1) JSON parses without error.
+2) units preserve the same hierarchy from STRUCTURE.
+3) questions.length === ${pkg.totalQuestionTarget}
+4) count(isStarred=true) === ${effectiveStarTarget}
+5) all mandatory replica questions are present.
+6) no duplicate question text after normalization.
+If any check fails, fix it before returning final JSON.
+
+GENERATION PROCEDURE (follow in order):
+Step A) Copy STRUCTURE into "units" exactly, then add explanations (60-100 words each).
+Step B) Start "questions" by inserting all MANDATORY_REPLICA_QUESTIONS first.
+Step C) Add exactly ${remainingQuestionsNeeded} new questions so total becomes ${pkg.totalQuestionTarget}.
+Step D) Keep total starred at exactly ${effectiveStarTarget}. Mandatory replicas are already starred.
+Step E) Re-check JSON validity and all counts before final answer.
+
+HARD FAILURE RULES:
+- Never return "questions": [].
+- Never return fewer or more than ${pkg.totalQuestionTarget} questions.
+- Never omit mandatory replica questions.
+- Never change question text of mandatory replica questions.
+
+STRUCTURE:
+${JSON.stringify(pkg.structure, null, 2)}
+
+MANDATORY_REPLICA_QUESTIONS:
+${JSON.stringify(pkg.replicaQuestions, null, 2)}
+`;
+
+    res.json({
+      success: true,
+      configId: pkg.configId,
+      subject: pkg.subject,
+      structure: pkg.structure,
+      replicaQuestions: pkg.replicaQuestions,
+      warnings: pkg.warnings,
+      replicaExtraction: pkg.replicaExtraction,
+      totalQuestionTarget: pkg.totalQuestionTarget,
+      totalStarTarget: effectiveStarTarget,
+      remainingQuestionsNeeded,
+      remainingStarsNeeded,
+      masterPrompt,
+    });
+  } catch (error) {
+    req.log.error({ err: error }, "Failed to build cheap lane A package");
+    res.status(500).json({ error: error instanceof Error ? error.message : "Internal server error" });
+  }
+});
+
+router.post("/configs/:id/cheap/import", requireAdmin, async (req, res) => {
+  try {
+    const { id } = TriggerGenerationParams.parse(req.params);
+    const userId = String((req as any).userId || "admin");
+    const result = await performCheapImport(id, req.body, userId, req.log);
+    res.json(result);
+  } catch (error) {
+    req.log.error({ err: error }, "Failed to import cheap lane B content");
+    res.status(500).json({ error: error instanceof Error ? error.message : "Internal server error" });
+  }
+});
+
+router.post("/configs/:id/cheap/import/start", requireAdmin, async (req, res) => {
+  try {
+    const { id } = TriggerGenerationParams.parse(req.params);
+    const current = getCheapImportProgress(id);
+    if (current.status === "processing") {
+      res.status(409).json({ error: "Cheap import is already running for this config." });
+      return;
+    }
+
+    const userId = String((req as any).userId || "admin");
+    setCheapImportProgress(id, {
+      status: "processing",
+      stage: "validating",
+      processedQuestions: 0,
+      totalQuestions: 0,
+      message: "Preparing import...",
+      warnings: [],
+      error: undefined,
+      saved: undefined,
+    });
+
+    void performCheapImport(id, req.body, userId, req.log)
+      .then((result) => {
+        setCheapImportProgress(id, {
+          status: "complete",
+          stage: "done",
+          message: "Import complete.",
+          warnings: result.warnings ?? [],
+          saved: result.saved as any,
+        });
+      })
+      .catch((error) => {
+        req.log.error({ err: error, configId: id }, "Background cheap import failed");
+        setCheapImportProgress(id, {
+          status: "error",
+          stage: "done",
+          message: "Import failed.",
+          error: error instanceof Error ? error.message : "Unknown error",
+        });
+      });
+
+    res.status(202).json({ success: true, configId: id, jobId: id });
+  } catch (error) {
+    req.log.error({ err: error }, "Failed to start cheap lane B import");
+    res.status(500).json({ error: error instanceof Error ? error.message : "Internal server error" });
+  }
+});
+
+router.get("/configs/:id/cheap/import-status", requireAdmin, async (req, res) => {
+  try {
+    const { id } = TriggerGenerationParams.parse(req.params);
+    res.json(getCheapImportProgress(id));
+  } catch (error) {
+    req.log.error({ err: error }, "Failed to get cheap import status");
+    res.status(500).json({ error: error instanceof Error ? error.message : "Internal server error" });
+  }
+});
+
+async function performCheapImport(
+  id: string,
+  rawBody: unknown,
+  userId: string,
+  reqLog: any,
+) {
+  try {
+    setCheapImportProgress(id, {
+      status: "processing",
+      stage: "validating",
+      message: "Validating JSON and preparing payload...",
+    });
+
+    const pkg = await buildLaneAConfigPackage(id);
+    const body = parseImportBody(rawBody);
+    const warnings: string[] = [];
+    const reusableExplanationMap = await loadReusableExplanationMap(pkg.subject, id);
+    let reusedExplanations = 0;
+    let generatedExplanations = 0;
+
+    if (body.units.length === 0) {
+      body.units = pkg.structure.map((u) => ({
+        title: u.title,
+        topics: u.topics.map((t) => ({
+          title: t.title,
+          explanation: "",
+          subtopics: t.subtopics.map((s) => ({
+            title: s,
+            explanation: "",
+          })),
+        })),
+      }));
+      warnings.push("No valid units found in import JSON. Used lane A structure and will auto-fill explanations.");
+    }
+
+    const mandatoryMap = new Map(pkg.replicaQuestions.map((q) => [normalizeText(q.question), q]));
+    const seen = new Set<string>();
+    let questions = body.questions.filter((q) => {
+      const key = normalizeText(q.question);
+      if (!key || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+
+    for (const mandatory of pkg.replicaQuestions) {
+      const key = normalizeText(mandatory.question);
+      const has = questions.some((q) => normalizeText(q.question) === key);
+      if (!has) {
+        questions.push({
+          markType: mandatory.markType,
+          question: mandatory.question,
+          answer: mandatory.answer,
+          unitTitle: mandatory.unitTitle,
+          topicTitle: mandatory.topicTitle,
+          subtopicTitle: mandatory.subtopicTitle,
+          isStarred: true,
+        });
+      }
+    }
+    if (pkg.replicaQuestions.length > 0) {
+      warnings.push("Mandatory replica questions were ensured during import.");
+    }
+
+    if (questions.length > pkg.totalQuestionTarget) {
+      const mandatoryKeys = new Set(pkg.replicaQuestions.map((q) => normalizeText(q.question)));
+      questions.sort((a, b) => {
+        const aMandatory = mandatoryKeys.has(normalizeText(a.question)) ? 1 : 0;
+        const bMandatory = mandatoryKeys.has(normalizeText(b.question)) ? 1 : 0;
+        const aStar = a.isStarred ? 1 : 0;
+        const bStar = b.isStarred ? 1 : 0;
+        return bMandatory - aMandatory || bStar - aStar;
+      });
+      questions = questions.slice(0, pkg.totalQuestionTarget);
+      warnings.push(`Question list exceeded ${pkg.totalQuestionTarget}; trimmed automatically.`);
+    }
+
+    if (questions.length < pkg.totalQuestionTarget) {
+      const flatSubtopics = body.units.flatMap((u) =>
+        u.topics.flatMap((t) =>
+          t.subtopics.map((s) => ({ unitTitle: u.title, topicTitle: t.title, subtopicTitle: s.title }))
+        )
+      );
+      let idx = 0;
+      while (questions.length < pkg.totalQuestionTarget && flatSubtopics.length > 0) {
+        const s = flatSubtopics[idx % flatSubtopics.length];
+        questions.push({
+          markType: idx % 2 === 0 ? "Foundational" : "Applied",
+          question: idx % 2 === 0 ? `Explain ${s.subtopicTitle}.` : `Apply ${s.subtopicTitle} with a practical example.`,
+          answer: idx % 2 === 0
+            ? `${s.subtopicTitle} is a key concept in ${s.topicTitle}. Define it, state why it matters, and add one tiny real-world example.`
+            : `Start with the core idea of ${s.subtopicTitle}, then show a short practical workflow and expected outcome.`,
+          unitTitle: s.unitTitle,
+          topicTitle: s.topicTitle,
+          subtopicTitle: s.subtopicTitle,
+          isStarred: false,
+        });
+        idx++;
+      }
+      warnings.push("Question list was below target; auto-filled remaining with template questions.");
+    }
+
+    setCheapImportProgress(id, {
+      stage: "saving_structure",
+      totalQuestions: questions.length,
+      processedQuestions: 0,
+      message: "Saving units, topics, and subtopics...",
+      warnings,
+    });
+
+    const starredTarget = pkg.replicaQuestions.length > 0 ? pkg.totalStarTarget : 0;
+    let starredCount = questions.filter((q) => q.isStarred).length;
+    if (starredCount < starredTarget) {
+      for (const q of questions) {
+        if (starredCount >= starredTarget) break;
+        if (!q.isStarred) {
+          q.isStarred = true;
+          starredCount++;
+        }
+      }
+      warnings.push(`Star count was low; auto-adjusted to ${starredTarget}.`);
+    } else if (starredCount > starredTarget) {
+      const mandatoryKeys = new Set(pkg.replicaQuestions.map((q) => normalizeText(q.question)));
+      for (let i = questions.length - 1; i >= 0 && starredCount > starredTarget; i--) {
+        const q = questions[i];
+        if (q.isStarred && !mandatoryKeys.has(normalizeText(q.question))) {
+          q.isStarred = false;
+          starredCount--;
+        }
+      }
+      for (let i = questions.length - 1; i >= 0 && starredCount > starredTarget; i--) {
+        const q = questions[i];
+        if (q.isStarred) {
+          q.isStarred = false;
+          starredCount--;
+        }
+      }
+      warnings.push(`Star count exceeded target; auto-trimmed to ${starredTarget}.`);
+    }
+
+    const nodeIdByPath = new Map<string, string>();
+
+    await db.transaction(async (tx) => {
+      const existingNodes = await tx
+        .select({ id: nodesTable.id })
+        .from(nodesTable)
+        .where(eq(nodesTable.configId, id));
+      if (existingNodes.length > 0) {
+        const nodeIds = existingNodes.map((n) => n.id);
+        await tx.delete(subtopicQuestionsTable).where(inArray(subtopicQuestionsTable.nodeId, nodeIds));
+        await tx.delete(subtopicContentsTable).where(inArray(subtopicContentsTable.nodeId, nodeIds));
+        await tx.delete(nodesTable).where(eq(nodesTable.configId, id));
+      }
+
+      for (let ui = 0; ui < body.units.length; ui++) {
+        const unit = body.units[ui];
+        const unitId = `${id}_u${ui + 1}`;
+        await tx.insert(nodesTable).values({
+          id: unitId,
+          configId: id,
+          title: unit.title,
+          type: "unit",
+          parentId: null,
+          sortOrder: String(ui + 1),
+        });
+
+        for (let ti = 0; ti < unit.topics.length; ti++) {
+          const topic = unit.topics[ti];
+          const topicId = `${id}_u${ui + 1}_t${ti + 1}`;
+          let topicExplanation = (topic.explanation || "").trim();
+          if (!topicExplanation) {
+            try {
+              topicExplanation = await generateTopicExplanation(
+                pkg.subject,
+                unit.title,
+                topic.title,
+              );
+            } catch {
+              topicExplanation = "Topic summary will be updated soon.";
+            }
+          }
+          await tx.insert(nodesTable).values({
+            id: topicId,
+            configId: id,
+            title: topic.title,
+            type: "topic",
+            parentId: unitId,
+            explanation: repairBrokenFormulaBullets(topicExplanation),
+            sortOrder: String(ti + 1),
+          });
+
+          for (let si = 0; si < topic.subtopics.length; si++) {
+            const sub = topic.subtopics[si];
+            const subId = `${id}_u${ui + 1}_t${ti + 1}_s${si + 1}`;
+            const key = explanationKey(unit.title, topic.title, sub.title);
+            let explanation = (sub.explanation || "").trim();
+            if (!explanation) {
+              const reused = reusableExplanationMap.get(key);
+              if (reused?.trim()) {
+                explanation = reused;
+                reusedExplanations++;
+              } else {
+                try {
+                  explanation = await generateSubtopicExplanation(
+                    pkg.subject,
+                    unit.title,
+                    topic.title,
+                    sub.title,
+                  );
+                  generatedExplanations++;
+                } catch {
+                  explanation = "Content will be updated soon.";
+                }
+              }
+            }
+            await tx.insert(nodesTable).values({
+              id: subId,
+              configId: id,
+              title: sub.title,
+              type: "subtopic",
+              parentId: topicId,
+              sortOrder: String(si + 1),
+            });
+            await tx.insert(subtopicContentsTable).values({
+              id: randomUUID(),
+              nodeId: subId,
+              explanation: repairBrokenFormulaBullets(explanation),
+            });
+            nodeIdByPath.set(key, subId);
+          }
+        }
+      }
+
+      const normalizedSubject = normalizeText(pkg.subject);
+      let [subject] = await tx
+        .select({ id: subjectsTable.id })
+        .from(subjectsTable)
+        .where(eq(subjectsTable.normalizedName, normalizedSubject))
+        .limit(1);
+
+      if (!subject) {
+        const subjectId = `sub_${randomUUID().substring(0, 8)}`;
+        await tx.insert(subjectsTable).values({
+          id: subjectId,
+          name: pkg.subject,
+          normalizedName: normalizedSubject,
+          createdBy: userId,
+        });
+        subject = { id: subjectId };
+      }
+
+      for (const unit of body.units) {
+        const normalizedUnitTitle = normalizeText(unit.title);
+        if (!normalizedUnitTitle) continue;
+        const topics = unit.topics.map((t) => ({
+          title: t.title,
+          subtopics: t.subtopics.map((s) => s.title),
+        }));
+
+        const [existing] = await tx
+          .select({ id: unitLibraryTable.id })
+          .from(unitLibraryTable)
+          .where(and(
+            eq(unitLibraryTable.subjectId, subject.id),
+            eq(unitLibraryTable.normalizedUnitTitle, normalizedUnitTitle),
+          ))
+          .limit(1);
+
+        if (existing) {
+          await tx
+            .update(unitLibraryTable)
+            .set({
+              unitTitle: unit.title,
+              topics,
+            sourceText: "Imported from cheap mode",
+            updatedAt: new Date(),
+          })
+            .where(eq(unitLibraryTable.id, existing.id));
+        } else {
+          await tx.insert(unitLibraryTable).values({
+            id: `unit_${randomUUID().substring(0, 8)}`,
+            subjectId: subject.id,
+            unitTitle: unit.title,
+            normalizedUnitTitle,
+            topics,
+            sourceText: "Imported from cheap mode",
+            createdBy: userId,
+          });
+        }
+      }
+    });
+
+    setCheapImportProgress(id, {
+      stage: "saving_questions",
+      message: "Saving question bank...",
+    });
+
+    let processedQuestions = 0;
+    for (let i = 0; i < questions.length; i++) {
+      const q = questions[i];
+      const key = `${normalizeText(q.unitTitle)}|${normalizeText(q.topicTitle)}|${normalizeText(q.subtopicTitle)}`;
+      const nodeId = nodeIdByPath.get(key) || Array.from(nodeIdByPath.values())[0];
+      if (!nodeId) continue;
+
+      await db.insert(subtopicQuestionsTable).values({
+        nodeId,
+        markType: q.markType,
+        question: q.question,
+        answer: q.answer,
+        isStarred: !!q.isStarred,
+        starSource: q.isStarred ? "manual" : "none",
+      });
+
+      processedQuestions++;
+      if (processedQuestions % 10 === 0 || processedQuestions === questions.length) {
+        setCheapImportProgress(id, {
+          stage: "saving_questions",
+          processedQuestions,
+          totalQuestions: questions.length,
+          message: `Saving questions (${processedQuestions}/${questions.length})`,
+          warnings,
+        });
+      }
+    }
+
+    setCheapImportProgress(id, {
+      stage: "finalizing",
+      processedQuestions: questions.length,
+      totalQuestions: questions.length,
+      message: "Finalizing import...",
+      warnings,
+    });
+
+    return {
+      success: true,
+      warnings,
+      saved: {
+        units: body.units.length,
+        questions: questions.length,
+        reusedExplanations,
+        generatedExplanations,
+      },
+    };
+  } catch (error) {
+    reqLog.error({ err: error }, "Failed to import cheap lane B content");
+    throw error;
+  }
+}
+
+router.delete("/configs/:id", requireAdmin, async (req, res) => {
+  try {
+    const { id } = PublishConfigParams.parse(req.params);
+
+    const [config] = await db
+      .select({ id: configsTable.id })
+      .from(configsTable)
+      .where(eq(configsTable.id, id))
+      .limit(1);
+
+    if (!config) {
+      res.status(404).json({ error: "Config not found" });
+      return;
+    }
+
+    // Disable only: keep units/topics/subtopics + explanations + Q&A + events for reuse.
+    await db
+      .update(configsTable)
+      .set({ status: "disabled" })
+      .where(eq(configsTable.id, id));
+
+    res.json({ success: true, disabled: true });
+  } catch (error) {
+    req.log.error({ err: error }, "Failed to delete config");
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
 export default router;
+
