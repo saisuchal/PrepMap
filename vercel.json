@@ -3,6 +3,12 @@
   "installCommand": "pnpm install --frozen-lockfile",
   "buildCommand": "pnpm --dir artifacts/api-server run build && pnpm --filter prepmap-exam-roadmap run build",
   "outputDirectory": "artifacts/exam-roadmap/dist/public",
+  "rewrites": [
+    {
+      "source": "/((?!api/).*)",
+      "destination": "/index.html"
+    }
+  ],
   "functions": {
     "api/**/*.ts": {
       "maxDuration": 60
