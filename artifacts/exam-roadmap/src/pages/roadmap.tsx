@@ -1204,11 +1204,76 @@ function QuestionBankModal({
     () => (data?.questions ?? []).filter((q) => isLikelyQuestionText(q.question)),
     [data?.questions]
   );
-  const foundational = validQuestions.filter((q) => q.markType === "Foundational");
-  const applied = validQuestions.filter((q) => q.markType === "Applied");
-  const questionNumberById = useMemo(
-    () => new Map(validQuestions.map((q, idx) => [q.id, idx + 1])),
-    [validQuestions]
+  const seededHash = useCallback((value: string) => {
+    let h = 2166136261;
+    for (let i = 0; i < value.length; i++) {
+      h ^= value.charCodeAt(i);
+      h = Math.imul(h, 16777619);
+    }
+    return h >>> 0;
+  }, []);
+
+  const distributeStarred = useCallback(
+    <T extends { id: number; isStarred?: boolean }>(items: T[]): T[] => {
+      if (items.length <= 2) return items;
+
+      const starred = items
+        .filter((q) => !!q.isStarred)
+        .slice()
+        .sort((a, b) => seededHash(`${configId}:${a.id}`) - seededHash(`${configId}:${b.id}`));
+      const nonStarred = items
+        .filter((q) => !q.isStarred)
+        .slice()
+        .sort((a, b) => seededHash(`${configId}:${a.id}`) - seededHash(`${configId}:${b.id}`));
+
+      if (starred.length === 0 || nonStarred.length === 0) {
+        return [...items].sort(
+          (a, b) => seededHash(`${configId}:${a.id}`) - seededHash(`${configId}:${b.id}`),
+        );
+      }
+
+      const total = items.length;
+      const out: T[] = new Array(total);
+      const starredSlots = new Set<number>();
+      for (let i = 0; i < starred.length; i++) {
+        const slot = Math.min(total - 1, Math.floor(((i + 0.5) * total) / starred.length));
+        let s = slot;
+        while (starredSlots.has(s) && s < total - 1) s++;
+        while (starredSlots.has(s) && s > 0) s--;
+        starredSlots.add(s);
+      }
+
+      let si = 0;
+      let ni = 0;
+      for (let i = 0; i < total; i++) {
+        if (starredSlots.has(i) && si < starred.length) {
+          out[i] = starred[si++];
+        } else if (ni < nonStarred.length) {
+          out[i] = nonStarred[ni++];
+        } else if (si < starred.length) {
+          out[i] = starred[si++];
+        }
+      }
+      return out.filter(Boolean);
+    },
+    [configId, seededHash],
+  );
+
+  const foundational = useMemo(
+    () => distributeStarred(validQuestions.filter((q) => q.markType === "Foundational")),
+    [validQuestions, distributeStarred],
+  );
+  const applied = useMemo(
+    () => distributeStarred(validQuestions.filter((q) => q.markType === "Applied")),
+    [validQuestions, distributeStarred],
+  );
+  const foundationalNumberById = useMemo(
+    () => new Map(foundational.map((q, idx) => [q.id, idx + 1])),
+    [foundational]
+  );
+  const appliedNumberById = useMemo(
+    () => new Map(applied.map((q, idx) => [q.id, idx + 1])),
+    [applied]
   );
   const [selectedQuestion, setSelectedQuestion] = useState<{
     id: number;
@@ -1408,7 +1473,7 @@ function QuestionBankModal({
                       onOpenDetail={() => {
                         setSelectedQuestion({
                           id: q.id,
-                          number: questionNumberById.get(q.id) ?? 0,
+                          number: foundationalNumberById.get(q.id) ?? 0,
                           label: "Foundational",
                           starred: !!q.isStarred,
                           hasCodeBlock: hasCodeBlock(q.answer),
@@ -1418,7 +1483,7 @@ function QuestionBankModal({
                           subtopicId: q.subtopicId,
                         });
                       }}
-                      questionNumber={questionNumberById.get(q.id) ?? 0}
+                      questionNumber={foundationalNumberById.get(q.id) ?? 0}
                       interacted={hasQuestionInteraction(q.id)}
                       label="Foundational"
                       starred={!!q.isStarred}
@@ -1439,7 +1504,7 @@ function QuestionBankModal({
                       onOpenDetail={() => {
                         setSelectedQuestion({
                           id: q.id,
-                          number: questionNumberById.get(q.id) ?? 0,
+                          number: appliedNumberById.get(q.id) ?? 0,
                           label: "Applied",
                           starred: !!q.isStarred,
                           hasCodeBlock: hasCodeBlock(q.answer),
@@ -1449,7 +1514,7 @@ function QuestionBankModal({
                           subtopicId: q.subtopicId,
                         });
                       }}
-                      questionNumber={questionNumberById.get(q.id) ?? 0}
+                      questionNumber={appliedNumberById.get(q.id) ?? 0}
                       interacted={hasQuestionInteraction(q.id)}
                       label="Applied"
                       starred={!!q.isStarred}
