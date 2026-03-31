@@ -456,7 +456,12 @@ export default function Roadmap() {
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [isDragging, setIsDragging] = useState(false);
+  const [isPinching, setIsPinching] = useState(false);
+  const [isMobileViewport, setIsMobileViewport] = useState(
+    typeof window !== "undefined" ? window.innerWidth < 768 : false
+  );
   const dragStart = useRef({ x: 0, y: 0, panX: 0, panY: 0 });
+  const pinchStart = useRef({ distance: 0, zoom: 1 });
 
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [questionBankOpen, setQuestionBankOpen] = useState(false);
@@ -562,6 +567,21 @@ export default function Roadmap() {
     });
   }, [allNodes.length, canvasW]);
 
+  const fitToViewport = useCallback(() => {
+    if (!containerRef.current || allNodes.length === 0) return;
+    const containerW = containerRef.current.clientWidth;
+    const containerH = containerRef.current.clientHeight;
+    const mobilePad = isMobileViewport ? 28 : 60;
+    const scaleX = containerW / (canvasW + mobilePad);
+    const scaleY = containerH / (canvasH + mobilePad);
+    const fitZoom = Math.max(0.2, Math.min(1.6, Math.min(scaleX, scaleY)));
+    setZoom(fitZoom);
+    setPan({
+      x: (containerW - canvasW * fitZoom) / 2,
+      y: (containerH - canvasH * fitZoom) / 2,
+    });
+  }, [allNodes.length, canvasW, canvasH, isMobileViewport]);
+
   const getMinVisibleZoom = useCallback(() => {
     if (!containerRef.current || allNodes.length === 0) return 0.2;
     const containerW = containerRef.current.clientWidth;
@@ -573,12 +593,19 @@ export default function Roadmap() {
 
   useEffect(() => {
     if (viewMode === "map") {
-      fitToWidth();
+      if (isMobileViewport) fitToViewport();
+      else fitToWidth();
     }
     // Intentionally exclude fitToWidth so expand/collapse layout updates
     // don't retrigger auto-fit and jump the viewport.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [viewMode, configId]);
+  }, [viewMode, configId, isMobileViewport, fitToViewport]);
+
+  useEffect(() => {
+    const onResize = () => setIsMobileViewport(window.innerWidth < 768);
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
 
   useEffect(() => {
     if (!configId) return;
@@ -609,12 +636,33 @@ export default function Roadmap() {
 
   const handleTouchStart = useCallback((e: React.TouchEvent) => {
     if ((e.target as HTMLElement).closest("[data-node]")) return;
+    if (e.touches.length === 2) {
+      const [a, b] = [e.touches[0], e.touches[1]];
+      const dx = b.clientX - a.clientX;
+      const dy = b.clientY - a.clientY;
+      pinchStart.current = { distance: Math.hypot(dx, dy), zoom };
+      setIsPinching(true);
+      setIsDragging(false);
+      return;
+    }
     const touch = e.touches[0];
     setIsDragging(true);
     dragStart.current = { x: touch.clientX, y: touch.clientY, panX: pan.x, panY: pan.y };
-  }, [pan]);
+  }, [pan, zoom]);
 
   const handleTouchMove = useCallback((e: React.TouchEvent) => {
+    if (isPinching && e.touches.length === 2) {
+      const [a, b] = [e.touches[0], e.touches[1]];
+      const dx = b.clientX - a.clientX;
+      const dy = b.clientY - a.clientY;
+      const distance = Math.hypot(dx, dy);
+      const ratio = pinchStart.current.distance > 0 ? distance / pinchStart.current.distance : 1;
+      const minZoom = getMinVisibleZoom();
+      const nextZoom = Math.max(minZoom, Math.min(2.2, pinchStart.current.zoom * ratio));
+      setZoom(nextZoom);
+      return;
+    }
+
     if (!isDragging) return;
     const touch = e.touches[0];
     setPan(
@@ -624,7 +672,16 @@ export default function Roadmap() {
         zoom
       )
     );
-  }, [isDragging, clampPan, zoom]);
+  }, [isDragging, isPinching, clampPan, zoom, getMinVisibleZoom]);
+
+  const handleTouchEnd = useCallback((e: React.TouchEvent) => {
+    if (e.touches.length < 2 && isPinching) {
+      setIsPinching(false);
+    }
+    if (e.touches.length === 0) {
+      setIsDragging(false);
+    }
+  }, [isPinching]);
 
   const handleWheel = useCallback((e: React.WheelEvent) => {
     // Wheel only pans. Zoom is controlled via +/- buttons.
@@ -675,61 +732,64 @@ export default function Roadmap() {
 
   return (
     <div className="flex flex-col h-[calc(100vh-4rem)]">
-      <div className="flex items-center justify-between px-4 sm:px-6 py-3 border-b border-border bg-card shrink-0">
-        <div className="flex items-center gap-3 min-w-0">
-          <Button variant="ghost" size="icon" className="shrink-0" onClick={() => setLocation("/home")}>
-            <ArrowLeft className="w-4 h-4" />
-          </Button>
-          <div className="min-w-0">
-            <h1 className="text-lg sm:text-xl font-display font-bold text-foreground truncate flex items-center gap-2">
-              <Layers className="w-5 h-5 text-primary shrink-0" />
-              {subject}
-            </h1>
-            {subtitleMeta && <p className="text-xs text-muted-foreground truncate">{subtitleMeta}</p>}
+      <div className="px-4 sm:px-6 py-3 border-b border-border bg-card shrink-0">
+        <div className="flex items-start justify-between gap-3">
+          <div className="flex items-center gap-3 min-w-0">
+            <Button variant="ghost" size="icon" className="shrink-0" onClick={() => setLocation("/home")}>
+              <ArrowLeft className="w-4 h-4" />
+            </Button>
+            <div className="min-w-0">
+              <h1 className="text-lg sm:text-xl font-display font-bold text-foreground truncate flex items-center gap-2">
+                <Layers className="w-5 h-5 text-primary shrink-0" />
+                {subject}
+              </h1>
+              {subtitleMeta && <p className="text-xs text-muted-foreground truncate">{subtitleMeta}</p>}
+            </div>
+          </div>
+          <div className="flex items-center gap-1 shrink-0">
+            <Button
+              variant={viewMode === "list" ? "default" : "outline"}
+              size="sm"
+              className="h-8 px-3 gap-1.5"
+              onClick={() => setViewMode("list")}
+            >
+              <List className="w-3.5 h-3.5" />
+              List
+            </Button>
+            <Button
+              variant={viewMode === "map" ? "default" : "outline"}
+              size="sm"
+              className="h-8 px-3 gap-1.5"
+              onClick={() => setViewMode("map")}
+            >
+              <Layers className="w-3.5 h-3.5" />
+              Map
+            </Button>
           </div>
         </div>
-        <div className="flex items-center gap-1 shrink-0">
-          <Button
-            variant={viewMode === "list" ? "default" : "outline"}
-            size="sm"
-            className="h-8 px-3 gap-1.5"
-            onClick={() => setViewMode("list")}
-          >
-            <List className="w-3.5 h-3.5" />
-            List
-          </Button>
-          <Button
-            variant={viewMode === "map" ? "default" : "outline"}
-            size="sm"
-            className="h-8 px-3 gap-1.5"
-            onClick={() => setViewMode("map")}
-          >
-            <Layers className="w-3.5 h-3.5" />
-            Map
-          </Button>
-          {viewMode === "map" && (
-            <>
-              <Button variant="outline" size="sm" className="h-8 px-2.5 text-xs" onClick={expandAllTopics}>
-                Expand all
-              </Button>
-              <Button variant="outline" size="sm" className="h-8 px-2.5 text-xs" onClick={collapseAllTopics}>
-                Collapse topics
-              </Button>
-              <Button variant="outline" size="sm" className="h-8 px-2.5 text-xs" onClick={fitToWidth}>
-                Fit width
-              </Button>
-              <Button variant="outline" size="icon" className="h-8 w-8" onClick={() => setZoom(z => Math.min(2, z * 1.2))}>
-                <ZoomIn className="w-3.5 h-3.5" />
-              </Button>
-              <Button variant="outline" size="icon" className="h-8 w-8" onClick={handleZoomOut}>
-                <ZoomOut className="w-3.5 h-3.5" />
-              </Button>
-              <Button variant="outline" size="icon" className="h-8 w-8" onClick={resetView}>
-                <Maximize2 className="w-3.5 h-3.5" />
-              </Button>
-            </>
-          )}
-        </div>
+
+        {viewMode === "map" && (
+          <div className="hidden sm:flex items-center gap-1 mt-3">
+            <Button variant="outline" size="sm" className="h-8 px-2.5 text-xs" onClick={expandAllTopics}>
+              Expand all
+            </Button>
+            <Button variant="outline" size="sm" className="h-8 px-2.5 text-xs" onClick={collapseAllTopics}>
+              Collapse topics
+            </Button>
+            <Button variant="outline" size="sm" className="h-8 px-2.5 text-xs" onClick={fitToWidth}>
+              Fit width
+            </Button>
+            <Button variant="outline" size="icon" className="h-8 w-8" onClick={() => setZoom(z => Math.min(2, z * 1.2))}>
+              <ZoomIn className="w-3.5 h-3.5" />
+            </Button>
+            <Button variant="outline" size="icon" className="h-8 w-8" onClick={handleZoomOut}>
+              <ZoomOut className="w-3.5 h-3.5" />
+            </Button>
+            <Button variant="outline" size="icon" className="h-8 w-8" onClick={resetView}>
+              <Maximize2 className="w-3.5 h-3.5" />
+            </Button>
+          </div>
+        )}
       </div>
 
       {viewMode === "list" ? (
@@ -827,14 +887,14 @@ export default function Roadmap() {
         <div
           ref={containerRef}
           className="flex-1 overflow-hidden bg-[#f8fafc] relative select-none"
-          style={{ cursor: isDragging ? "grabbing" : "grab" }}
+          style={{ cursor: isDragging ? "grabbing" : "grab", touchAction: "none" }}
           onMouseDown={handleMouseDown}
           onMouseMove={handleMouseMove}
           onMouseUp={handleMouseUp}
           onMouseLeave={handleMouseUp}
           onTouchStart={handleTouchStart}
           onTouchMove={handleTouchMove}
-          onTouchEnd={handleMouseUp}
+          onTouchEnd={handleTouchEnd}
           onWheel={handleWheel}
         >
           <div className="absolute inset-0 bg-[radial-gradient(circle,#e2e8f0_1px,transparent_1px)] bg-[length:24px_24px] opacity-50" />
@@ -977,6 +1037,47 @@ export default function Roadmap() {
               </div>
             </div>
           )}
+
+          {viewMode === "map" && (
+            <div className="sm:hidden absolute right-3 bottom-3 z-20 flex flex-col gap-2 rounded-xl border border-border/80 bg-card/95 backdrop-blur p-2 shadow-lg">
+              <Button
+                variant="outline"
+                size="icon"
+                className="h-9 w-9"
+                onClick={() => setZoom((z) => Math.min(2.2, z * 1.2))}
+                title="Zoom in"
+              >
+                <ZoomIn className="w-4 h-4" />
+              </Button>
+              <Button
+                variant="outline"
+                size="icon"
+                className="h-9 w-9"
+                onClick={handleZoomOut}
+                title="Zoom out"
+              >
+                <ZoomOut className="w-4 h-4" />
+              </Button>
+              <Button
+                variant="outline"
+                size="icon"
+                className="h-9 w-9"
+                onClick={resetView}
+                title="Reset view"
+              >
+                <Maximize2 className="w-4 h-4" />
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-8 px-2 text-[10px]"
+                onClick={fitToViewport}
+                title="Fit map"
+              >
+                Fit
+              </Button>
+            </div>
+          )}
         </div>
       )}
 
@@ -1099,7 +1200,7 @@ function ContentModal({
         animate={{ opacity: 1, y: 0, scale: 1 }}
         exit={{ opacity: 0, y: 40, scale: 0.97 }}
         transition={{ type: "spring", damping: 25, stiffness: 300 }}
-        className="relative bg-card rounded-t-2xl sm:rounded-2xl w-full sm:max-w-2xl max-h-[85vh] sm:max-h-[80vh] min-h-[50vh] sm:min-h-[40vh] flex flex-col shadow-2xl border border-border overflow-hidden"
+        className="relative bg-card rounded-t-2xl sm:rounded-2xl w-full sm:max-w-2xl h-[92dvh] sm:h-auto max-h-[92dvh] sm:max-h-[80vh] min-h-[55vh] sm:min-h-[40vh] flex flex-col shadow-2xl border border-border overflow-hidden pb-[max(env(safe-area-inset-bottom),0.5rem)]"
       >
         <div className={`flex items-center justify-between px-5 sm:px-6 py-4 border-b border-border shrink-0 ${colors.light}`}>
           <div className="flex items-center gap-3 min-w-0">
@@ -1381,7 +1482,7 @@ function QuestionBankModal({
         animate={{ opacity: 1, y: 0, scale: 1 }}
         exit={{ opacity: 0, y: 40, scale: 0.97 }}
         transition={{ type: "spring", damping: 25, stiffness: 300 }}
-        className="relative bg-card rounded-t-2xl sm:rounded-2xl w-full sm:max-w-4xl max-h-[88vh] min-h-[50vh] flex flex-col shadow-2xl border border-border overflow-hidden"
+        className="relative bg-card rounded-t-2xl sm:rounded-2xl w-full sm:max-w-4xl h-[92dvh] sm:h-auto max-h-[92dvh] sm:max-h-[88vh] min-h-[55vh] flex flex-col shadow-2xl border border-border overflow-hidden pb-[max(env(safe-area-inset-bottom),0.5rem)]"
       >
         <div className="flex items-center justify-between px-5 sm:px-6 py-4 border-b border-border shrink-0 bg-blue-50">
           <div className="min-w-0">

@@ -7,6 +7,7 @@ import {
   useGetAppMetadata,
   useGetQuestionBankInteractionSummary,
   useGetLiveConfigQuestionBankInteractionSummary,
+  useGetUniversityAnalytics,
   useGetConfigStudentProgress,
   useGetQuestionBank,
   useGetLibrarySubjects,
@@ -742,10 +743,18 @@ function AnalyticsTab() {
   } = useGetConfigs({}, { query: { queryKey: ["configs", "all"] } });
   const { data: questionBankInteractionSummary } = useGetQuestionBankInteractionSummary();
   const { data: liveConfigQbSummary } = useGetLiveConfigQuestionBankInteractionSummary();
+  const { data: universityAnalytics } = useGetUniversityAnalytics();
   const liveConfigs = useMemo(
     () => (allConfigs ?? []).filter((cfg) => cfg.status === "live"),
     [allConfigs]
   );
+  const studentCountByUniversity = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const row of universityAnalytics ?? []) {
+      map.set(row.universityId, row.totalStudents ?? 0);
+    }
+    return map;
+  }, [universityAnalytics]);
   const universityRows = useMemo(
     () =>
       universities.map((u) => ({
@@ -781,6 +790,38 @@ function AnalyticsTab() {
   );
   const { data: selectedConfigQuestionBank } = useGetQuestionBank(selectedConfigId);
   const { data: stats } = useGetAdminStats();
+  const getStudentRating = (subtopicPercent: number, qbPercent: number): "Poor" | "Average" | "Good" => {
+    if (subtopicPercent <= 30 || qbPercent <= 50) return "Poor";
+    if (subtopicPercent >= 75 && qbPercent >= 75) return "Good";
+    if (subtopicPercent >= 50 && qbPercent >= 50) return "Average";
+    return "Poor";
+  };
+  const selectedConfigRatingCounts = useMemo(() => {
+    const counts = { Poor: 0, Average: 0, Good: 0 };
+    if (!studentProgress) return counts;
+
+    const totalQuestions = selectedConfigQuestionBank?.total ?? 0;
+    for (const s of studentProgress.students) {
+      const subtopicPercent = Math.round(s.progressPercent);
+      const rawQbInteractions = s.questionBankInteractions ?? 0;
+      const normalizedQbInteractions =
+        totalQuestions > 0 ? Math.min(rawQbInteractions, totalQuestions) : 0;
+      const qbPercent =
+        totalQuestions > 0 ? Math.round((normalizedQbInteractions / totalQuestions) * 100) : 0;
+      const rating = getStudentRating(subtopicPercent, qbPercent);
+      counts[rating] += 1;
+    }
+    return counts;
+  }, [studentProgress, selectedConfigQuestionBank]);
+  const selectedConfigRatingPercents = useMemo(() => {
+    const total = studentProgress?.students.length ?? 0;
+    const toPercent = (count: number) => (total > 0 ? Math.round((count / total) * 100) : 0);
+    return {
+      Poor: toPercent(selectedConfigRatingCounts.Poor),
+      Average: toPercent(selectedConfigRatingCounts.Average),
+      Good: toPercent(selectedConfigRatingCounts.Good),
+    };
+  }, [studentProgress, selectedConfigRatingCounts]);
 
   return (
     <div>
@@ -836,6 +877,7 @@ function AnalyticsTab() {
             <thead>
               <tr className="border-b border-border text-xs uppercase tracking-wider text-muted-foreground">
                 <th className="px-6 py-4 font-semibold">University</th>
+                <th className="px-6 py-4 font-semibold text-right">Students</th>
                 <th className="px-6 py-4 font-semibold text-right">Live Configs</th>
                 <th className="px-6 py-4 font-semibold text-right">Actions</th>
               </tr>
@@ -846,12 +888,13 @@ function AnalyticsTab() {
                   <tr key={i}>
                     <td className="px-6 py-4"><div className="h-5 bg-muted animate-pulse rounded w-3/4" /></td>
                     <td className="px-6 py-4"><div className="h-5 bg-muted animate-pulse rounded w-1/3 ml-auto" /></td>
+                    <td className="px-6 py-4"><div className="h-5 bg-muted animate-pulse rounded w-1/3 ml-auto" /></td>
                     <td className="px-6 py-4"><div className="h-8 bg-muted animate-pulse rounded w-24 ml-auto" /></td>
                   </tr>
                 ))
               ) : configsError ? (
                 <tr>
-                  <td colSpan={3} className="px-6 py-12 text-center text-destructive">
+                  <td colSpan={4} className="px-6 py-12 text-center text-destructive">
                     Failed to load analytics: {configsErrorDetails instanceof Error ? configsErrorDetails.message : "Unknown error"}
                   </td>
                 </tr>
@@ -867,6 +910,11 @@ function AnalyticsTab() {
                     >
                       <td className="px-6 py-4 font-medium text-foreground">
                         {uniLabel(row.universityId)}
+                      </td>
+                      <td className="px-6 py-4 text-right">
+                        <span className="font-display font-bold text-foreground">
+                          {studentCountByUniversity.get(row.universityId) ?? 0}
+                        </span>
                       </td>
                       <td className="px-6 py-4 text-right">
                         <span className="font-display font-bold text-foreground">{row.liveConfigs.length}</span>
@@ -977,6 +1025,18 @@ function AnalyticsTab() {
               ) : !studentProgress ? (
                 <div className="py-8 text-center text-muted-foreground">No student progress data found.</div>
               ) : (
+                <div className="space-y-3">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Badge variant="secondary" className="bg-rose-50 text-rose-700 border border-rose-200">
+                      Poor: {selectedConfigRatingCounts.Poor} ({selectedConfigRatingPercents.Poor}%)
+                    </Badge>
+                    <Badge variant="secondary" className="bg-amber-50 text-amber-700 border border-amber-200">
+                      Average: {selectedConfigRatingCounts.Average} ({selectedConfigRatingPercents.Average}%)
+                    </Badge>
+                    <Badge variant="secondary" className="bg-emerald-50 text-emerald-700 border border-emerald-200">
+                      Good: {selectedConfigRatingCounts.Good} ({selectedConfigRatingPercents.Good}%)
+                    </Badge>
+                  </div>
                 <div className="max-h-[60vh] overflow-auto border border-border rounded-xl">
                   <table className="w-full text-left border-collapse">
                     <thead className="sticky top-0 bg-card">
@@ -986,6 +1046,7 @@ function AnalyticsTab() {
                         <th className="px-4 py-3 font-semibold">Branch</th>
                         <th className="px-4 py-3 font-semibold text-right">Sub-topic Coverage</th>
                         <th className="px-4 py-3 font-semibold text-right">QB Interactions</th>
+                        <th className="px-4 py-3 font-semibold text-right">Rating</th>
                         <th className="px-4 py-3 font-semibold text-right">Last Active</th>
                       </tr>
                     </thead>
@@ -1000,6 +1061,7 @@ function AnalyticsTab() {
                           totalQuestions > 0
                             ? Math.round((normalizedQbInteractions / totalQuestions) * 100)
                             : 0;
+                        const rating = getStudentRating(pct, qbPct);
                         return (
                           <tr key={s.userId}>
                             <td className="px-4 py-3 font-medium text-foreground">{s.userId}</td>
@@ -1021,6 +1083,19 @@ function AnalyticsTab() {
                                 <span className="font-semibold text-foreground">{qbPct}%</span>
                               </div>
                             </td>
+                            <td className="px-4 py-3 text-right">
+                              <span
+                                className={
+                                  rating === "Good"
+                                    ? "inline-flex items-center rounded-md border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-xs font-semibold text-emerald-700"
+                                    : rating === "Average"
+                                    ? "inline-flex items-center rounded-md border border-amber-200 bg-amber-50 px-2 py-0.5 text-xs font-semibold text-amber-700"
+                                    : "inline-flex items-center rounded-md border border-rose-200 bg-rose-50 px-2 py-0.5 text-xs font-semibold text-rose-700"
+                                }
+                              >
+                                {rating}
+                              </span>
+                            </td>
                             <td className="px-4 py-3 text-right text-muted-foreground">
                               {s.lastActiveAt ? new Date(s.lastActiveAt).toLocaleDateString() : "-"}
                             </td>
@@ -1029,6 +1104,7 @@ function AnalyticsTab() {
                       })}
                     </tbody>
                   </table>
+                </div>
                 </div>
               )}
             </div>

@@ -206,6 +206,21 @@ Question/star targets are exam-based in code:
 - Config "delete" is treated as **disable** (content is preserved; config is hidden from normal active lists).
 - Admin can open student roadmap preview, but admin interactions are excluded from tracking analytics.
 
+## Student Rating System (Admin Analytics)
+
+In **Admin -> Analytics -> Student Progress** (inside a selected live config), each student is assigned a rating using:
+- sub-topic coverage % (from tracked roadmap progress)
+- QB interaction % (question-bank interactions / total questions in that config)
+
+Rules:
+- **Poor**: sub-topic coverage `<= 30%` **or** QB interaction `<= 50%`
+- **Average**: sub-topic coverage `>= 50%` **and** QB interaction `>= 50%`
+- **Good**: sub-topic coverage `>= 75%` **and** QB interaction `>= 75%`
+
+The config-level summary shows both:
+- count per rating
+- percentage per rating (based on total students in that config)
+
 ## Security
 
 - Never commit real API keys/service-role keys.
