@@ -13,6 +13,76 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 
+function normalizeYearToken(value: string | null | undefined): string {
+  return String(value ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, "");
+}
+
+function parseYearNumber(value: string | null | undefined): number | null {
+  const token = normalizeYearToken(value);
+  const yearMatch = token.match(/year[^0-9]*([1-4])/);
+  if (yearMatch) return Number(yearMatch[1]);
+  const plainMatch = token.match(/^([1-4])$/);
+  if (plainMatch) return Number(plainMatch[1]);
+  return null;
+}
+
+function parseSemesterNumber(value: string | null | undefined): number | null {
+  const token = normalizeYearToken(value);
+  const semMatch = token.match(/sem(?:ester)?[^0-9]*([1-8])/);
+  if (semMatch) return Number(semMatch[1]);
+  const sMatch = token.match(/^s([1-8])$/);
+  if (sMatch) return Number(sMatch[1]);
+  const plainMatch = token.match(/^([1-8])$/);
+  if (plainMatch) return Number(plainMatch[1]);
+  return null;
+}
+
+function getEquivalentYearTokens(value: string | null | undefined): string[] {
+  const token = normalizeYearToken(value);
+  if (!token) return [];
+  const tokens = new Set<string>([token]);
+
+  const yearNum = parseYearNumber(value);
+  if (yearNum) {
+    const sem1 = yearNum * 2 - 1;
+    const sem2 = yearNum * 2;
+    tokens.add(String(yearNum));
+    tokens.add(`year${yearNum}`);
+    tokens.add(`sem${sem1}`);
+    tokens.add(`sem${sem2}`);
+    tokens.add(`semester${sem1}`);
+    tokens.add(`semester${sem2}`);
+  }
+
+  const semNum = parseSemesterNumber(value);
+  if (semNum) {
+    const mappedYear = Math.ceil(semNum / 2);
+    tokens.add(`sem${semNum}`);
+    tokens.add(`semester${semNum}`);
+    tokens.add(String(mappedYear));
+    tokens.add(`year${mappedYear}`);
+  }
+
+  return Array.from(tokens);
+}
+
+function yearMatches(selectedYear: string, configYear: string): boolean {
+  if (!selectedYear) return true;
+  const selectedTokens = new Set(getEquivalentYearTokens(selectedYear));
+  const configTokens = getEquivalentYearTokens(configYear);
+  return configTokens.some((token) => selectedTokens.has(token));
+}
+
+function normalizeBranchToken(value: string | null | undefined): string {
+  return String(value ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, "");
+}
+
 export default function Home() {
   const [, setLocation] = useLocation();
   const user = getStoredUser();
@@ -45,8 +115,8 @@ export default function Home() {
   const availableSubjects = useMemo(() =>
     Array.from(new Set(
       configs?.filter(c =>
-        (!selectedYear || c.year === selectedYear) &&
-        c.branch.toUpperCase() === commonBranch
+        yearMatches(selectedYear, c.year) &&
+        normalizeBranchToken(c.branch) === normalizeBranchToken(commonBranch)
       ).map(c => c.subject) || []
     )).sort(),
     [configs, selectedYear, commonBranch]
@@ -56,8 +126,8 @@ export default function Home() {
     if (!selectedSubject) return {};
     const map: Record<string, typeof configs extends (infer T)[] | undefined ? T : never> = {};
     configs?.filter(c =>
-      c.year === selectedYear &&
-      c.branch === selectedBranch &&
+      yearMatches(selectedYear, c.year) &&
+      normalizeBranchToken(c.branch) === normalizeBranchToken(selectedBranch) &&
       c.subject === selectedSubject
     ).forEach(c => {
       map[c.exam] = c;

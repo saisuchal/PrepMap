@@ -1,7 +1,7 @@
 import { Router, type IRouter } from "express";
 import { GetConfigsQueryParams, GetConfigsResponse } from "../api-zod";
 import { db, configsTable, nodesTable, subtopicQuestionsTable, usersTable } from "../db";
-import { eq, and, inArray, ne, type SQL } from "drizzle-orm";
+import { eq, and, inArray, ne, or, sql, type SQL } from "drizzle-orm";
 import { requireAdmin } from "../middleware/adminAuth";
 
 const router: IRouter = Router();
@@ -15,7 +15,7 @@ function normalizeToken(value: string | null | undefined): string {
 
 function parseYearNumber(value: string | null | undefined): number | null {
   const token = normalizeToken(value);
-  const yearMatch = token.match(/^year([1-4])$/);
+  const yearMatch = token.match(/year[^0-9]*([1-4])/);
   if (yearMatch) return Number(yearMatch[1]);
   const plainMatch = token.match(/^([1-4])$/);
   if (plainMatch) return Number(plainMatch[1]);
@@ -24,7 +24,7 @@ function parseYearNumber(value: string | null | undefined): number | null {
 
 function parseSemesterNumber(value: string | null | undefined): number | null {
   const token = normalizeToken(value);
-  const semMatch = token.match(/^sem(?:ester)?([1-8])$/);
+  const semMatch = token.match(/sem(?:ester)?[^0-9]*([1-8])/);
   if (semMatch) return Number(semMatch[1]);
   const sMatch = token.match(/^s([1-8])$/);
   if (sMatch) return Number(sMatch[1]);
@@ -100,9 +100,18 @@ router.get("/configs", async (req, res) => {
       if (!isSuperStudent) {
         const allowedYearTokens = getAllowedConfigYearTokensForStudentYear(userYear);
         if (allowedYearTokens.length > 0) {
-          conditions.push(inArray(configsTable.year, allowedYearTokens));
+          const normalizedConfigYear = sql<string>`regexp_replace(lower(${configsTable.year}), '\\s+', '', 'g')`;
+          conditions.push(
+            or(
+              ...allowedYearTokens.map((token) => sql`${normalizedConfigYear} = ${token}`),
+            ) as SQL,
+          );
         }
-        if (userBranch) conditions.push(eq(configsTable.branch, userBranch));
+        const normalizedUserBranch = normalizeToken(userBranch);
+        if (normalizedUserBranch) {
+          const normalizedConfigBranch = sql<string>`regexp_replace(lower(${configsTable.branch}), '\\s+', '', 'g')`;
+          conditions.push(sql`${normalizedConfigBranch} = ${normalizedUserBranch}`);
+        }
       }
     } else if (universityId) {
       conditions.push(eq(configsTable.universityId, universityId));
@@ -199,9 +208,10 @@ router.get("/configs/:id/question-bank", async (req, res) => {
           return;
         }
         const isSuperStudent = (user.role || "").toLowerCase() === "super_student";
+        const branchMismatch = normalizeToken(user.branch) !== normalizeToken(config.branch);
         if (
           !isSuperStudent &&
-          (!doesStudentYearMatchConfigYear(user.year, config.year) || user.branch !== config.branch)
+          (!doesStudentYearMatchConfigYear(user.year, config.year) || branchMismatch)
         ) {
           res.status(403).json({ error: "Access denied." });
           return;
