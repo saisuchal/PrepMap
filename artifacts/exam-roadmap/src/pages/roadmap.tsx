@@ -1734,7 +1734,7 @@ function QuestionBankModal({
 }) {
   const { data, isLoading, isError } = useGetQuestionBank(configId);
   const validQuestions = useMemo(
-    () => (data?.questions ?? []).filter((q) => isLikelyQuestionText(q.question)),
+    () => data?.questions ?? [],
     [data?.questions]
   );
   const seededHash = useCallback((value: string) => {
@@ -2109,7 +2109,7 @@ function QuestionBankPane({
 }) {
   const { data, isLoading, isError } = useGetQuestionBank(configId);
   const validQuestions = useMemo(
-    () => (data?.questions ?? []).filter((q) => isLikelyQuestionText(q.question)),
+    () => data?.questions ?? [],
     [data?.questions]
   );
   const seededHash = useCallback((value: string) => {

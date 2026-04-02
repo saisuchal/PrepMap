@@ -62,7 +62,7 @@ You can also import directly from a sheet export with headers like:
 
 Example row:
 
-`N25B01A0001, uni13, CSE, 1, student, Abhay Murthy, , TRUE, ,`
+`STU0001, uniXX, CSE, 1, student, Student Name, , TRUE, ,`
 
 Run:
 
@@ -94,6 +94,20 @@ What the importer enforces during load:
 - Frontend: React, Vite, TypeScript, Tailwind, TanStack Query
 - Storage: Supabase Storage (or compatible object storage pathing)
 - AI: provider switch (`anthropic` or `openai`)
+
+### Current Stack (Detailed)
+
+- Monorepo/package management: `pnpm` workspace (`pnpm@10`, Node `22-24`)
+- Frontend app: React + TypeScript + Vite
+- UI system: Tailwind CSS + Radix UI + Lucide + Framer Motion
+- Client routing/data: Wouter + TanStack React Query
+- Backend app: Express 5 + TypeScript (bundled via esbuild)
+- Database layer: PostgreSQL + Drizzle ORM + `pg`
+- Validation/schema: Zod
+- Auth/security: bcrypt + cookie-based auth/session flow
+- File uploads/storage: Supabase Storage (GCS helper libs also present)
+- AI integrations: OpenAI + Anthropic provider support
+- Deployment model: Vercel (serverless API entry via `api/[...path].ts`)
 
 ## Prerequisites
 

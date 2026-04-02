@@ -6,6 +6,75 @@ import { requireAdmin } from "../middleware/adminAuth";
 
 const router: IRouter = Router();
 
+function normalizeToken(value: string | null | undefined): string {
+  return String(value ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, "");
+}
+
+function parseYearNumber(value: string | null | undefined): number | null {
+  const token = normalizeToken(value);
+  const yearMatch = token.match(/^year([1-4])$/);
+  if (yearMatch) return Number(yearMatch[1]);
+  const plainMatch = token.match(/^([1-4])$/);
+  if (plainMatch) return Number(plainMatch[1]);
+  return null;
+}
+
+function parseSemesterNumber(value: string | null | undefined): number | null {
+  const token = normalizeToken(value);
+  const semMatch = token.match(/^sem(?:ester)?([1-8])$/);
+  if (semMatch) return Number(semMatch[1]);
+  const sMatch = token.match(/^s([1-8])$/);
+  if (sMatch) return Number(sMatch[1]);
+  const plainMatch = token.match(/^([1-8])$/);
+  if (plainMatch) return Number(plainMatch[1]);
+  return null;
+}
+
+function getAllowedConfigYearTokensForStudentYear(userYear: string | null | undefined): string[] {
+  const normalized = normalizeToken(userYear);
+  if (!normalized) return [];
+
+  const tokens = new Set<string>();
+  tokens.add(normalized);
+
+  const yearNum = parseYearNumber(userYear);
+  if (yearNum) {
+    const sem1 = yearNum * 2 - 1;
+    const sem2 = yearNum * 2;
+    tokens.add(String(yearNum));
+    tokens.add(`year${yearNum}`);
+    tokens.add(`sem${sem1}`);
+    tokens.add(`sem${sem2}`);
+    tokens.add(`semester${sem1}`);
+    tokens.add(`semester${sem2}`);
+  }
+
+  const semNum = parseSemesterNumber(userYear);
+  if (semNum) {
+    const mappedYear = Math.ceil(semNum / 2);
+    tokens.add(`sem${semNum}`);
+    tokens.add(`semester${semNum}`);
+    tokens.add(String(mappedYear));
+    tokens.add(`year${mappedYear}`);
+  }
+
+  return Array.from(tokens);
+}
+
+function doesStudentYearMatchConfigYear(
+  userYear: string | null | undefined,
+  configYear: string | null | undefined,
+): boolean {
+  const configToken = normalizeToken(configYear);
+  if (!configToken) return false;
+  const allowed = getAllowedConfigYearTokensForStudentYear(userYear);
+  if (allowed.length === 0) return false;
+  return allowed.includes(configToken);
+}
+
 router.get("/configs", async (req, res) => {
   try {
     const { universityId, status } = GetConfigsQueryParams.parse(req.query);
@@ -29,7 +98,10 @@ router.get("/configs", async (req, res) => {
     if (!isAdmin && userUniversityId) {
       conditions.push(eq(configsTable.universityId, userUniversityId));
       if (!isSuperStudent) {
-        if (userYear) conditions.push(eq(configsTable.year, userYear));
+        const allowedYearTokens = getAllowedConfigYearTokensForStudentYear(userYear);
+        if (allowedYearTokens.length > 0) {
+          conditions.push(inArray(configsTable.year, allowedYearTokens));
+        }
         if (userBranch) conditions.push(eq(configsTable.branch, userBranch));
       }
     } else if (universityId) {
@@ -127,7 +199,10 @@ router.get("/configs/:id/question-bank", async (req, res) => {
           return;
         }
         const isSuperStudent = (user.role || "").toLowerCase() === "super_student";
-        if (!isSuperStudent && (user.year !== config.year || user.branch !== config.branch)) {
+        if (
+          !isSuperStudent &&
+          (!doesStudentYearMatchConfigYear(user.year, config.year) || user.branch !== config.branch)
+        ) {
           res.status(403).json({ error: "Access denied." });
           return;
         }
