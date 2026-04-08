@@ -12,7 +12,12 @@
     "start": "node --enable-source-maps ./dist/index.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "import:students": "node ./scripts/import_students.mjs",
-    "seed:super-students": "node ./scripts/seed_super_students.mjs"
+    "seed:super-students": "node ./scripts/seed_super_students.mjs",
+    "export:csv-all": "node ./scripts/export_all_tables_csv.mjs",
+    "copy:db": "node ./scripts/copy_db_to_db.mjs",
+    "copy:storage": "node ./scripts/copy_supabase_bucket.mjs",
+    "refactor:content-model": "node ./scripts/refactor_content_model.mjs",
+    "cleanup:legacy-content": "node ./scripts/drop_legacy_content_tables.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.80.0",

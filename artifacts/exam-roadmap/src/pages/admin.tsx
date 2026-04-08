@@ -790,38 +790,89 @@ function AnalyticsTab() {
   );
   const { data: selectedConfigQuestionBank } = useGetQuestionBank(selectedConfigId);
   const { data: stats } = useGetAdminStats();
-  const getStudentRating = (subtopicPercent: number, qbPercent: number): "Poor" | "Average" | "Good" => {
-    if (subtopicPercent <= 30 || qbPercent <= 50) return "Poor";
-    if (subtopicPercent >= 75 && qbPercent >= 75) return "Good";
-    if (subtopicPercent >= 50 && qbPercent >= 50) return "Average";
-    return "Poor";
+  const ratingOrder = ["Poor", "Average", "Good"] as const;
+  type RatingBucket = (typeof ratingOrder)[number];
+  const [subtopicRatingFilter, setSubtopicRatingFilter] = useState<"all" | RatingBucket>("all");
+  const [qbRatingFilter, setQbRatingFilter] = useState<"all" | RatingBucket>("all");
+  const ratingSummaryClasses: Record<RatingBucket, string> = {
+    Poor: "border-rose-200 bg-rose-50 text-rose-700",
+    Average: "border-amber-200 bg-amber-50 text-amber-700",
+    Good: "border-emerald-200 bg-emerald-50 text-emerald-700",
   };
-  const selectedConfigRatingCounts = useMemo(() => {
+  const getMetricRating = (percent: number): "Poor" | "Average" | "Good" => {
+    if (percent < 50) return "Poor";
+    if (percent <= 75) return "Average";
+    return "Good";
+  };
+  const selectedConfigSubtopicRatingCounts = useMemo(() => {
+    const counts = { Poor: 0, Average: 0, Good: 0 };
+    if (!studentProgress) return counts;
+
+    for (const s of studentProgress.students) {
+      const subtopicPercent = Math.round(s.progressPercent);
+      const rating = getMetricRating(subtopicPercent);
+      counts[rating] += 1;
+    }
+    return counts;
+  }, [studentProgress]);
+  const selectedConfigQbRatingCounts = useMemo(() => {
     const counts = { Poor: 0, Average: 0, Good: 0 };
     if (!studentProgress) return counts;
 
     const totalQuestions = selectedConfigQuestionBank?.total ?? 0;
     for (const s of studentProgress.students) {
-      const subtopicPercent = Math.round(s.progressPercent);
       const rawQbInteractions = s.questionBankInteractions ?? 0;
       const normalizedQbInteractions =
         totalQuestions > 0 ? Math.min(rawQbInteractions, totalQuestions) : 0;
       const qbPercent =
         totalQuestions > 0 ? Math.round((normalizedQbInteractions / totalQuestions) * 100) : 0;
-      const rating = getStudentRating(subtopicPercent, qbPercent);
+      const rating = getMetricRating(qbPercent);
       counts[rating] += 1;
     }
     return counts;
   }, [studentProgress, selectedConfigQuestionBank]);
-  const selectedConfigRatingPercents = useMemo(() => {
+  const selectedConfigSubtopicRatingPercents = useMemo(() => {
     const total = studentProgress?.students.length ?? 0;
     const toPercent = (count: number) => (total > 0 ? Math.round((count / total) * 100) : 0);
     return {
-      Poor: toPercent(selectedConfigRatingCounts.Poor),
-      Average: toPercent(selectedConfigRatingCounts.Average),
-      Good: toPercent(selectedConfigRatingCounts.Good),
+      Poor: toPercent(selectedConfigSubtopicRatingCounts.Poor),
+      Average: toPercent(selectedConfigSubtopicRatingCounts.Average),
+      Good: toPercent(selectedConfigSubtopicRatingCounts.Good),
     };
-  }, [studentProgress, selectedConfigRatingCounts]);
+  }, [studentProgress, selectedConfigSubtopicRatingCounts]);
+  const selectedConfigQbRatingPercents = useMemo(() => {
+    const total = studentProgress?.students.length ?? 0;
+    const toPercent = (count: number) => (total > 0 ? Math.round((count / total) * 100) : 0);
+    return {
+      Poor: toPercent(selectedConfigQbRatingCounts.Poor),
+      Average: toPercent(selectedConfigQbRatingCounts.Average),
+      Good: toPercent(selectedConfigQbRatingCounts.Good),
+    };
+  }, [studentProgress, selectedConfigQbRatingCounts]);
+  const filteredStudents = useMemo(() => {
+    if (!studentProgress) return [];
+
+    const totalQuestions = selectedConfigQuestionBank?.total ?? 0;
+    return studentProgress.students.filter((s) => {
+      const subtopicPercent = Math.round(s.progressPercent);
+      const subtopicRating = getMetricRating(subtopicPercent);
+      const rawQbInteractions = s.questionBankInteractions ?? 0;
+      const normalizedQbInteractions =
+        totalQuestions > 0 ? Math.min(rawQbInteractions, totalQuestions) : 0;
+      const qbPercent =
+        totalQuestions > 0 ? Math.round((normalizedQbInteractions / totalQuestions) * 100) : 0;
+      const qbRating = getMetricRating(qbPercent);
+
+      if (subtopicRatingFilter !== "all" && subtopicRating !== subtopicRatingFilter) return false;
+      if (qbRatingFilter !== "all" && qbRating !== qbRatingFilter) return false;
+      return true;
+    });
+  }, [studentProgress, selectedConfigQuestionBank, subtopicRatingFilter, qbRatingFilter]);
+
+  useEffect(() => {
+    setSubtopicRatingFilter("all");
+    setQbRatingFilter("all");
+  }, [selectedConfigId]);
 
   return (
     <div>
@@ -860,7 +911,7 @@ function AnalyticsTab() {
             <MessageSquare className="w-7 h-7" />
           </div>
           <div>
-            <p className="text-sm font-semibold text-muted-foreground">Question Bank Interactions</p>
+            <p className="text-sm font-semibold text-muted-foreground">QB Events Logged</p>
             <p className="text-3xl font-display font-bold text-foreground">
               {questionBankInteractionSummary?.questionBankInteractionCount || 0}
             </p>
@@ -950,8 +1001,8 @@ function AnalyticsTab() {
           }
         }}
       >
-        <DialogContent className="max-w-4xl">
-          <DialogHeader>
+        <DialogContent className="flex flex-col w-[75vw] max-w-[75vw] h-[90vh] overflow-hidden p-0 gap-0">
+          <DialogHeader className="shrink-0 border-b border-border px-6 py-5 pr-12">
             <DialogTitle>
               {selectedConfig
                 ? `Student Progress - ${uniLabel(selectedUniversityId || "")} / ${selectedConfig.subject}`
@@ -959,17 +1010,21 @@ function AnalyticsTab() {
             </DialogTitle>
           </DialogHeader>
 
+          <div className="flex-1 min-h-0 overflow-hidden px-6 py-4">
           {!selectedConfig ? (
-            <div className="max-h-[65vh] overflow-auto border border-border rounded-xl">
-              <table className="w-full text-left border-collapse">
+            <div className="h-full min-h-0 flex flex-col">
+              <div className="min-h-0 flex-1 overflow-auto border border-border rounded-xl">
+              <table className="w-full min-w-[860px] text-left border-collapse">
                 <thead className="sticky top-0 bg-card">
                   <tr className="border-b border-border text-xs uppercase tracking-wider text-muted-foreground">
                     <th className="px-4 py-3 font-semibold">Subject</th>
                     <th className="px-4 py-3 font-semibold">Semester</th>
                     <th className="px-4 py-3 font-semibold">Exam</th>
                     <th className="px-4 py-3 font-semibold">Branch</th>
-                    <th className="px-4 py-3 font-semibold text-right">QB Interactions</th>
-                    <th className="px-4 py-3 font-semibold text-right">Actions</th>
+                    <th className="px-4 py-3 font-semibold text-right">QB Reach</th>
+                    <th className="px-4 py-3 font-semibold text-right sticky right-0 bg-card z-20 border-l border-border">
+                      Actions
+                    </th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-border/50 text-sm">
@@ -996,7 +1051,7 @@ function AnalyticsTab() {
                               <span className="text-xs text-muted-foreground">({totalInteractions})</span>
                             </div>
                           </td>
-                          <td className="px-4 py-3 text-right">
+                          <td className="px-4 py-3 text-right sticky right-0 bg-card border-l border-border">
                             <Button
                               variant="outline"
                               size="sm"
@@ -1011,13 +1066,14 @@ function AnalyticsTab() {
                   )}
                 </tbody>
               </table>
+              </div>
             </div>
           ) : (
-            <div className="space-y-3">
+            <div className="h-full min-h-0 flex flex-col gap-3">
               <Button
                 variant="ghost"
                 size="sm"
-                className="h-8"
+                className="h-8 shrink-0 w-fit"
                 onClick={() => setSelectedConfigId(null)}
               >{"<- Back to Live Configs"}</Button>
               {studentsLoading ? (
@@ -1025,19 +1081,104 @@ function AnalyticsTab() {
               ) : !studentProgress ? (
                 <div className="py-8 text-center text-muted-foreground">No student progress data found.</div>
               ) : (
-                <div className="space-y-3">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <Badge variant="secondary" className="bg-rose-50 text-rose-700 border border-rose-200">
-                      Poor: {selectedConfigRatingCounts.Poor} ({selectedConfigRatingPercents.Poor}%)
-                    </Badge>
-                    <Badge variant="secondary" className="bg-amber-50 text-amber-700 border border-amber-200">
-                      Average: {selectedConfigRatingCounts.Average} ({selectedConfigRatingPercents.Average}%)
-                    </Badge>
-                    <Badge variant="secondary" className="bg-emerald-50 text-emerald-700 border border-emerald-200">
-                      Good: {selectedConfigRatingCounts.Good} ({selectedConfigRatingPercents.Good}%)
-                    </Badge>
+                <div className="min-h-0 flex-1 flex flex-col gap-3">
+                  <div className="space-y-3 shrink-0">
+                    <div className="grid gap-2 md:grid-cols-[160px_1fr] md:items-center">
+                      <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                        Sub-topic Ratings
+                      </span>
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                        {ratingOrder.map((rating) => (
+                          <div
+                            key={`subtopic-${rating}`}
+                            className={`rounded-lg border px-3 py-2 ${ratingSummaryClasses[rating]}`}
+                          >
+                            <div className="text-[11px] font-semibold uppercase tracking-wide">{rating}</div>
+                            <div className="mt-1 flex items-baseline justify-between">
+                              <span className="text-base font-bold tabular-nums">
+                                {selectedConfigSubtopicRatingCounts[rating]}
+                              </span>
+                              <span className="text-xs font-semibold tabular-nums">
+                                {selectedConfigSubtopicRatingPercents[rating]}%
+                              </span>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                    <div className="grid gap-2 md:grid-cols-[160px_1fr] md:items-center">
+                      <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                        QB Ratings
+                      </span>
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                        {ratingOrder.map((rating) => (
+                          <div
+                            key={`qb-${rating}`}
+                            className={`rounded-lg border px-3 py-2 ${ratingSummaryClasses[rating]}`}
+                          >
+                            <div className="text-[11px] font-semibold uppercase tracking-wide">{rating}</div>
+                            <div className="mt-1 flex items-baseline justify-between">
+                              <span className="text-base font-bold tabular-nums">
+                                {selectedConfigQbRatingCounts[rating]}
+                              </span>
+                              <span className="text-xs font-semibold tabular-nums">
+                                {selectedConfigQbRatingPercents[rating]}%
+                              </span>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                      <div className="space-y-1">
+                        <Label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                          Sub-topic Rating Filter
+                        </Label>
+                        <Select
+                          value={subtopicRatingFilter}
+                          onValueChange={(value) =>
+                            setSubtopicRatingFilter(value as "all" | RatingBucket)
+                          }
+                        >
+                          <SelectTrigger>
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="all">All</SelectItem>
+                            {ratingOrder.map((rating) => (
+                              <SelectItem key={`subtopic-filter-${rating}`} value={rating}>
+                                {rating}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <div className="space-y-1">
+                        <Label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                          QB Rating Filter
+                        </Label>
+                        <Select
+                          value={qbRatingFilter}
+                          onValueChange={(value) =>
+                            setQbRatingFilter(value as "all" | RatingBucket)
+                          }
+                        >
+                          <SelectTrigger>
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="all">All</SelectItem>
+                            {ratingOrder.map((rating) => (
+                              <SelectItem key={`qb-filter-${rating}`} value={rating}>
+                                {rating}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    </div>
                   </div>
-                <div className="max-h-[60vh] overflow-auto border border-border rounded-xl">
+                <div className="min-h-0 flex-1 overflow-y-auto overflow-x-auto border border-border rounded-xl">
                   <table className="w-full text-left border-collapse">
                     <thead className="sticky top-0 bg-card">
                       <tr className="border-b border-border text-xs uppercase tracking-wider text-muted-foreground">
@@ -1045,13 +1186,21 @@ function AnalyticsTab() {
                         <th className="px-4 py-3 font-semibold">Semester</th>
                         <th className="px-4 py-3 font-semibold">Branch</th>
                         <th className="px-4 py-3 font-semibold text-right">Sub-topic Coverage</th>
+                        <th className="px-4 py-3 font-semibold text-right">Sub-topic Rating</th>
                         <th className="px-4 py-3 font-semibold text-right">QB Interactions</th>
-                        <th className="px-4 py-3 font-semibold text-right">Rating</th>
+                        <th className="px-4 py-3 font-semibold text-right">QB Rating</th>
                         <th className="px-4 py-3 font-semibold text-right">Last Active</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-border/50 text-sm">
-                      {studentProgress.students.map((s) => {
+                      {filteredStudents.length === 0 ? (
+                        <tr>
+                          <td colSpan={8} className="px-4 py-8 text-center text-muted-foreground">
+                            No students match the selected rating filters.
+                          </td>
+                        </tr>
+                      ) : (
+                        filteredStudents.map((s) => {
                         const pct = Math.round(s.progressPercent);
                         const totalQuestions = selectedConfigQuestionBank?.total ?? 0;
                         const rawQbInteractions = s.questionBankInteractions ?? 0;
@@ -1061,7 +1210,8 @@ function AnalyticsTab() {
                           totalQuestions > 0
                             ? Math.round((normalizedQbInteractions / totalQuestions) * 100)
                             : 0;
-                        const rating = getStudentRating(pct, qbPct);
+                        const subtopicRating = getMetricRating(pct);
+                        const qbRating = getMetricRating(qbPct);
                         return (
                           <tr key={s.userId}>
                             <td className="px-4 py-3 font-medium text-foreground">{s.userId}</td>
@@ -1076,6 +1226,19 @@ function AnalyticsTab() {
                               </div>
                             </td>
                             <td className="px-4 py-3 text-right">
+                              <span
+                                className={
+                                  subtopicRating === "Good"
+                                    ? "inline-flex items-center rounded-md border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-xs font-semibold text-emerald-700"
+                                    : subtopicRating === "Average"
+                                    ? "inline-flex items-center rounded-md border border-amber-200 bg-amber-50 px-2 py-0.5 text-xs font-semibold text-amber-700"
+                                    : "inline-flex items-center rounded-md border border-rose-200 bg-rose-50 px-2 py-0.5 text-xs font-semibold text-rose-700"
+                                }
+                              >
+                                {subtopicRating}
+                              </span>
+                            </td>
+                            <td className="px-4 py-3 text-right">
                               <div className="inline-flex items-center gap-2">
                                 <span className="text-xs text-muted-foreground">
                                   {normalizedQbInteractions}/{totalQuestions}
@@ -1086,14 +1249,14 @@ function AnalyticsTab() {
                             <td className="px-4 py-3 text-right">
                               <span
                                 className={
-                                  rating === "Good"
+                                  qbRating === "Good"
                                     ? "inline-flex items-center rounded-md border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-xs font-semibold text-emerald-700"
-                                    : rating === "Average"
+                                    : qbRating === "Average"
                                     ? "inline-flex items-center rounded-md border border-amber-200 bg-amber-50 px-2 py-0.5 text-xs font-semibold text-amber-700"
                                     : "inline-flex items-center rounded-md border border-rose-200 bg-rose-50 px-2 py-0.5 text-xs font-semibold text-rose-700"
                                 }
                               >
-                                {rating}
+                                {qbRating}
                               </span>
                             </td>
                             <td className="px-4 py-3 text-right text-muted-foreground">
@@ -1101,7 +1264,8 @@ function AnalyticsTab() {
                             </td>
                           </tr>
                         );
-                      })}
+                      })
+                      )}
                     </tbody>
                   </table>
                 </div>
@@ -1109,6 +1273,7 @@ function AnalyticsTab() {
               )}
             </div>
           )}
+          </div>
         </DialogContent>
       </Dialog>
     </div>

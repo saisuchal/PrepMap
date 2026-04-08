@@ -1,0 +1,24 @@
+id,university_id,year,branch,subject,exam,status,created_by,syllabus_file_url,paper_file_urls,created_at
+e8da2d68,uni3,sem2,CSE,Web Application Development,mid2,draft,ADMIN,,,2026-04-06T03:02:56.369Z
+14bb04f3,uni11,sem2,CSE,Communicative English,mid1,draft,ADMIN,,,2026-04-06T03:10:26.928Z
+300b04d8,uni12,sem2,CSE,Numerical Ability,mid1,draft,ADMIN,/supabase/prepmap-files/uploads/1693ac48-47a1-43b3-9b11-55bb07edc42e_syllabus.txt,"[""/supabase/prepmap-files/uploads/6d42d5b3-a5bb-4374-9126-a7b091f0719d_replica-paper.txt""]",2026-03-30T00:24:33.903Z
+689c9716,uni11,sem2,CSE,Building LLM Applications,mid1,draft,ADMIN,,,2026-04-06T04:27:48.708Z
+dcf8cdf6,uni12,sem2,CSE,Building LLM Applications,mid1,live,ADMIN,/supabase/prepmap-files/uploads/601a8735-6f4a-46aa-963d-4eab8512a291_syllabus.txt,"[""/supabase/prepmap-files/uploads/e8e6f8a6-42ec-406b-9723-2db113920692_replica-paper.txt""]",2026-03-29T23:16:17.260Z
+4a69be43,uni12,sem2,CSE,Communicative English,mid1,draft,ADMIN,/supabase/prepmap-files/uploads/21966568-34fc-4bb5-bfa3-d01d5e1ddc50_syllabus.txt,"[""/supabase/prepmap-files/uploads/51a0a694-2e88-4bb2-9fd9-8fc7a36a2241_replica-paper.txt""]",2026-03-29T22:54:15.577Z
+e3013ce3,uni12,sem2,CSE,Data Structures using C++,mid1,live,ADMIN,/supabase/prepmap-files/uploads/67e54817-57d5-4f2a-bd6d-4c39becb1e14_syllabus.txt,"[""/supabase/prepmap-files/uploads/e4278d18-12de-4ee5-889e-f51f872ce561_replica-paper.txt""]",2026-03-29T09:04:00.310Z
+d0214046,uni9,sem2,CSE,Database Management Systems,mid1,disabled,ADMIN,,,2026-04-01T09:22:45.228Z
+13fb4e0a,uni9,sem2,CSE,Data Structures using C++,mid1,draft,ADMIN,/supabase/prepmap-files/uploads/648c919b-b949-4ec1-90dd-5094cdaa35c8_syllabus.txt,"[""/supabase/prepmap-files/uploads/afe4f240-186b-45f5-9189-6bcd70403cfb_replica-paper.txt""]",2026-04-02T01:35:16.336Z
+634962b3,uni11,sem2,CSE,Web Application Development,mid1,draft,ADMIN,,,2026-04-05T23:02:36.075Z
+4a692749,uni14,sem2,CSE,Database Management Systems,mid2,draft,ADMIN,,,2026-03-30T02:10:54.132Z
+1dc63781,uni14,sem2,CSE,Data Structures using C++,mid1,draft,ADMIN,,,2026-03-30T01:43:07.046Z
+d3d8b50f,uni14,sem2,CSE,Web Application Development,mid2,draft,ADMIN,,,2026-03-30T01:18:22.282Z
+f3aa3368,uni14,sem2,CSE,Generative AI,mid2,draft,ADMIN,,,2026-03-30T01:17:43.966Z
+09b91602,uni14,sem2,CSE,Web Application Development,mid1,disabled,ADMIN,,,2026-03-30T01:00:49.867Z
+7ebbc047,uni12,sem2,CSE,Database Management Systems,mid1,live,ADMIN,/supabase/prepmap-files/uploads/8dd94861-6a0c-45a6-a276-2b110ac5bf39_syllabus.txt,"[""/supabase/prepmap-files/uploads/29e55629-3094-4462-9bba-56a773710fc7_replica-paper.txt""]",2026-03-29T09:11:31.536Z
+80335537,uni12,sem2,CSE,Web Application Development,mid1,live,ADMIN,/supabase/prepmap-files/uploads/868e9bcc-b52f-4049-a495-9de3e445ecc6_syllabus.txt,"[""/supabase/prepmap-files/uploads/c8fd113a-97ed-4a44-bcbe-9222cde99e58_replica-paper.txt""]",2026-03-29T09:11:30.871Z
+a5c00bcf,uni3,sem2,CSE,Numerical Ability,mid2,draft,ADMIN,,,2026-04-05T23:18:14.416Z
+5111604a,uni11,sem2,CSE,Database Management Systems,mid1,draft,ADMIN,,,2026-04-05T23:18:45.865Z
+4ad28c58,uni3,sem2,CSE,Database Management Systems,mid2,draft,ADMIN,,,2026-04-05T23:51:39.087Z
+dceeaaa1,uni11,sem2,CSE,Data Structures,mid1,draft,ADMIN,,,2026-04-06T00:04:40.175Z
+ae5659e3,uni11,sem2,CSE,Data Structures using C++,mid1,draft,ADMIN,,,2026-04-06T00:13:06.861Z
+8946ca20,uni11,sem2,CSE,Numerical Ability,mid1,draft,ADMIN,,,2026-04-05T23:16:18.640Z

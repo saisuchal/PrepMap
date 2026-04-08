@@ -9,6 +9,8 @@ export const nodesTable = pgTable("nodes", {
   type: text("type").notNull(),
   parentId: text("parent_id"),
   explanation: text("explanation"),
+  unitTopicId: text("unit_topic_id"),
+  unitSubtopicId: text("unit_subtopic_id"),
   sortOrder: text("sort_order").notNull().default("0"),
 });
 

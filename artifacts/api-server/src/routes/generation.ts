@@ -12,11 +12,12 @@ import {
   db,
   configsTable,
   nodesTable,
-  subtopicContentsTable,
-  subtopicQuestionsTable,
+  configQuestionsTable,
   configUnitLinksTable,
   subjectsTable,
   unitLibraryTable,
+  unitTopicsTable,
+  unitSubtopicsTable,
 } from "../db";
 import { and, eq, inArray } from "drizzle-orm";
 import { randomUUID } from "crypto";
@@ -71,6 +72,50 @@ function setCheapImportProgress(configId: string, updates: Partial<CheapImportPr
 
 function normalizeText(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
+}
+
+function toSlug(value: string): string {
+  const normalized = normalizeText(value);
+  return normalized ? normalized.replace(/\s+/g, "_") : "untitled";
+}
+
+function isInstructionalAnswerPlaceholder(answer: string): boolean {
+  const raw = String(answer || "").trim();
+  if (!raw) return true;
+  return /use a short exam answer|use a structured exam answer|one-line definition|one tiny real-world example/i.test(raw);
+}
+
+function summarizeQuestionFocus(questionText: string, fallback = "the asked concept"): string {
+  const text = String(questionText || "")
+    .replace(/\s+/g, " ")
+    .replace(/^\d+\s*[.)-]?\s*/, "")
+    .trim();
+  if (!text) return fallback;
+  const lead = text.split(/[?.!]/)[0]?.trim() || text;
+  const words = lead.split(" ").filter(Boolean).slice(0, 10);
+  return words.join(" ") || fallback;
+}
+
+function buildExamReadyFallbackAnswer(
+  questionText: string,
+  markType: "Foundational" | "Applied",
+  topicTitle?: string,
+  subtopicTitle?: string,
+): string {
+  const focus = subtopicTitle || topicTitle || summarizeQuestionFocus(questionText);
+  if (markType === "Applied") {
+    return [
+      `This question is about ${focus}.`,
+      "Apply the standard concept or formula in clear steps.",
+      "Show key intermediate work, then write the final result clearly.",
+      "Add one tiny practical context if relevant.",
+    ].join("\n");
+  }
+  return [
+    `${focus} is the key concept asked here.`,
+    "State the core definition or formula briefly.",
+    "Apply it directly and present the final answer clearly.",
+  ].join("\n");
 }
 
 function explanationKey(unitTitle: string, topicTitle: string, subtopicTitle: string): string {
@@ -140,70 +185,63 @@ Requirements:
 
 async function loadReusableExplanationMap(
   subject: string,
-  currentConfigId: string,
+  _currentConfigId: string,
 ): Promise<Map<string, string>> {
-  const sameSubjectConfigs = await db
-    .select({ id: configsTable.id })
-    .from(configsTable)
-    .where(eq(configsTable.subject, subject));
+  const normalizedSubject = normalizeText(subject);
+  if (!normalizedSubject) return new Map();
 
-  const otherConfigIds = sameSubjectConfigs
-    .map((c) => c.id)
-    .filter((id) => id !== currentConfigId);
+  const [subjectRow] = await db
+    .select({ id: subjectsTable.id })
+    .from(subjectsTable)
+    .where(eq(subjectsTable.normalizedName, normalizedSubject))
+    .limit(1);
+  if (!subjectRow) return new Map();
 
-  if (otherConfigIds.length === 0) return new Map();
-
-  const historicalNodes = await db
+  const units = await db
     .select({
-      id: nodesTable.id,
-      configId: nodesTable.configId,
-      title: nodesTable.title,
-      type: nodesTable.type,
-      parentId: nodesTable.parentId,
+      id: unitLibraryTable.id,
+      unitTitle: unitLibraryTable.unitTitle,
     })
-    .from(nodesTable)
-    .where(inArray(nodesTable.configId, otherConfigIds));
+    .from(unitLibraryTable)
+    .where(eq(unitLibraryTable.subjectId, subjectRow.id));
+  if (units.length === 0) return new Map();
 
-  if (historicalNodes.length === 0) return new Map();
+  const unitById = new Map(units.map((u) => [u.id, u.unitTitle]));
+  const unitIds = units.map((u) => u.id);
 
-  const historicalNodeIds = historicalNodes.map((n) => n.id);
-  const historicalContents = await db
+  const topics = await db
     .select({
-      nodeId: subtopicContentsTable.nodeId,
-      explanation: subtopicContentsTable.explanation,
+      id: unitTopicsTable.id,
+      unitLibraryId: unitTopicsTable.unitLibraryId,
+      title: unitTopicsTable.title,
     })
-    .from(subtopicContentsTable)
-    .where(inArray(subtopicContentsTable.nodeId, historicalNodeIds));
+    .from(unitTopicsTable)
+    .where(inArray(unitTopicsTable.unitLibraryId, unitIds));
+  if (topics.length === 0) return new Map();
 
-  const contentByNodeId = new Map(historicalContents.map((c) => [c.nodeId, c.explanation]));
-  const nodesByConfig = new Map<string, Array<typeof historicalNodes[number]>>();
+  const topicById = new Map(topics.map((t) => [t.id, t]));
+  const topicIds = topics.map((t) => t.id);
 
-  for (const node of historicalNodes) {
-    const list = nodesByConfig.get(node.configId) ?? [];
-    list.push(node);
-    nodesByConfig.set(node.configId, list);
-  }
+  const subtopics = await db
+    .select({
+      unitTopicId: unitSubtopicsTable.unitTopicId,
+      title: unitSubtopicsTable.title,
+      explanation: unitSubtopicsTable.explanation,
+    })
+    .from(unitSubtopicsTable)
+    .where(inArray(unitSubtopicsTable.unitTopicId, topicIds));
 
   const reuse = new Map<string, string>();
-  for (const configId of otherConfigIds) {
-    const configNodes = nodesByConfig.get(configId) ?? [];
-    if (configNodes.length === 0) continue;
+  for (const sub of subtopics) {
+    const explanation = String(sub.explanation || "").trim();
+    if (!explanation) continue;
+    const topic = topicById.get(sub.unitTopicId);
+    if (!topic) continue;
+    const unitTitle = unitById.get(topic.unitLibraryId);
+    if (!unitTitle) continue;
 
-    const nodeById = new Map(configNodes.map((n) => [n.id, n]));
-    const subtopics = configNodes.filter((n) => n.type === "subtopic");
-
-    for (const sub of subtopics) {
-      const explanation = contentByNodeId.get(sub.id);
-      if (!explanation?.trim()) continue;
-      const topic = sub.parentId ? nodeById.get(sub.parentId) : null;
-      const unit = topic?.parentId ? nodeById.get(topic.parentId) : null;
-      if (!topic || !unit) continue;
-
-      const key = explanationKey(unit.title, topic.title, sub.title);
-      if (!reuse.has(key)) {
-        reuse.set(key, explanation);
-      }
-    }
+    const key = explanationKey(unitTitle, topic.title, sub.title);
+    if (!reuse.has(key)) reuse.set(key, explanation);
   }
 
   return reuse;
@@ -253,12 +291,19 @@ function parseImportBody(body: unknown): { units: ImportUnit[]; questions: Impor
     .map((q: any) => ({
       markType: q?.markType === "Applied" ? "Applied" : "Foundational",
       question: String(q?.question || "").trim(),
-      answer: String(q?.answer || "").trim(),
+      answer: "",
       unitTitle: String(q?.unitTitle || "").trim(),
       topicTitle: String(q?.topicTitle || "").trim(),
       subtopicTitle: String(q?.subtopicTitle || "").trim(),
       isStarred: Boolean(q?.isStarred),
     }))
+    .map((q: ImportQuestion, idx: number) => {
+      const rawAnswer = String((questionsRaw[idx] as any)?.answer || "").trim();
+      const answer = isInstructionalAnswerPlaceholder(rawAnswer)
+        ? buildExamReadyFallbackAnswer(q.question, q.markType, q.topicTitle, q.subtopicTitle)
+        : rawAnswer;
+      return { ...q, answer };
+    })
     .filter((q: ImportQuestion) => q.question && q.answer && isLikelyQuestionText(q.question));
 
   return { units, questions };
@@ -557,6 +602,8 @@ CONSTRAINTS:
 - Remaining questions to generate: ${remainingQuestionsNeeded}
 - Remaining starred to allocate across non-replica questions: ${remainingStarsNeeded}
 - Answers must be concise and cleanly formatted.
+- Answers must be actual exam-ready answers, not answer-writing instructions.
+- Never use placeholder text like "Use a short exam answer..." or "Use a structured exam answer...".
 - No duplicates.
 - Include only real exam questions (no metadata lines like Bloom levels K1/K2, Course Outcomes, Part/Section headers, Q.No tables, or instructions like "Answer any...").
 - Return exactly one JSON object and nothing else.
@@ -750,10 +797,18 @@ async function performCheapImport(
       const key = normalizeText(mandatory.question);
       const has = questions.some((q) => normalizeText(q.question) === key);
       if (!has) {
+        const normalizedAnswer = isInstructionalAnswerPlaceholder(mandatory.answer)
+          ? buildExamReadyFallbackAnswer(
+              mandatory.question,
+              mandatory.markType,
+              mandatory.topicTitle,
+              mandatory.subtopicTitle,
+            )
+          : mandatory.answer;
         questions.push({
           markType: mandatory.markType,
           question: mandatory.question,
-          answer: mandatory.answer,
+          answer: normalizedAnswer,
           unitTitle: mandatory.unitTitle,
           topicTitle: mandatory.topicTitle,
           subtopicTitle: mandatory.subtopicTitle,
@@ -791,8 +846,8 @@ async function performCheapImport(
           markType: idx % 2 === 0 ? "Foundational" : "Applied",
           question: idx % 2 === 0 ? `Explain ${s.subtopicTitle}.` : `Apply ${s.subtopicTitle} with a practical example.`,
           answer: idx % 2 === 0
-            ? `${s.subtopicTitle} is a key concept in ${s.topicTitle}. Define it, state why it matters, and add one tiny real-world example.`
-            : `Start with the core idea of ${s.subtopicTitle}, then show a short practical workflow and expected outcome.`,
+            ? buildExamReadyFallbackAnswer(`Explain ${s.subtopicTitle}.`, "Foundational", s.topicTitle, s.subtopicTitle)
+            : buildExamReadyFallbackAnswer(`Apply ${s.subtopicTitle} with a practical example.`, "Applied", s.topicTitle, s.subtopicTitle),
           unitTitle: s.unitTitle,
           topicTitle: s.topicTitle,
           subtopicTitle: s.subtopicTitle,
@@ -841,7 +896,7 @@ async function performCheapImport(
       warnings.push(`Star count exceeded target; auto-trimmed to ${starredTarget}.`);
     }
 
-    const nodeIdByPath = new Map<string, string>();
+    const pathMap = new Map<string, { nodeId: string; unitSubtopicId: string }>();
 
     await db.transaction(async (tx) => {
       const existingNodes = await tx
@@ -849,14 +904,76 @@ async function performCheapImport(
         .from(nodesTable)
         .where(eq(nodesTable.configId, id));
       if (existingNodes.length > 0) {
-        const nodeIds = existingNodes.map((n) => n.id);
-        await tx.delete(subtopicQuestionsTable).where(inArray(subtopicQuestionsTable.nodeId, nodeIds));
-        await tx.delete(subtopicContentsTable).where(inArray(subtopicContentsTable.nodeId, nodeIds));
+        await tx.delete(configQuestionsTable).where(eq(configQuestionsTable.configId, id));
         await tx.delete(nodesTable).where(eq(nodesTable.configId, id));
+      }
+
+      const normalizedSubject = normalizeText(pkg.subject);
+      let [subject] = await tx
+        .select({ id: subjectsTable.id })
+        .from(subjectsTable)
+        .where(eq(subjectsTable.normalizedName, normalizedSubject))
+        .limit(1);
+
+      if (!subject) {
+        const subjectId = `sub_${randomUUID().substring(0, 8)}`;
+        await tx.insert(subjectsTable).values({
+          id: subjectId,
+          name: pkg.subject,
+          normalizedName: normalizedSubject,
+          createdBy: userId,
+        });
+        subject = { id: subjectId };
+      }
+
+      const unitLibraryIdByNormTitle = new Map<string, string>();
+      for (const unit of body.units) {
+        const normalizedUnitTitle = normalizeText(unit.title);
+        if (!normalizedUnitTitle) continue;
+        const topics = unit.topics.map((t) => ({
+          title: t.title,
+          subtopics: t.subtopics.map((s) => s.title),
+        }));
+
+        const [existing] = await tx
+          .select({ id: unitLibraryTable.id })
+          .from(unitLibraryTable)
+          .where(and(
+            eq(unitLibraryTable.subjectId, subject.id),
+            eq(unitLibraryTable.normalizedUnitTitle, normalizedUnitTitle),
+          ))
+          .limit(1);
+
+        if (existing) {
+          await tx
+            .update(unitLibraryTable)
+            .set({
+              unitTitle: unit.title,
+              topics,
+              sourceText: "Imported from cheap mode",
+              updatedAt: new Date(),
+            })
+            .where(eq(unitLibraryTable.id, existing.id));
+          unitLibraryIdByNormTitle.set(normalizedUnitTitle, existing.id);
+        } else {
+          const createdId = `unit_${randomUUID().substring(0, 8)}`;
+          await tx.insert(unitLibraryTable).values({
+            id: createdId,
+            subjectId: subject.id,
+            unitTitle: unit.title,
+            normalizedUnitTitle,
+            topics,
+            sourceText: "Imported from cheap mode",
+            createdBy: userId,
+          });
+          unitLibraryIdByNormTitle.set(normalizedUnitTitle, createdId);
+        }
       }
 
       for (let ui = 0; ui < body.units.length; ui++) {
         const unit = body.units[ui];
+        const unitLibraryId = unitLibraryIdByNormTitle.get(normalizeText(unit.title));
+        if (!unitLibraryId) continue;
         const unitId = `${id}_u${ui + 1}`;
         await tx.insert(nodesTable).values({
           id: unitId,
@@ -882,6 +999,31 @@ async function performCheapImport(
               topicExplanation = "Topic summary will be updated soon.";
             }
           }
+
+          const normalizedTopicTitle = normalizeText(topic.title);
+          const topicCanonicalId = `utp_${unitLibraryId}_${toSlug(topic.title)}`;
+          const topicUpsert = await tx
+            .insert(unitTopicsTable)
+            .values({
+              id: topicCanonicalId,
+              unitLibraryId,
+              title: topic.title,
+              normalizedTitle: normalizedTopicTitle,
+              sortOrder: ti + 1,
+              explanation: repairBrokenFormulaBullets(topicExplanation),
+            })
+            .onConflictDoUpdate({
+              target: [unitTopicsTable.unitLibraryId, unitTopicsTable.normalizedTitle],
+              set: {
+                title: topic.title,
+                sortOrder: ti + 1,
+                explanation: repairBrokenFormulaBullets(topicExplanation),
+                updatedAt: new Date(),
+              },
+            })
+            .returning({ id: unitTopicsTable.id });
+          const unitTopicId = topicUpsert[0]?.id || topicCanonicalId;
+
           await tx.insert(nodesTable).values({
             id: topicId,
             configId: id,
@@ -889,6 +1031,7 @@ async function performCheapImport(
             type: "topic",
             parentId: unitId,
             explanation: repairBrokenFormulaBullets(topicExplanation),
+            unitTopicId,
             sortOrder: String(ti + 1),
           });
 
@@ -916,79 +1059,43 @@ async function performCheapImport(
                 }
               }
             }
+
+            const normalizedSubtopicTitle = normalizeText(sub.title);
+            const subCanonicalId = `ust_${unitTopicId}_${toSlug(sub.title)}`;
+            const subtopicUpsert = await tx
+              .insert(unitSubtopicsTable)
+              .values({
+                id: subCanonicalId,
+                unitTopicId,
+                title: sub.title,
+                normalizedTitle: normalizedSubtopicTitle,
+                sortOrder: si + 1,
+                explanation: repairBrokenFormulaBullets(explanation),
+              })
+              .onConflictDoUpdate({
+                target: [unitSubtopicsTable.unitTopicId, unitSubtopicsTable.normalizedTitle],
+                set: {
+                  title: sub.title,
+                  sortOrder: si + 1,
+                  explanation: repairBrokenFormulaBullets(explanation),
+                  updatedAt: new Date(),
+                },
+              })
+              .returning({ id: unitSubtopicsTable.id });
+            const unitSubtopicId = subtopicUpsert[0]?.id || subCanonicalId;
+
             await tx.insert(nodesTable).values({
               id: subId,
               configId: id,
               title: sub.title,
               type: "subtopic",
               parentId: topicId,
+              unitTopicId,
+              unitSubtopicId,
               sortOrder: String(si + 1),
             });
-            await tx.insert(subtopicContentsTable).values({
-              id: randomUUID(),
-              nodeId: subId,
-              explanation: repairBrokenFormulaBullets(explanation),
-            });
-            nodeIdByPath.set(key, subId);
+            pathMap.set(key, { nodeId: subId, unitSubtopicId });
           }
-        }
-      }
-
-      const normalizedSubject = normalizeText(pkg.subject);
-      let [subject] = await tx
-        .select({ id: subjectsTable.id })
-        .from(subjectsTable)
-        .where(eq(subjectsTable.normalizedName, normalizedSubject))
-        .limit(1);
-
-      if (!subject) {
-        const subjectId = `sub_${randomUUID().substring(0, 8)}`;
-        await tx.insert(subjectsTable).values({
-          id: subjectId,
-          name: pkg.subject,
-          normalizedName: normalizedSubject,
-          createdBy: userId,
-        });
-        subject = { id: subjectId };
-      }
-
-      for (const unit of body.units) {
-        const normalizedUnitTitle = normalizeText(unit.title);
-        if (!normalizedUnitTitle) continue;
-        const topics = unit.topics.map((t) => ({
-          title: t.title,
-          subtopics: t.subtopics.map((s) => s.title),
-        }));
-
-        const [existing] = await tx
-          .select({ id: unitLibraryTable.id })
-          .from(unitLibraryTable)
-          .where(and(
-            eq(unitLibraryTable.subjectId, subject.id),
-            eq(unitLibraryTable.normalizedUnitTitle, normalizedUnitTitle),
-          ))
-          .limit(1);
-
-        if (existing) {
-          await tx
-            .update(unitLibraryTable)
-            .set({
-              unitTitle: unit.title,
-              topics,
-            sourceText: "Imported from cheap mode",
-            updatedAt: new Date(),
-          })
-            .where(eq(unitLibraryTable.id, existing.id));
-        } else {
-          await tx.insert(unitLibraryTable).values({
-            id: `unit_${randomUUID().substring(0, 8)}`,
-            subjectId: subject.id,
-            unitTitle: unit.title,
-            normalizedUnitTitle,
-            topics,
-            sourceText: "Imported from cheap mode",
-            createdBy: userId,
-          });
         }
       }
     });
@@ -1002,14 +1109,17 @@ async function performCheapImport(
     for (let i = 0; i < questions.length; i++) {
       const q = questions[i];
       const key = `${normalizeText(q.unitTitle)}|${normalizeText(q.topicTitle)}|${normalizeText(q.subtopicTitle)}`;
-      const nodeId = nodeIdByPath.get(key) || Array.from(nodeIdByPath.values())[0];
-      if (!nodeId) continue;
+      const mapped = pathMap.get(key) || Array.from(pathMap.values())[0];
+      if (!mapped) continue;
 
-      await db.insert(subtopicQuestionsTable).values({
-        nodeId,
+      await db.insert(configQuestionsTable).values({
+        configId: id,
+        unitSubtopicId: mapped.unitSubtopicId,
+        legacyNodeId: mapped.nodeId,
+        legacyQuestionId: null,
         markType: q.markType,
         question: q.question,
-        answer: q.answer,
+        answer: repairBrokenFormulaBullets(q.answer),
         isStarred: !!q.isStarred,
         starSource: q.isStarred ? "manual" : "none",
       });

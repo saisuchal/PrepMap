@@ -1,7 +1,7 @@
 import { Router, type IRouter } from "express";
 import { GetConfigsQueryParams, GetConfigsResponse } from "../api-zod";
-import { db, configsTable, nodesTable, subtopicQuestionsTable, usersTable } from "../db";
-import { eq, and, inArray, ne, or, sql, type SQL } from "drizzle-orm";
+import { db, configsTable, nodesTable, usersTable, configQuestionsTable } from "../db";
+import { eq, and, ne, or, sql, type SQL } from "drizzle-orm";
 import { requireAdmin } from "../middleware/adminAuth";
 
 const router: IRouter = Router();
@@ -229,33 +229,55 @@ router.get("/configs/:id/question-bank", async (req, res) => {
         title: nodesTable.title,
         type: nodesTable.type,
         parentId: nodesTable.parentId,
+        unitSubtopicId: nodesTable.unitSubtopicId,
       })
       .from(nodesTable)
       .where(eq(nodesTable.configId, id));
 
     const nodeById = new Map(configNodes.map((n) => [n.id, n]));
+    const subtopicNodeByCanonicalId = new Map<string, string[]>();
+    for (const n of configNodes) {
+      if (n.type !== "subtopic" || !n.unitSubtopicId) continue;
+      const list = subtopicNodeByCanonicalId.get(n.unitSubtopicId) ?? [];
+      list.push(n.id);
+      subtopicNodeByCanonicalId.set(n.unitSubtopicId, list);
+    }
 
-    const nodeIds = configNodes
-      .filter((n) => n.type === "subtopic")
-      .map((n) => n.id);
+    const canonicalQuestions = await db
+      .select({
+        id: configQuestionsTable.id,
+        markType: configQuestionsTable.markType,
+        question: configQuestionsTable.question,
+        answer: configQuestionsTable.answer,
+        isStarred: configQuestionsTable.isStarred,
+        starSource: configQuestionsTable.starSource,
+        unitSubtopicId: configQuestionsTable.unitSubtopicId,
+        legacyNodeId: configQuestionsTable.legacyNodeId,
+      })
+      .from(configQuestionsTable)
+      .where(eq(configQuestionsTable.configId, id));
 
-    const questions = nodeIds.length
-      ? await db
-          .select({
-            id: subtopicQuestionsTable.id,
-            nodeId: subtopicQuestionsTable.nodeId,
-            markType: subtopicQuestionsTable.markType,
-            question: subtopicQuestionsTable.question,
-            answer: subtopicQuestionsTable.answer,
-            isStarred: subtopicQuestionsTable.isStarred,
-            starSource: subtopicQuestionsTable.starSource,
-          })
-          .from(subtopicQuestionsTable)
-          .where(inArray(subtopicQuestionsTable.nodeId, nodeIds))
-      : [];
+    const questions = canonicalQuestions.map((q) => {
+      let nodeId = q.legacyNodeId && nodeById.has(q.legacyNodeId)
+        ? q.legacyNodeId
+        : "";
+      if (!nodeId) {
+        const mapped = subtopicNodeByCanonicalId.get(q.unitSubtopicId) ?? [];
+        nodeId = mapped[0] ?? "";
+      }
+      return {
+        id: q.id,
+        nodeId,
+        markType: q.markType,
+        question: q.question,
+        answer: q.answer,
+        isStarred: q.isStarred,
+        starSource: q.starSource,
+      };
+    });
 
     const filtered = questions
-      .filter((q) => nodeById.has(q.nodeId))
+      .filter((q) => q.nodeId && nodeById.has(q.nodeId))
       .map((q) => {
         const subtopic = nodeById.get(q.nodeId);
         const topic = subtopic?.parentId ? nodeById.get(subtopic.parentId) : undefined;
@@ -307,11 +329,11 @@ router.put("/configs/:configId/question-bank/questions/:questionId/star", requir
 
     const [question] = await db
       .select({
-        id: subtopicQuestionsTable.id,
-        nodeId: subtopicQuestionsTable.nodeId,
+        id: configQuestionsTable.id,
+        configId: configQuestionsTable.configId,
       })
-      .from(subtopicQuestionsTable)
-      .where(eq(subtopicQuestionsTable.id, questionId))
+      .from(configQuestionsTable)
+      .where(eq(configQuestionsTable.id, questionId))
       .limit(1);
 
     if (!question) {
@@ -319,27 +341,19 @@ router.put("/configs/:configId/question-bank/questions/:questionId/star", requir
       return;
     }
 
-    const [node] = await db
-      .select({
-        id: nodesTable.id,
-        configId: nodesTable.configId,
-      })
-      .from(nodesTable)
-      .where(eq(nodesTable.id, question.nodeId))
-      .limit(1);
-
-    if (!node || node.configId !== configId) {
+    if (question.configId !== configId) {
       res.status(400).json({ error: "Question does not belong to this config" });
       return;
     }
 
     await db
-      .update(subtopicQuestionsTable)
+      .update(configQuestionsTable)
       .set({
         isStarred,
         starSource: isStarred ? "manual" : "none",
+        updatedAt: new Date(),
       })
-      .where(eq(subtopicQuestionsTable.id, questionId));
+      .where(eq(configQuestionsTable.id, questionId));
 
     res.json({ success: true });
   } catch (error) {

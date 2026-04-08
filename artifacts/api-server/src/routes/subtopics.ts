@@ -5,8 +5,15 @@ import {
   UpdateSubtopicContentParams,
   UpdateSubtopicContentBody,
 } from "../api-zod";
-import { db, subtopicContentsTable, subtopicQuestionsTable, nodesTable, configsTable, usersTable } from "../db";
-import { eq } from "drizzle-orm";
+import {
+  db,
+  nodesTable,
+  configsTable,
+  usersTable,
+  unitSubtopicsTable,
+  configQuestionsTable,
+} from "../db";
+import { and, eq } from "drizzle-orm";
 import { requireAdmin } from "../middleware/adminAuth";
 
 const router: IRouter = Router();
@@ -87,6 +94,7 @@ router.get("/subtopics/:id", async (req, res) => {
       .select({
         id: nodesTable.id,
         configId: nodesTable.configId,
+        unitSubtopicId: nodesTable.unitSubtopicId,
       })
       .from(nodesTable)
       .where(eq(nodesTable.id, id))
@@ -155,26 +163,46 @@ router.get("/subtopics/:id", async (req, res) => {
       return;
     }
 
-    const [content] = await db
-      .select()
-      .from(subtopicContentsTable)
-      .where(eq(subtopicContentsTable.nodeId, id))
+    if (!node.unitSubtopicId) {
+      res.status(404).json({ error: "Subtopic content is not mapped to canonical tables." });
+      return;
+    }
+
+    const [subtopic] = await db
+      .select({
+        id: unitSubtopicsTable.id,
+        explanation: unitSubtopicsTable.explanation,
+      })
+      .from(unitSubtopicsTable)
+      .where(eq(unitSubtopicsTable.id, node.unitSubtopicId))
       .limit(1);
 
-    if (!content) {
+    if (!subtopic) {
       res.status(404).json({ error: "Subtopic not found" });
       return;
     }
 
     const questions = await db
-      .select()
-      .from(subtopicQuestionsTable)
-      .where(eq(subtopicQuestionsTable.nodeId, id));
+      .select({
+        id: configQuestionsTable.id,
+        markType: configQuestionsTable.markType,
+        question: configQuestionsTable.question,
+        answer: configQuestionsTable.answer,
+        isStarred: configQuestionsTable.isStarred,
+        starSource: configQuestionsTable.starSource,
+      })
+      .from(configQuestionsTable)
+      .where(
+        and(
+          eq(configQuestionsTable.configId, node.configId),
+          eq(configQuestionsTable.unitSubtopicId, node.unitSubtopicId),
+        ),
+      );
 
     const response = GetSubtopicContentResponse.parse({
-      id: content.id,
-      nodeId: content.nodeId,
-      explanation: content.explanation,
+      id: subtopic.id,
+      nodeId: id,
+      explanation: String(subtopic.explanation || ""),
       questions: questions.map((q) => ({
         id: q.id,
         markType: q.markType === "2" ? "Foundational" : q.markType === "5" ? "Applied" : q.markType,
@@ -199,8 +227,8 @@ router.put("/subtopics/:id", requireAdmin, async (req, res) => {
 
     const [content] = await db
       .select()
-      .from(subtopicContentsTable)
-      .where(eq(subtopicContentsTable.nodeId, id))
+      .from(nodesTable)
+      .where(eq(nodesTable.id, id))
       .limit(1);
 
     if (!content) {
@@ -208,25 +236,37 @@ router.put("/subtopics/:id", requireAdmin, async (req, res) => {
       return;
     }
 
-    await db
-      .update(subtopicContentsTable)
-      .set({ explanation: body.explanation })
-      .where(eq(subtopicContentsTable.nodeId, id));
+    if (!content.unitSubtopicId) {
+      res.status(400).json({ error: "Subtopic content is not mapped to canonical tables." });
+      return;
+    }
 
     await db
-      .delete(subtopicQuestionsTable)
-      .where(eq(subtopicQuestionsTable.nodeId, id));
+      .update(unitSubtopicsTable)
+      .set({ explanation: body.explanation, updatedAt: new Date() })
+      .where(eq(unitSubtopicsTable.id, content.unitSubtopicId));
+
+    await db
+      .delete(configQuestionsTable)
+      .where(
+        and(
+          eq(configQuestionsTable.configId, content.configId),
+          eq(configQuestionsTable.unitSubtopicId, content.unitSubtopicId),
+        ),
+      );
 
     if (body.questions.length > 0) {
-      await db.insert(subtopicQuestionsTable).values(
+      await db.insert(configQuestionsTable).values(
         body.questions.map((q) => ({
-          nodeId: id,
-          markType: q.markType === "2" ? "Foundational" : q.markType === "5" ? "Applied" : q.markType,
+          configId: content.configId,
+          unitSubtopicId: content.unitSubtopicId!,
+          markType: q.markType,
           question: q.question,
           answer: q.answer,
           isStarred: q.isStarred ?? false,
           starSource: q.starSource ?? (q.isStarred ? "manual" : "none"),
-        }))
+          legacyNodeId: id,
+        })),
       );
     }
 

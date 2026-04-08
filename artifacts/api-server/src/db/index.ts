@@ -63,16 +63,6 @@ export async function initializeDatabase(): Promise<void> {
   `);
 
   await pool.query(`
-    ALTER TABLE public.subtopic_questions
-    ADD COLUMN IF NOT EXISTS is_starred boolean NOT NULL DEFAULT false;
-  `);
-
-  await pool.query(`
-    ALTER TABLE public.subtopic_questions
-    ADD COLUMN IF NOT EXISTS star_source text NOT NULL DEFAULT 'none';
-  `);
-
-  await pool.query(`
     DO $$
     BEGIN
       IF EXISTS (
@@ -169,6 +159,99 @@ export async function initializeDatabase(): Promise<void> {
   await pool.query(`
     CREATE UNIQUE INDEX IF NOT EXISTS config_unit_links_unique
     ON public.config_unit_links (config_id, unit_library_id);
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS public.unit_topics (
+      id text PRIMARY KEY,
+      unit_library_id text NOT NULL,
+      title text NOT NULL,
+      normalized_title text NOT NULL,
+      sort_order integer NOT NULL DEFAULT 0,
+      explanation text,
+      created_at timestamp without time zone NOT NULL DEFAULT now(),
+      updated_at timestamp without time zone NOT NULL DEFAULT now()
+    );
+  `);
+
+  await pool.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS unit_topics_unit_norm_unique
+    ON public.unit_topics (unit_library_id, normalized_title);
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS unit_topics_unit_sort_idx
+    ON public.unit_topics (unit_library_id, sort_order);
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS public.unit_subtopics (
+      id text PRIMARY KEY,
+      unit_topic_id text NOT NULL,
+      title text NOT NULL,
+      normalized_title text NOT NULL,
+      sort_order integer NOT NULL DEFAULT 0,
+      explanation text,
+      created_at timestamp without time zone NOT NULL DEFAULT now(),
+      updated_at timestamp without time zone NOT NULL DEFAULT now()
+    );
+  `);
+
+  await pool.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS unit_subtopics_topic_norm_unique
+    ON public.unit_subtopics (unit_topic_id, normalized_title);
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS unit_subtopics_topic_sort_idx
+    ON public.unit_subtopics (unit_topic_id, sort_order);
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS public.config_questions (
+      id bigserial PRIMARY KEY,
+      config_id text NOT NULL,
+      unit_subtopic_id text NOT NULL,
+      mark_type text NOT NULL,
+      question text NOT NULL,
+      answer text NOT NULL,
+      is_starred boolean NOT NULL DEFAULT false,
+      star_source text NOT NULL DEFAULT 'none',
+      legacy_node_id text,
+      legacy_question_id integer UNIQUE,
+      created_at timestamp without time zone NOT NULL DEFAULT now(),
+      updated_at timestamp without time zone NOT NULL DEFAULT now()
+    );
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS config_questions_config_idx
+    ON public.config_questions (config_id);
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS config_questions_subtopic_idx
+    ON public.config_questions (unit_subtopic_id);
+  `);
+
+  await pool.query(`
+    ALTER TABLE public.nodes
+    ADD COLUMN IF NOT EXISTS unit_topic_id text;
+  `);
+
+  await pool.query(`
+    ALTER TABLE public.nodes
+    ADD COLUMN IF NOT EXISTS unit_subtopic_id text;
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS nodes_config_unit_topic_idx
+    ON public.nodes (config_id, unit_topic_id);
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS nodes_config_unit_subtopic_idx
+    ON public.nodes (config_id, unit_subtopic_id);
   `);
 
   const existingSubjects = await pool.query<{ subject: string }>(`

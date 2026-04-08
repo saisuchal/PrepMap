@@ -2,12 +2,14 @@ import {
   db,
   configsTable,
   nodesTable,
-  subtopicContentsTable,
-  subtopicQuestionsTable,
+  configQuestionsTable,
   configUnitLinksTable,
+  subjectsTable,
   unitLibraryTable,
+  unitTopicsTable,
+  unitSubtopicsTable,
 } from "../db";
-import { eq, inArray } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import { askAI, askAIWithImage } from "./ai";
 import { extractTextFromPdf, isImageMimeType, isPdfMimeType } from "./pdfExtractor";
 import { ObjectStorageService } from "./objectStorage";
@@ -109,6 +111,7 @@ function mergeSubpartReplicaQuestions(questions: GeneratedQuestion[]): Generated
 
 interface SubtopicCatalogItem {
   nodeId: string;
+  unitSubtopicId: string;
   unitTitle: string;
   topicTitle: string;
   subtopicTitle: string;
@@ -478,6 +481,83 @@ async function askModelForJson<T>(
   throw new Error(`${label}: ${message}`);
 }
 
+function summarizeQuestionFocus(questionText: string, fallback = "the asked concept"): string {
+  const text = String(questionText || "")
+    .replace(/\s+/g, " ")
+    .replace(/^\d+\s*[.)-]?\s*/, "")
+    .trim();
+  if (!text) return fallback;
+  const lead = text.split(/[?.!]/)[0]?.trim() || text;
+  const words = lead.split(" ").filter(Boolean).slice(0, 10);
+  return words.join(" ") || fallback;
+}
+
+function buildFallbackReplicaAnswer(questionText: string, markType: QuestionLevel): string {
+  const focus = summarizeQuestionFocus(questionText);
+  if (markType === "Applied") {
+    return [
+      `This question is about ${focus}.`,
+      "Apply the standard concept or formula in clear steps.",
+      "Show the key intermediate result before the conclusion.",
+      "State the final answer clearly with one tiny practical context.",
+    ].join("\n");
+  }
+  return [
+    `${focus} is the core concept asked here.`,
+    "Write the key definition or formula and apply it directly.",
+    "State the final result clearly in one exam-ready line.",
+  ].join("\n");
+}
+
+async function generateReplicaAnswersFromQuestions(
+  subject: string,
+  questions: Array<{ question: string; markType: QuestionLevel }>,
+): Promise<Map<string, string>> {
+  if (questions.length === 0) return new Map();
+
+  const prompt = `Generate concise exam-ready answers for the following ${questions.length} questions in "${subject}".
+
+Return ONLY valid JSON:
+{
+  "answers": [
+    { "question": "<exact question text>", "answer": "<concise exam-ready answer>" }
+  ]
+}
+
+Rules:
+- Keep each answer short, direct, and readable.
+- Foundational answers: 2-4 short lines.
+- Applied answers: 4-7 short lines with brief steps.
+- No instructional meta text like "Use a short exam answer" or "write definition first".
+- If numerical values are missing, provide the best concise conceptual answer.
+- Preserve the same question text in the output.
+
+QUESTIONS:
+${questions.map((q, idx) => `${idx + 1}. [${q.markType}] ${q.question}`).join("\n")}
+`;
+
+  try {
+    const parsed = await askModelForJson<{ answers?: Array<{ question?: string; answer?: string }> }>(
+      "You write concise exam-ready answers in strict JSON.",
+      prompt,
+      3200,
+      "Replica answer generation failed",
+    );
+
+    const out = new Map<string, string>();
+    for (const row of parsed.answers ?? []) {
+      const question = String(row.question || "").trim();
+      const answer = String(row.answer || "").trim();
+      if (!question || !answer) continue;
+      out.set(normalizeText(question), answer);
+    }
+    return out;
+  } catch (error) {
+    logger.warn({ err: error }, "Replica answer enrichment failed; using fallback answer text");
+    return new Map();
+  }
+}
+
 async function fetchFileContent(
   objectPath: string
 ): Promise<{ text?: string; imageBase64?: string; mediaType?: string }> {
@@ -631,71 +711,63 @@ async function parseFromReusableUnits(configId: string): Promise<ParsedSyllabus 
 
 async function loadReusableExplanationMap(
   subject: string,
-  currentConfigId: string
+  _currentConfigId: string
 ): Promise<Map<string, string>> {
-  const sameSubjectConfigs = await db
-    .select({ id: configsTable.id })
-    .from(configsTable)
-    .where(eq(configsTable.subject, subject));
+  const normalizedSubject = normalizeText(subject);
+  if (!normalizedSubject) return new Map();
 
-  const otherConfigIds = sameSubjectConfigs
-    .map((c) => c.id)
-    .filter((id) => id !== currentConfigId);
+  const [subjectRow] = await db
+    .select({ id: subjectsTable.id })
+    .from(subjectsTable)
+    .where(eq(subjectsTable.normalizedName, normalizedSubject))
+    .limit(1);
+  if (!subjectRow) return new Map();
 
-  if (otherConfigIds.length === 0) return new Map();
-
-  const historicalNodes = await db
+  const units = await db
     .select({
-      id: nodesTable.id,
-      configId: nodesTable.configId,
-      title: nodesTable.title,
-      type: nodesTable.type,
-      parentId: nodesTable.parentId,
+      id: unitLibraryTable.id,
+      unitTitle: unitLibraryTable.unitTitle,
     })
-    .from(nodesTable)
-    .where(inArray(nodesTable.configId, otherConfigIds));
+    .from(unitLibraryTable)
+    .where(eq(unitLibraryTable.subjectId, subjectRow.id));
+  if (units.length === 0) return new Map();
 
-  if (historicalNodes.length === 0) return new Map();
+  const unitById = new Map(units.map((u) => [u.id, u.unitTitle]));
+  const unitIds = units.map((u) => u.id);
 
-  const historicalNodeIds = historicalNodes.map((n) => n.id);
-  const historicalContents = await db
+  const topics = await db
     .select({
-      nodeId: subtopicContentsTable.nodeId,
-      explanation: subtopicContentsTable.explanation,
+      id: unitTopicsTable.id,
+      unitLibraryId: unitTopicsTable.unitLibraryId,
+      title: unitTopicsTable.title,
     })
-    .from(subtopicContentsTable)
-    .where(inArray(subtopicContentsTable.nodeId, historicalNodeIds));
+    .from(unitTopicsTable)
+    .where(inArray(unitTopicsTable.unitLibraryId, unitIds));
+  if (topics.length === 0) return new Map();
 
-  const contentByNodeId = new Map(historicalContents.map((c) => [c.nodeId, c.explanation]));
-  const nodesByConfig = new Map<string, Array<typeof historicalNodes[number]>>();
-  for (const node of historicalNodes) {
-    const list = nodesByConfig.get(node.configId) ?? [];
-    list.push(node);
-    nodesByConfig.set(node.configId, list);
-  }
+  const topicById = new Map(topics.map((t) => [t.id, t]));
+  const topicIds = topics.map((t) => t.id);
+
+  const subtopics = await db
+    .select({
+      unitTopicId: unitSubtopicsTable.unitTopicId,
+      title: unitSubtopicsTable.title,
+      explanation: unitSubtopicsTable.explanation,
+    })
+    .from(unitSubtopicsTable)
+    .where(inArray(unitSubtopicsTable.unitTopicId, topicIds));
 
   const reuse = new Map<string, string>();
+  for (const sub of subtopics) {
+    const explanation = String(sub.explanation || "").trim();
+    if (!explanation) continue;
+    const topic = topicById.get(sub.unitTopicId);
+    if (!topic) continue;
+    const unitTitle = unitById.get(topic.unitLibraryId);
+    if (!unitTitle) continue;
 
-  for (const configId of otherConfigIds) {
-    const configNodes = nodesByConfig.get(configId) ?? [];
-    if (configNodes.length === 0) continue;
-
-    const nodeById = new Map(configNodes.map((n) => [n.id, n]));
-    const subtopics = configNodes.filter((n) => n.type === "subtopic");
-
-    for (const sub of subtopics) {
-      const explanation = contentByNodeId.get(sub.id);
-      if (!explanation?.trim()) continue;
-
-      const topic = sub.parentId ? nodeById.get(sub.parentId) : null;
-      const unit = topic?.parentId ? nodeById.get(topic.parentId) : null;
-      if (!topic || !unit) continue;
-
-      const key = explanationKey(unit.title, topic.title, sub.title);
-      if (!reuse.has(key)) {
-        reuse.set(key, explanation);
-      }
-    }
+    const key = explanationKey(unitTitle, topic.title, sub.title);
+    if (!reuse.has(key)) reuse.set(key, explanation);
   }
 
   return reuse;
@@ -703,54 +775,48 @@ async function loadReusableExplanationMap(
 
 async function loadReusableTopicExplanationMap(
   subject: string,
-  currentConfigId: string
+  _currentConfigId: string
 ): Promise<Map<string, string>> {
-  const sameSubjectConfigs = await db
-    .select({ id: configsTable.id })
-    .from(configsTable)
-    .where(eq(configsTable.subject, subject));
+  const normalizedSubject = normalizeText(subject);
+  if (!normalizedSubject) return new Map();
 
-  const otherConfigIds = sameSubjectConfigs
-    .map((c) => c.id)
-    .filter((id) => id !== currentConfigId);
+  const [subjectRow] = await db
+    .select({ id: subjectsTable.id })
+    .from(subjectsTable)
+    .where(eq(subjectsTable.normalizedName, normalizedSubject))
+    .limit(1);
+  if (!subjectRow) return new Map();
 
-  if (otherConfigIds.length === 0) return new Map();
-
-  const historicalTopics = await db
+  const units = await db
     .select({
-      id: nodesTable.id,
-      configId: nodesTable.configId,
-      title: nodesTable.title,
-      type: nodesTable.type,
-      parentId: nodesTable.parentId,
-      explanation: nodesTable.explanation,
+      id: unitLibraryTable.id,
+      unitTitle: unitLibraryTable.unitTitle,
     })
-    .from(nodesTable)
-    .where(inArray(nodesTable.configId, otherConfigIds));
+    .from(unitLibraryTable)
+    .where(eq(unitLibraryTable.subjectId, subjectRow.id));
+  if (units.length === 0) return new Map();
 
-  if (historicalTopics.length === 0) return new Map();
+  const unitById = new Map(units.map((u) => [u.id, u.unitTitle]));
+  const unitIds = units.map((u) => u.id);
 
-  const nodesByConfig = new Map<string, Array<typeof historicalTopics[number]>>();
-  for (const node of historicalTopics) {
-    const list = nodesByConfig.get(node.configId) ?? [];
-    list.push(node);
-    nodesByConfig.set(node.configId, list);
-  }
+  const topics = await db
+    .select({
+      id: unitTopicsTable.id,
+      unitLibraryId: unitTopicsTable.unitLibraryId,
+      title: unitTopicsTable.title,
+      explanation: unitTopicsTable.explanation,
+    })
+    .from(unitTopicsTable)
+    .where(inArray(unitTopicsTable.unitLibraryId, unitIds));
 
   const reuse = new Map<string, string>();
-  for (const configId of otherConfigIds) {
-    const configNodes = nodesByConfig.get(configId) ?? [];
-    const nodeById = new Map(configNodes.map((n) => [n.id, n]));
-    const topics = configNodes.filter((n) => n.type === "topic");
-
-    for (const topic of topics) {
-      const explanation = (topic.explanation || "").trim();
-      if (!explanation) continue;
-      const unit = topic.parentId ? nodeById.get(topic.parentId) : null;
-      if (!unit) continue;
-      const key = topicExplanationKey(unit.title, topic.title);
-      if (!reuse.has(key)) reuse.set(key, explanation);
-    }
+  for (const topic of topics) {
+    const explanation = String(topic.explanation || "").trim();
+    if (!explanation) continue;
+    const unitTitle = unitById.get(topic.unitLibraryId);
+    if (!unitTitle) continue;
+    const key = topicExplanationKey(unitTitle, topic.title);
+    if (!reuse.has(key)) reuse.set(key, explanation);
   }
 
   return reuse;
@@ -899,7 +965,7 @@ ${catalogShort.join("\n")}
   } catch (err) {
     const modelError = err instanceof Error ? err.message : "Unknown model error";
     logger.warn({ err }, "Replica extraction via model failed; using heuristic fallback");
-    const heuristic = (() => {
+    const heuristicDraft = (() => {
       const dedup = new Set<string>();
       const orderedCandidates = parsedReplica
         .map((p, idx) => ({ question: p.text.trim(), qNo: p.qNo, lineIndex: idx }))
@@ -946,9 +1012,7 @@ ${catalogShort.join("\n")}
         return {
           markType,
           question,
-          answer: markType === "Applied"
-            ? "Use a structured exam answer: definition, key points, and one short example."
-            : "Use a short exam answer: one-line definition, one key point, and one tiny real-world example.",
+          answer: "",
           unitTitle: path?.unitTitle ?? (catalog[0]?.unitTitle || ""),
           topicTitle: path?.topicTitle ?? (catalog[0]?.topicTitle || ""),
           subtopicTitle: path?.subtopicTitle ?? (catalog[0]?.subtopicTitle || ""),
@@ -958,6 +1022,20 @@ ${catalogShort.join("\n")}
         };
       });
     })();
+
+    const answerMap = await generateReplicaAnswersFromQuestions(
+      subject,
+      heuristicDraft.map((q) => ({
+        question: q.question,
+        markType: q.markType,
+      })),
+    );
+
+    const heuristic = heuristicDraft.map((q) => ({
+      ...q,
+      answer: answerMap.get(normalizeText(q.question)) || buildFallbackReplicaAnswer(q.question, q.markType),
+    }));
+
     return { questions: heuristic, method: "heuristic", modelError };
   }
 }
@@ -997,6 +1075,7 @@ export async function buildLaneAConfigPackage(configId: string): Promise<{
       for (const subtopic of topic.subtopics) {
         catalog.push({
           nodeId: "",
+          unitSubtopicId: "",
           unitTitle: unit.title,
           topicTitle: topic.title,
           subtopicTitle: subtopic,
@@ -1236,8 +1315,11 @@ function rebalanceStars(questions: GeneratedQuestion[], targetStars: number): Ge
   return prioritized;
 }
 
-function pickBestSubtopicNode(question: GeneratedQuestion, catalog: SubtopicCatalogItem[]): string {
-  if (catalog.length === 0) return "";
+function pickBestSubtopicMatch(
+  question: GeneratedQuestion,
+  catalog: SubtopicCatalogItem[],
+): SubtopicCatalogItem | null {
+  if (catalog.length === 0) return null;
 
   const qUnit = normalizeText(question.unitTitle);
   const qTopic = normalizeText(question.topicTitle);
@@ -1264,7 +1346,7 @@ function pickBestSubtopicNode(question: GeneratedQuestion, catalog: SubtopicCata
     }
   }
 
-  return best.nodeId;
+  return best;
 }
 
 async function buildQuestionBank(
@@ -1379,12 +1461,73 @@ export async function runGeneration(configId: string) {
       .where(eq(nodesTable.configId, configId));
 
     if (existingNodes.length > 0) {
-      const nodeIds = existingNodes.map((n) => n.id);
-      for (const nid of nodeIds) {
-        await db.delete(subtopicQuestionsTable).where(eq(subtopicQuestionsTable.nodeId, nid));
-        await db.delete(subtopicContentsTable).where(eq(subtopicContentsTable.nodeId, nid));
-      }
+      await db.delete(configQuestionsTable).where(eq(configQuestionsTable.configId, configId));
       await db.delete(nodesTable).where(eq(nodesTable.configId, configId));
+    }
+
+    const normalizedSubject = normalizeText(config.subject);
+    let [subjectRow] = await db
+      .select({ id: subjectsTable.id })
+      .from(subjectsTable)
+      .where(eq(subjectsTable.normalizedName, normalizedSubject))
+      .limit(1);
+
+    if (!subjectRow) {
+      const subjectId = `sub_${randomUUID().substring(0, 8)}`;
+      await db.insert(subjectsTable).values({
+        id: subjectId,
+        name: config.subject,
+        normalizedName: normalizedSubject,
+        createdBy: config.createdBy,
+      });
+      subjectRow = { id: subjectId };
+    }
+
+    const unitLibraryIdByNormTitle = new Map<string, string>();
+    for (const unit of parsed.units) {
+      const normalizedUnitTitle = normalizeText(unit.title);
+      if (!normalizedUnitTitle) continue;
+      const topics: UnitLibraryTopics[] = unit.topics.map((t) => ({
+        title: t.title,
+        subtopics: t.subtopics,
+      }));
+
+      const [existingUnit] = await db
+        .select({ id: unitLibraryTable.id })
+        .from(unitLibraryTable)
+        .where(
+          and(
+            eq(unitLibraryTable.subjectId, subjectRow.id),
+            eq(unitLibraryTable.normalizedUnitTitle, normalizedUnitTitle),
+          ),
+        )
+        .limit(1);
+
+      const selectedUnitId = existingUnit?.id ?? `unit_${randomUUID().substring(0, 8)}`;
+
+      if (existingUnit) {
+        await db
+          .update(unitLibraryTable)
+          .set({
+            unitTitle: unit.title,
+            topics,
+            sourceText: "Generated by Lane A",
+            updatedAt: new Date(),
+          })
+          .where(eq(unitLibraryTable.id, existingUnit.id));
+      } else {
+        await db.insert(unitLibraryTable).values({
+          id: selectedUnitId,
+          subjectId: subjectRow.id,
+          unitTitle: unit.title,
+          normalizedUnitTitle,
+          topics,
+          sourceText: "Generated by Lane A",
+          createdBy: config.createdBy,
+        });
+      }
+
+      unitLibraryIdByNormTitle.set(normalizedUnitTitle, selectedUnitId);
     }
 
     let totalSubtopics = 0;
@@ -1414,6 +1557,8 @@ export async function runGeneration(configId: string) {
 
     for (let ui = 0; ui < parsed.units.length; ui++) {
       const unit = parsed.units[ui];
+      const unitLibraryId = unitLibraryIdByNormTitle.get(normalizeText(unit.title));
+      if (!unitLibraryId) continue;
       const unitId = `${configId}_u${ui + 1}`;
 
       await db.insert(nodesTable).values({
@@ -1442,6 +1587,31 @@ export async function runGeneration(configId: string) {
             topicExplanation = "Topic summary will be updated soon.";
           }
         }
+        const repairedTopicExplanation = repairBrokenFormulaBullets(topicExplanation);
+
+        const normalizedTopicTitle = normalizeText(topic.title);
+        const topicCanonicalId = `utp_${unitLibraryId}_${normalizedTopicTitle.replace(/\s+/g, "_") || "untitled"}`;
+        const topicUpsert = await db
+          .insert(unitTopicsTable)
+          .values({
+            id: topicCanonicalId,
+            unitLibraryId,
+            title: topic.title,
+            normalizedTitle: normalizedTopicTitle,
+            sortOrder: ti + 1,
+            explanation: repairedTopicExplanation,
+          })
+          .onConflictDoUpdate({
+            target: [unitTopicsTable.unitLibraryId, unitTopicsTable.normalizedTitle],
+            set: {
+              title: topic.title,
+              sortOrder: ti + 1,
+              explanation: repairedTopicExplanation,
+              updatedAt: new Date(),
+            },
+          })
+          .returning({ id: unitTopicsTable.id });
+        const unitTopicId = topicUpsert[0]?.id || topicCanonicalId;
 
         await db.insert(nodesTable).values({
           id: topicId,
@@ -1449,7 +1619,8 @@ export async function runGeneration(configId: string) {
           title: topic.title,
           type: "topic",
           parentId: unitId,
-          explanation: repairBrokenFormulaBullets(topicExplanation),
+          explanation: repairedTopicExplanation,
+          unitTopicId,
           sortOrder: String(ti + 1),
         });
         topicCount++;
@@ -1467,26 +1638,17 @@ export async function runGeneration(configId: string) {
             sortOrder: String(si + 1),
           });
 
-          catalog.push({
-            nodeId: subtopicId,
-            unitTitle: unit.title,
-            topicTitle: topic.title,
-            subtopicTitle,
-            normUnit: normalizeText(unit.title),
-            normTopic: normalizeText(topic.title),
-            normSubtopic: normalizeText(subtopicTitle),
-          });
-
           setProgress(configId, {
             progress: topicCount + subtopicCount,
             currentStep: `Writing explanation: ${subtopicTitle}`,
           });
 
+          let explanation = "";
           try {
             const reusedExplanation = reusableExplanationMap.get(
               explanationKey(unit.title, topic.title, subtopicTitle)
             );
-            const explanation = reusedExplanation
+            explanation = reusedExplanation
               ? reusedExplanation
               : await generateSubtopicExplanation(
                   config.subject,
@@ -1494,22 +1656,54 @@ export async function runGeneration(configId: string) {
                   topic.title,
                   subtopicTitle,
                 );
-
-            const contentId = randomUUID();
-            await db.insert(subtopicContentsTable).values({
-              id: contentId,
-              nodeId: subtopicId,
-              explanation: repairBrokenFormulaBullets(explanation),
-            });
           } catch (err) {
             logger.error({ err, subtopicTitle }, "Failed to generate explanation for subtopic");
-            const contentId = randomUUID();
-            await db.insert(subtopicContentsTable).values({
-              id: contentId,
-              nodeId: subtopicId,
-              explanation: "Content will be updated soon.",
-            });
+            explanation = "Content will be updated soon.";
           }
+          const repairedSubtopicExplanation = repairBrokenFormulaBullets(explanation);
+
+          const normalizedSubtopicTitle = normalizeText(subtopicTitle);
+          const subtopicCanonicalId = `ust_${unitTopicId}_${normalizedSubtopicTitle.replace(/\s+/g, "_") || "untitled"}`;
+          const subtopicUpsert = await db
+            .insert(unitSubtopicsTable)
+            .values({
+              id: subtopicCanonicalId,
+              unitTopicId,
+              title: subtopicTitle,
+              normalizedTitle: normalizedSubtopicTitle,
+              sortOrder: si + 1,
+              explanation: repairedSubtopicExplanation,
+            })
+            .onConflictDoUpdate({
+              target: [unitSubtopicsTable.unitTopicId, unitSubtopicsTable.normalizedTitle],
+              set: {
+                title: subtopicTitle,
+                sortOrder: si + 1,
+                explanation: repairedSubtopicExplanation,
+                updatedAt: new Date(),
+              },
+            })
+            .returning({ id: unitSubtopicsTable.id });
+          const unitSubtopicId = subtopicUpsert[0]?.id || subtopicCanonicalId;
+
+          await db
+            .update(nodesTable)
+            .set({
+              unitTopicId,
+              unitSubtopicId,
+            })
+            .where(eq(nodesTable.id, subtopicId));
+
+          catalog.push({
+            nodeId: subtopicId,
+            unitSubtopicId,
+            unitTitle: unit.title,
+            topicTitle: topic.title,
+            subtopicTitle,
+            normUnit: normalizeText(unit.title),
+            normTopic: normalizeText(topic.title),
+            normSubtopic: normalizeText(subtopicTitle),
+          });
 
           subtopicCount++;
         }
@@ -1531,11 +1725,14 @@ export async function runGeneration(configId: string) {
 
     let insertedQuestions = 0;
     for (const q of questionBank) {
-      const nodeId = pickBestSubtopicNode(q, catalog);
-      if (!nodeId) continue;
+      const mapped = pickBestSubtopicMatch(q, catalog);
+      if (!mapped) continue;
 
-      await db.insert(subtopicQuestionsTable).values({
-        nodeId,
+      await db.insert(configQuestionsTable).values({
+        configId,
+        unitSubtopicId: mapped.unitSubtopicId,
+        legacyNodeId: mapped.nodeId,
+        legacyQuestionId: null,
         markType: q.markType,
         question: q.question,
         answer: repairBrokenFormulaBullets(q.answer),
