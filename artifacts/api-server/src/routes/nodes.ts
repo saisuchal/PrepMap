@@ -5,6 +5,92 @@ import { eq } from "drizzle-orm";
 
 const router: IRouter = Router();
 
+function parseStructuredExplanation(rawText: string | null | undefined): {
+  coreExplanation: string | null;
+  learningGoal: string | null;
+  exampleBlock: string | null;
+  supportNote: string | null;
+} {
+  const text = String(rawText || "").trim();
+  if (!text) {
+    return {
+      coreExplanation: null,
+      learningGoal: null,
+      exampleBlock: null,
+      supportNote: null,
+    };
+  }
+
+  const sections: Record<"core" | "goal" | "example" | "note", string[]> = {
+    core: [],
+    goal: [],
+    example: [],
+    note: [],
+  };
+
+  let current: keyof typeof sections = "core";
+  for (const line of text.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed) {
+      sections[current].push("");
+      continue;
+    }
+
+    const headingRules: Array<{ key: keyof typeof sections; re: RegExp }> = [
+      { key: "core", re: /^\s*core idea\s*:?\s*(.*)$/i },
+      { key: "goal", re: /^\s*learning goal\s*:?\s*(.*)$/i },
+      { key: "example", re: /^\s*quick example\s*:?\s*(.*)$/i },
+      { key: "note", re: /^\s*(?:helper note|helpful note|support note)\s*:?\s*(.*)$/i },
+    ];
+
+    let matched = false;
+    for (const rule of headingRules) {
+      const m = trimmed.match(rule.re);
+      if (m) {
+        current = rule.key;
+        const tail = String(m[1] || "").trim();
+        if (tail) sections[current].push(tail);
+        matched = true;
+        break;
+      }
+    }
+    if (!matched) sections[current].push(trimmed);
+  }
+
+  const clean = (value: string) => value.trim() || null;
+  return {
+    coreExplanation: clean(sections.core.join("\n")) ?? text,
+    learningGoal: clean(sections.goal.join("\n")),
+    exampleBlock: clean(sections.example.join("\n")),
+    supportNote: clean(sections.note.join("\n")),
+  };
+}
+
+function toOrder(value: string | null | undefined): number {
+  const n = Number(String(value || "").trim());
+  return Number.isFinite(n) ? n : 0;
+}
+
+function parseTextArray(raw: unknown): string[] {
+  if (Array.isArray(raw)) {
+    return raw.map((v) => String(v || "").trim()).filter(Boolean);
+  }
+  const text = String(raw ?? "").trim();
+  if (!text) return [];
+  try {
+    const parsed = JSON.parse(text);
+    if (Array.isArray(parsed)) {
+      return parsed.map((v) => String(v || "").trim()).filter(Boolean);
+    }
+  } catch {
+    // fall through
+  }
+  if (text.includes(",")) {
+    return text.split(",").map((v) => v.trim()).filter(Boolean);
+  }
+  return [text];
+}
+
 function normalizeToken(value: string | null | undefined): string {
   return String(value ?? "")
     .trim()
@@ -140,16 +226,50 @@ router.get("/nodes", async (req, res) => {
       .from(nodesTable)
       .where(eq(nodesTable.configId, configId));
 
+    const siblingMap = new Map<string, typeof nodes>();
+    for (const n of nodes) {
+      const key = String(n.parentId || "__root__");
+      const arr = siblingMap.get(key) || [];
+      arr.push(n);
+      siblingMap.set(key, arr);
+    }
+    for (const [key, arr] of siblingMap.entries()) {
+      arr.sort((a, b) => {
+        const byOrder = toOrder(a.sortOrder) - toOrder(b.sortOrder);
+        if (byOrder !== 0) return byOrder;
+        return String(a.title || "").localeCompare(String(b.title || ""));
+      });
+      siblingMap.set(key, arr);
+    }
+
     const response = GetNodesResponse.parse(
-      nodes.map((n) => ({
-        id: n.id,
-        configId: n.configId,
-        title: n.title,
-        type: n.type,
-        parentId: n.parentId,
-        explanation: n.explanation,
-        sortOrder: n.sortOrder,
-      }))
+      nodes.map((n) => {
+        const structured = parseStructuredExplanation(n.explanation);
+        const siblings = siblingMap.get(String(n.parentId || "__root__")) || [];
+        const idx = siblings.findIndex((s) => s.id === n.id);
+        const prev = idx > 0 ? siblings[idx - 1] : null;
+        const next = idx >= 0 && idx < siblings.length - 1 ? siblings[idx + 1] : null;
+        const explicitPrereqTitles = parseTextArray((n as any).prerequisiteTitles);
+        const explicitPrereqNodeIds = parseTextArray((n as any).prerequisiteNodeIds);
+        const explicitNextTitles = parseTextArray((n as any).nextRecommendedTitles);
+        const explicitNextNodeIds = parseTextArray((n as any).nextRecommendedNodeIds);
+        return {
+          id: n.id,
+          configId: n.configId,
+          title: n.title,
+          type: n.type,
+          parentId: n.parentId,
+          explanation: structured.coreExplanation,
+          learningGoal: String((n as any).learningGoal || "").trim() || structured.learningGoal,
+          exampleBlock: String((n as any).exampleBlock || "").trim() || structured.exampleBlock,
+          supportNote: String((n as any).supportNote || "").trim() || structured.supportNote,
+          prerequisiteTitles: explicitPrereqTitles.length > 0 ? explicitPrereqTitles : prev ? [prev.title] : [],
+          prerequisiteNodeIds: explicitPrereqNodeIds.length > 0 ? explicitPrereqNodeIds : prev ? [prev.id] : [],
+          nextRecommendedTitles: explicitNextTitles.length > 0 ? explicitNextTitles : next ? [next.title] : [],
+          nextRecommendedNodeIds: explicitNextNodeIds.length > 0 ? explicitNextNodeIds : next ? [next.id] : [],
+          sortOrder: n.sortOrder,
+        };
+      })
     );
 
     res.json(response);

@@ -168,6 +168,7 @@ export interface CheapLaneAResponse {
   success: boolean;
   configId: string;
   subject: string;
+  mode?: "explanations_only" | "explanations_and_questions" | "questions_only";
   structure: Array<{
     title: string;
     topics: Array<{
@@ -244,6 +245,20 @@ export interface QuestionBankResponse {
   subject: string;
   total: number;
   questions: QuestionBankQuestion[];
+}
+
+export type CheapGenerationMode =
+  | "explanations_only"
+  | "explanations_and_questions"
+  | "questions_only";
+
+export interface LatestInteractionStateResponse {
+  configId: string;
+  userId: string;
+  mapNodeId: string | null;
+  qbSubtopicId: string | null;
+  qbQuestionId: number | null;
+  eventAt: string | null;
 }
 
 export interface CompleteFirstLoginSetupRequest {
@@ -444,6 +459,16 @@ export const getQuestionBank = async (configId: string, options?: RequestInit) =
   });
 };
 
+export const getLatestInteractionState = async (configId: string, options?: RequestInit) => {
+  return customFetch<LatestInteractionStateResponse>(
+    `/api/configs/${configId}/latest-interaction-state`,
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
 export const completeFirstLoginSetup = async (
   payload: CompleteFirstLoginSetupRequest,
   options?: RequestInit,
@@ -484,10 +509,19 @@ export const resetPasswordWithSecurity = async (
   });
 };
 
-export const generateCheapLaneA = async (configId: string, options?: RequestInit) => {
+export const generateCheapLaneA = async (
+  configId: string,
+  mode: CheapGenerationMode,
+  options?: RequestInit,
+) => {
   return customFetch<CheapLaneAResponse>(`/api/configs/${configId}/cheap/lane-a`, {
     ...options,
     method: "POST",
+    headers: {
+      "content-type": "application/json",
+      ...(options?.headers || {}),
+    },
+    body: JSON.stringify({ mode }),
   });
 };
 
@@ -868,6 +902,24 @@ export const useGetQuestionBank = <
   });
 };
 
+export const useGetLatestInteractionState = <
+  TError = ErrorType<unknown>,
+  TData = LatestInteractionStateResponse,
+>(
+  configId: string | null,
+  options?: Omit<
+    UseQueryOptions<LatestInteractionStateResponse, TError, TData>,
+    "queryKey" | "queryFn"
+  >,
+) => {
+  return useQuery<LatestInteractionStateResponse, TError, TData>({
+    queryKey: ["config-latest-interaction-state", configId],
+    queryFn: () => getLatestInteractionState(configId!),
+    enabled: !!configId,
+    ...options,
+  });
+};
+
 export const useCompleteFirstLoginSetup = <
   TError = ErrorType<unknown>,
   TContext = unknown,
@@ -913,11 +965,21 @@ export const useGenerateCheapLaneA = <
   TError = ErrorType<unknown>,
   TContext = unknown,
 >(
-  options?: UseMutationOptions<CheapLaneAResponse, TError, { configId: string }, TContext>,
+  options?: UseMutationOptions<
+    CheapLaneAResponse,
+    TError,
+    { configId: string; mode: CheapGenerationMode },
+    TContext
+  >,
 ) => {
-  return useMutation<CheapLaneAResponse, TError, { configId: string }, TContext>({
+  return useMutation<
+    CheapLaneAResponse,
+    TError,
+    { configId: string; mode: CheapGenerationMode },
+    TContext
+  >({
     mutationKey: ["cheap-lane-a"],
-    mutationFn: ({ configId }) => generateCheapLaneA(configId),
+    mutationFn: ({ configId, mode }) => generateCheapLaneA(configId, mode),
     ...options,
   });
 };

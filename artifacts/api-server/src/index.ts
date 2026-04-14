@@ -2,7 +2,9 @@ import app from "./app";
 import { logger } from "./lib/logger";
 import { initializeDatabase } from "./db";
 
-const rawPort = process.env["PORT"] ?? "4000";
+const isProduction = process.env["NODE_ENV"] === "production";
+const rawPort =
+  process.env["API_PORT"] ?? (isProduction ? process.env["PORT"] : undefined) ?? "4000";
 
 const port = Number(rawPort);
 
@@ -11,13 +13,6 @@ if (Number.isNaN(port) || port <= 0) {
 }
 
 async function start() {
-  try {
-    await initializeDatabase();
-  } catch (err) {
-    logger.error({ err }, "Database initialization failed");
-    process.exit(1);
-  }
-
   app.listen(port, (err) => {
     if (err) {
       logger.error({ err }, "Error listening on port");
@@ -25,6 +20,15 @@ async function start() {
     }
 
     logger.info({ port }, "Server listening");
+
+    // Run initialization after bind so API stays reachable even if schema sync is slow.
+    initializeDatabase()
+      .then(() => {
+        logger.info("Database initialization completed");
+      })
+      .catch((initErr) => {
+        logger.error({ err: initErr }, "Database initialization failed");
+      });
   });
 }
 

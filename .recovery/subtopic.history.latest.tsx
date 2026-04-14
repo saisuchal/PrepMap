@@ -5,7 +5,7 @@ import { ArrowLeft, CheckCircle2, MessageSquare, BookOpen, AlertCircle, Lightbul
 import { useGetSubtopicContent, useTrackEvent } from "@/api-client";
 import { Button } from "@/components/ui/button";
 import { getStoredUser } from "@/lib/auth";
-import { parseStructuredExplanation, repairBrokenFormulaBullets } from "@/lib/text-format";
+import { repairBrokenFormulaBullets } from "@/lib/text-format";
 
 function LearningGoalBlock({ learningGoal }: { learningGoal?: string | null }) {
   const goal = String(learningGoal || "").trim();
@@ -291,11 +291,6 @@ export default function Subtopic() {
 
   const foundationalQuestions = content?.questions?.filter(q => q.markType === "Foundational") || [];
   const appliedQuestions = content?.questions?.filter(q => q.markType === "Applied") || [];
-  const structured = parseStructuredExplanation(String((content as any)?.explanation || ""), {
-    learningGoal: String((content as any)?.learningGoal || ""),
-    exampleBlock: String((content as any)?.exampleBlock || ""),
-    supportNote: String((content as any)?.supportNote || ""),
-  });
   const prerequisiteNodeId = content?.prerequisiteNodeIds?.[0] || "";
   const prerequisiteTitle = content?.prerequisiteTitles?.[0] || "";
   const nextNodeId = content?.nextRecommendedNodeIds?.[0] || "";
@@ -347,7 +342,7 @@ export default function Subtopic() {
             nextRecommendedNodeIds={content.nextRecommendedNodeIds}
             onNavigate={navigateToNode}
           />
-          <LearningGoalBlock learningGoal={structured.learningGoal} />
+          <LearningGoalBlock learningGoal={content.learningGoal} />
           <div className="px-5 sm:px-6">
             <section className="space-y-3 mt-4">
               <div className="flex items-center gap-2">
@@ -355,13 +350,13 @@ export default function Subtopic() {
                 <h1 className="text-lg sm:text-xl font-display font-bold text-foreground">Core Idea</h1>
               </div>
             <div className="prose prose-slate max-w-none prose-p:text-foreground prose-p:leading-relaxed prose-strong:text-foreground text-base sm:text-lg">
-              <div className="whitespace-pre-line text-foreground/70">{repairBrokenFormulaBullets(structured.coreExplanation)}</div>
+              <div className="whitespace-pre-line text-foreground/70">{repairBrokenFormulaBullets(content.explanation)}</div>
             </div>
             </section>
           </div>
 
-          <ExampleBlock text={structured.exampleBlock} />
-          <SupportNoteBlock text={structured.supportNote} />
+          <ExampleBlock text={content.exampleBlock} />
+          <SupportNoteBlock text={content.supportNote} />
           <div className="flex items-center justify-between gap-3">
             <ChainNavButton
               title={prerequisiteTitle}

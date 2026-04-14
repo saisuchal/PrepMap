@@ -28,6 +28,8 @@ import { repairBrokenFormulaBullets } from "../lib/textFormatting";
 
 const router: IRouter = Router();
 
+type CheapGenerationMode = "explanations_only" | "explanations_and_questions" | "questions_only";
+
 type CheapImportProgress = {
   configId: string;
   status: "idle" | "processing" | "complete" | "error";
@@ -77,6 +79,13 @@ function normalizeText(value: string): string {
 function toSlug(value: string): string {
   const normalized = normalizeText(value);
   return normalized ? normalized.replace(/\s+/g, "_") : "untitled";
+}
+
+function parseCheapGenerationMode(value: unknown): CheapGenerationMode {
+  const raw = String(value || "").trim().toLowerCase();
+  if (raw === "explanations_only") return "explanations_only";
+  if (raw === "questions_only") return "questions_only";
+  return "explanations_and_questions";
 }
 
 function isInstructionalAnswerPlaceholder(answer: string): boolean {
@@ -252,9 +261,15 @@ type ImportUnit = {
   topics: Array<{
     title: string;
     explanation?: string;
+    learning_goal?: string;
+    example_block?: string;
+    support_note?: string;
     subtopics: Array<{
       title: string;
       explanation: string;
+      learning_goal?: string;
+      example_block?: string;
+      support_note?: string;
     }>;
   }>;
 };
@@ -269,7 +284,12 @@ type ImportQuestion = {
   isStarred?: boolean;
 };
 
-function parseImportBody(body: unknown): { units: ImportUnit[]; questions: ImportQuestion[] } {
+function parseImportBody(body: unknown): {
+  mode: CheapGenerationMode;
+  units: ImportUnit[];
+  questions: ImportQuestion[];
+} {
+  const mode = parseCheapGenerationMode((body as any)?.mode ?? (body as any)?.generationMode);
   const unitsRaw = Array.isArray((body as any)?.units) ? (body as any).units : [];
   const questionsRaw = Array.isArray((body as any)?.questions) ? (body as any).questions : [];
 
@@ -279,9 +299,15 @@ function parseImportBody(body: unknown): { units: ImportUnit[]; questions: Impor
       topics: (Array.isArray(u?.topics) ? u.topics : []).map((t: any) => ({
       title: String(t?.title || "").trim(),
         explanation: String(t?.explanation || "").trim(),
+        learning_goal: String(t?.learning_goal || "").trim(),
+        example_block: String(t?.example_block || "").trim(),
+        support_note: String(t?.support_note || "").trim(),
         subtopics: (Array.isArray(t?.subtopics) ? t.subtopics : []).map((s: any) => ({
           title: String(s?.title || "").trim(),
           explanation: String(s?.explanation || "").trim(),
+          learning_goal: String(s?.learning_goal || "").trim(),
+          example_block: String(s?.example_block || "").trim(),
+          support_note: String(s?.support_note || "").trim(),
         })).filter((s: any) => s.title),
       })).filter((t: any) => t.title && t.subtopics.length > 0),
     }))
@@ -306,7 +332,81 @@ function parseImportBody(body: unknown): { units: ImportUnit[]; questions: Impor
     })
     .filter((q: ImportQuestion) => q.question && q.answer && isLikelyQuestionText(q.question));
 
-  return { units, questions };
+  return { mode, units, questions };
+}
+
+function parseStructuredSections(rawText: string): {
+  core: string;
+  goal: string;
+  example: string;
+  note: string;
+} {
+  const text = String(rawText || "").trim();
+  if (!text) return { core: "", goal: "", example: "", note: "" };
+
+  const sections: Record<"core" | "goal" | "example" | "note", string[]> = {
+    core: [],
+    goal: [],
+    example: [],
+    note: [],
+  };
+  let current: keyof typeof sections = "core";
+
+  for (const line of text.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed) {
+      sections[current].push("");
+      continue;
+    }
+
+    const headingRules: Array<{ key: keyof typeof sections; re: RegExp }> = [
+      { key: "core", re: /^\s*core idea\s*:?\s*(.*)$/i },
+      { key: "goal", re: /^\s*learning goal\s*:?\s*(.*)$/i },
+      { key: "example", re: /^\s*quick example\s*:?\s*(.*)$/i },
+      { key: "note", re: /^\s*(?:helper note|helpful note|support note)\s*:?\s*(.*)$/i },
+    ];
+
+    let matched = false;
+    for (const rule of headingRules) {
+      const m = trimmed.match(rule.re);
+      if (m) {
+        current = rule.key;
+        const tail = String(m[1] || "").trim();
+        if (tail) sections[current].push(tail);
+        matched = true;
+        break;
+      }
+    }
+    if (!matched) sections[current].push(trimmed);
+  }
+
+  return {
+    core: sections.core.join("\n").trim(),
+    goal: sections.goal.join("\n").trim(),
+    example: sections.example.join("\n").trim(),
+    note: sections.note.join("\n").trim(),
+  };
+}
+
+function buildStructuredExplanationText(params: {
+  explanation?: string;
+  learningGoal?: string;
+  exampleBlock?: string;
+  supportNote?: string;
+}): string {
+  const base = parseStructuredSections(String(params.explanation || ""));
+  const core = String(base.core || params.explanation || "").trim();
+  const goal = String(params.learningGoal || base.goal || "").trim();
+  const example = String(params.exampleBlock || base.example || "").trim();
+  const note = String(params.supportNote || base.note || "").trim();
+
+  const lines: string[] = [];
+  if (core) lines.push(`Core Idea: ${core}`);
+  if (goal) lines.push(`Learning Goal: ${goal}`);
+  if (example) lines.push(`Quick Example: ${example}`);
+  if (note) lines.push(`Helper Note: ${note}`);
+  const combined = lines.join("\n\n").trim();
+  return repairBrokenFormulaBullets(combined || core || "");
 }
 
 function normalizeUploadedObjectPath(rawPath: string): string {
@@ -556,11 +656,20 @@ router.post("/configs/:id/cheap/lane-a", requireAdmin, async (req, res) => {
   try {
     const { id } = TriggerGenerationParams.parse(req.params);
     const pkg = await buildLaneAConfigPackage(id);
+    const mode = parseCheapGenerationMode((req.body as any)?.mode);
 
-    const effectiveStarTarget = pkg.replicaQuestions.length > 0 ? pkg.totalStarTarget : 0;
+    const isQuestionsOnly = mode === "questions_only";
+    const isExplanationsOnly = mode === "explanations_only";
+
+    const effectiveStarTarget =
+      isExplanationsOnly ? 0 : pkg.replicaQuestions.length > 0 ? pkg.totalStarTarget : 0;
     const starredReplica = pkg.replicaQuestions.filter((q) => q.isStarred).length;
+    const totalQuestionTarget = isExplanationsOnly ? 0 : pkg.totalQuestionTarget;
     const remainingStarsNeeded = Math.max(0, effectiveStarTarget - starredReplica);
-    const remainingQuestionsNeeded = Math.max(0, pkg.totalQuestionTarget - pkg.replicaQuestions.length);
+    const remainingQuestionsNeeded = Math.max(
+      0,
+      totalQuestionTarget - (isQuestionsOnly ? pkg.replicaQuestions.length : pkg.replicaQuestions.length),
+    );
 
     const masterPrompt = `You are generating exam-prep content for this config.
 
@@ -573,8 +682,17 @@ STRICT OUTPUT: Return ONLY valid JSON in this exact shape:
         {
           "title": "Topic title",
           "explanation": "50-90 word crisp topic explanation with one tiny example/use-case",
+          "example_block": "One tiny practical example or use-case in 1-3 short lines",
+          "support_note": "One short helpful note, pitfall, exception, or reminder in 1-2 lines",
+          "learning_goal": "One short line saying what the learner should be able to do after this topic",
           "subtopics": [
-            { "title": "Subtopic title", "explanation": "60-100 word crisp explanation with one tiny example/use-case" }
+            {
+              "title": "Subtopic title",
+              "explanation": "60-100 word crisp explanation with one tiny example/use-case",
+              "example_block": "One tiny practical example or use-case in 1-3 short lines",
+              "support_note": "One short helpful note, pitfall, exception, or reminder in 1-2 lines",
+              "learning_goal": "One short line saying what the learner should be able to do after this subtopic"
+            }
           ]
         }
       ]
@@ -595,8 +713,9 @@ STRICT OUTPUT: Return ONLY valid JSON in this exact shape:
 
 CONSTRAINTS:
 - Keep the same unit/topic/subtopic structure.
-- Include all mandatory replica questions exactly as given below.
-- Total questions required: ${pkg.totalQuestionTarget}
+- Mode selected: ${mode}
+- Include all mandatory replica questions exactly as given below (skip this only for explanations_only mode).
+- Total questions required: ${totalQuestionTarget}
 - Total starred required: ${effectiveStarTarget}
 - Replica questions already included: ${pkg.replicaQuestions.length}
 - Remaining questions to generate: ${remainingQuestionsNeeded}
@@ -612,20 +731,27 @@ CONSTRAINTS:
   - Escape inner double quotes inside string values (use \\").
   - No trailing commas.
   - Use true/false for booleans (not strings).
-- questions array must contain exactly ${pkg.totalQuestionTarget} items.
+- questions array must contain exactly ${totalQuestionTarget} items.
 - Exactly ${effectiveStarTarget} items must have "isStarred": true.
 - unitTitle/topicTitle/subtopicTitle in each question must exactly match titles from STRUCTURE.
 - markType must be only "Foundational" or "Applied".
 - Keep mandatory replica questions verbatim for question text.
 - Topic/subtopic explanations must be snappy and beginner-friendly.
 - Each topic/subtopic explanation must include one tiny concrete example/use-case.
+- Add "example_block", "support_note", and "learning_goal" for every topic and subtopic.
 - Explanations must use short paragraphs (not one dense block).
 - Tone requirement (strict): beginner-friendly simple English only.
-- Foundational answers: 2-4 short lines, very direct, and include one tiny real-world example when it helps understanding.
-- Applied answers: 4-7 short lines with a tiny practical example.
-- Never write one dense paragraph answer; use line breaks and simple bullets/steps where useful.
+- Foundational answers: target 80-100 words (acceptable range 75-110), easy to revise.
+- Applied answers: target 150-200 words (acceptable range 140-220), with clearer depth than foundational.
+- Never write one dense paragraph; break into short paragraphs or bullets/steps for readability.
+- Give each answer this flow:
+  1) direct concept statement,
+  2) short working/mechanism explanation,
+  3) tiny practical example.
 - Decide contextually:
-  - If the subject/question is technical and code genuinely improves clarity, you may include a short fenced code block.
+  - If the subject/question is technical, strongly prefer adding a short fenced code block (3-10 lines) for at least most answers.
+  - Use realistic code-like snippets, not pseudo placeholders.
+  - Place one short explanation line before or after the code block to connect it to the answer.
   - If the subject/question is non-technical, avoid code blocks and use short step-wise explanation with a tiny practical example.
 - If original marks are known from replica/sections, map marks to labels as:
   1-3 marks => Foundational, 4+ marks => Applied.
@@ -633,23 +759,26 @@ CONSTRAINTS:
 FINAL SELF-CHECK BEFORE OUTPUT (must pass all):
 1) JSON parses without error.
 2) units preserve the same hierarchy from STRUCTURE.
-3) questions.length === ${pkg.totalQuestionTarget}
+3) questions.length === ${totalQuestionTarget}
 4) count(isStarred=true) === ${effectiveStarTarget}
 5) all mandatory replica questions are present.
 6) no duplicate question text after normalization.
 If any check fails, fix it before returning final JSON.
 
 GENERATION PROCEDURE (follow in order):
-Step A) Copy STRUCTURE into "units" exactly, then add explanations (60-100 words each).
-Step B) Start "questions" by inserting all MANDATORY_REPLICA_QUESTIONS first.
-Step C) Add exactly ${remainingQuestionsNeeded} new questions so total becomes ${pkg.totalQuestionTarget}.
-Step D) Keep total starred at exactly ${effectiveStarTarget}. Mandatory replicas are already starred.
-Step E) Re-check JSON validity and all counts before final answer.
+Step A) Copy STRUCTURE into "units" exactly.
+Step B) If mode is "explanations_only": add explanations and keep "questions": [].
+Step C) If mode is "questions_only": keep unit/topic/subtopic titles unchanged, keep explanations minimal/unchanged, and generate only questions.
+Step D) If mode is "explanations_and_questions": add explanations and questions.
+Step E) For question modes, start "questions" by inserting all MANDATORY_REPLICA_QUESTIONS first.
+Step F) Add exactly ${remainingQuestionsNeeded} new questions so total becomes ${totalQuestionTarget}.
+Step G) Keep total starred at exactly ${effectiveStarTarget}. Mandatory replicas are already starred.
+Step H) Re-check JSON validity and all counts before final answer.
 
 HARD FAILURE RULES:
-- Never return "questions": [].
-- Never return fewer or more than ${pkg.totalQuestionTarget} questions.
-- Never omit mandatory replica questions.
+- If mode is explanations_only, "questions" must be [].
+- If mode is question mode, never return fewer or more than ${totalQuestionTarget} questions.
+- If mode is question mode, never omit mandatory replica questions.
 - Never change question text of mandatory replica questions.
 
 STRUCTURE:
@@ -667,7 +796,8 @@ ${JSON.stringify(pkg.replicaQuestions, null, 2)}
       replicaQuestions: pkg.replicaQuestions,
       warnings: pkg.warnings,
       replicaExtraction: pkg.replicaExtraction,
-      totalQuestionTarget: pkg.totalQuestionTarget,
+      totalQuestionTarget,
+      mode,
       totalStarTarget: effectiveStarTarget,
       remainingQuestionsNeeded,
       remainingStarsNeeded,
@@ -764,12 +894,15 @@ async function performCheapImport(
 
     const pkg = await buildLaneAConfigPackage(id);
     const body = parseImportBody(rawBody);
+    const importMode = body.mode;
+    const isQuestionsOnlyImport = importMode === "questions_only";
+    const isExplanationsOnlyImport = importMode === "explanations_only";
     const warnings: string[] = [];
     const reusableExplanationMap = await loadReusableExplanationMap(pkg.subject, id);
     let reusedExplanations = 0;
     let generatedExplanations = 0;
 
-    if (body.units.length === 0) {
+    if (!isQuestionsOnlyImport && body.units.length === 0) {
       body.units = pkg.structure.map((u) => ({
         title: u.title,
         topics: u.topics.map((t) => ({
@@ -793,69 +926,76 @@ async function performCheapImport(
       return true;
     });
 
-    for (const mandatory of pkg.replicaQuestions) {
-      const key = normalizeText(mandatory.question);
-      const has = questions.some((q) => normalizeText(q.question) === key);
-      if (!has) {
-        const normalizedAnswer = isInstructionalAnswerPlaceholder(mandatory.answer)
-          ? buildExamReadyFallbackAnswer(
-              mandatory.question,
-              mandatory.markType,
-              mandatory.topicTitle,
-              mandatory.subtopicTitle,
-            )
-          : mandatory.answer;
-        questions.push({
-          markType: mandatory.markType,
-          question: mandatory.question,
-          answer: normalizedAnswer,
-          unitTitle: mandatory.unitTitle,
-          topicTitle: mandatory.topicTitle,
-          subtopicTitle: mandatory.subtopicTitle,
-          isStarred: true,
-        });
+    if (isExplanationsOnlyImport) {
+      questions = [];
+    } else {
+      for (const mandatory of pkg.replicaQuestions) {
+        const key = normalizeText(mandatory.question);
+        const has = questions.some((q) => normalizeText(q.question) === key);
+        if (!has) {
+          const normalizedAnswer = isInstructionalAnswerPlaceholder(mandatory.answer)
+            ? buildExamReadyFallbackAnswer(
+                mandatory.question,
+                mandatory.markType,
+                mandatory.topicTitle,
+                mandatory.subtopicTitle,
+              )
+            : mandatory.answer;
+          questions.push({
+            markType: mandatory.markType,
+            question: mandatory.question,
+            answer: normalizedAnswer,
+            unitTitle: mandatory.unitTitle,
+            topicTitle: mandatory.topicTitle,
+            subtopicTitle: mandatory.subtopicTitle,
+            isStarred: true,
+          });
+        }
       }
-    }
-    if (pkg.replicaQuestions.length > 0) {
-      warnings.push("Mandatory replica questions were ensured during import.");
-    }
-
-    if (questions.length > pkg.totalQuestionTarget) {
-      const mandatoryKeys = new Set(pkg.replicaQuestions.map((q) => normalizeText(q.question)));
-      questions.sort((a, b) => {
-        const aMandatory = mandatoryKeys.has(normalizeText(a.question)) ? 1 : 0;
-        const bMandatory = mandatoryKeys.has(normalizeText(b.question)) ? 1 : 0;
-        const aStar = a.isStarred ? 1 : 0;
-        const bStar = b.isStarred ? 1 : 0;
-        return bMandatory - aMandatory || bStar - aStar;
-      });
-      questions = questions.slice(0, pkg.totalQuestionTarget);
-      warnings.push(`Question list exceeded ${pkg.totalQuestionTarget}; trimmed automatically.`);
-    }
-
-    if (questions.length < pkg.totalQuestionTarget) {
-      const flatSubtopics = body.units.flatMap((u) =>
-        u.topics.flatMap((t) =>
-          t.subtopics.map((s) => ({ unitTitle: u.title, topicTitle: t.title, subtopicTitle: s.title }))
-        )
-      );
-      let idx = 0;
-      while (questions.length < pkg.totalQuestionTarget && flatSubtopics.length > 0) {
-        const s = flatSubtopics[idx % flatSubtopics.length];
-        questions.push({
-          markType: idx % 2 === 0 ? "Foundational" : "Applied",
-          question: idx % 2 === 0 ? `Explain ${s.subtopicTitle}.` : `Apply ${s.subtopicTitle} with a practical example.`,
-          answer: idx % 2 === 0
-            ? buildExamReadyFallbackAnswer(`Explain ${s.subtopicTitle}.`, "Foundational", s.topicTitle, s.subtopicTitle)
-            : buildExamReadyFallbackAnswer(`Apply ${s.subtopicTitle} with a practical example.`, "Applied", s.topicTitle, s.subtopicTitle),
-          unitTitle: s.unitTitle,
-          topicTitle: s.topicTitle,
-          subtopicTitle: s.subtopicTitle,
-          isStarred: false,
-        });
-        idx++;
+      if (pkg.replicaQuestions.length > 0) {
+        warnings.push("Mandatory replica questions were ensured during import.");
       }
-      warnings.push("Question list was below target; auto-filled remaining with template questions.");
+
+      if (questions.length > pkg.totalQuestionTarget) {
+        const mandatoryKeys = new Set(pkg.replicaQuestions.map((q) => normalizeText(q.question)));
+        questions.sort((a, b) => {
+          const aMandatory = mandatoryKeys.has(normalizeText(a.question)) ? 1 : 0;
+          const bMandatory = mandatoryKeys.has(normalizeText(b.question)) ? 1 : 0;
+          const aStar = a.isStarred ? 1 : 0;
+          const bStar = b.isStarred ? 1 : 0;
+          return bMandatory - aMandatory || bStar - aStar;
+        });
+        questions = questions.slice(0, pkg.totalQuestionTarget);
+        warnings.push(`Question list exceeded ${pkg.totalQuestionTarget}; trimmed automatically.`);
+      }
+
+      if (questions.length < pkg.totalQuestionTarget) {
+        const flatSubtopics = (isQuestionsOnlyImport ? pkg.structure.map((u) => ({
+          title: u.title,
+          topics: u.topics.map((t) => ({ title: t.title, subtopics: t.subtopics.map((s) => ({ title: s })) })),
+        })) : body.units).flatMap((u) =>
+          u.topics.flatMap((t) =>
+            t.subtopics.map((s: any) => ({ unitTitle: u.title, topicTitle: t.title, subtopicTitle: s.title }))
+          )
+        );
+        let idx = 0;
+        while (questions.length < pkg.totalQuestionTarget && flatSubtopics.length > 0) {
+          const s = flatSubtopics[idx % flatSubtopics.length];
+          questions.push({
+            markType: idx % 2 === 0 ? "Foundational" : "Applied",
+            question: idx % 2 === 0 ? `Explain ${s.subtopicTitle}.` : `Apply ${s.subtopicTitle} with a practical example.`,
+            answer: idx % 2 === 0
+              ? buildExamReadyFallbackAnswer(`Explain ${s.subtopicTitle}.`, "Foundational", s.topicTitle, s.subtopicTitle)
+              : buildExamReadyFallbackAnswer(`Apply ${s.subtopicTitle} with a practical example.`, "Applied", s.topicTitle, s.subtopicTitle),
+            unitTitle: s.unitTitle,
+            topicTitle: s.topicTitle,
+            subtopicTitle: s.subtopicTitle,
+            isStarred: false,
+          });
+          idx++;
+        }
+        warnings.push("Question list was below target; auto-filled remaining with template questions.");
+      }
     }
 
     setCheapImportProgress(id, {
@@ -866,39 +1006,73 @@ async function performCheapImport(
       warnings,
     });
 
-    const starredTarget = pkg.replicaQuestions.length > 0 ? pkg.totalStarTarget : 0;
-    let starredCount = questions.filter((q) => q.isStarred).length;
-    if (starredCount < starredTarget) {
-      for (const q of questions) {
-        if (starredCount >= starredTarget) break;
-        if (!q.isStarred) {
-          q.isStarred = true;
-          starredCount++;
+    if (!isExplanationsOnlyImport) {
+      const starredTarget = pkg.replicaQuestions.length > 0 ? pkg.totalStarTarget : 0;
+      let starredCount = questions.filter((q) => q.isStarred).length;
+      if (starredCount < starredTarget) {
+        for (const q of questions) {
+          if (starredCount >= starredTarget) break;
+          if (!q.isStarred) {
+            q.isStarred = true;
+            starredCount++;
+          }
         }
-      }
-      warnings.push(`Star count was low; auto-adjusted to ${starredTarget}.`);
-    } else if (starredCount > starredTarget) {
-      const mandatoryKeys = new Set(pkg.replicaQuestions.map((q) => normalizeText(q.question)));
-      for (let i = questions.length - 1; i >= 0 && starredCount > starredTarget; i--) {
-        const q = questions[i];
-        if (q.isStarred && !mandatoryKeys.has(normalizeText(q.question))) {
-          q.isStarred = false;
-          starredCount--;
+        warnings.push(`Star count was low; auto-adjusted to ${starredTarget}.`);
+      } else if (starredCount > starredTarget) {
+        const mandatoryKeys = new Set(pkg.replicaQuestions.map((q) => normalizeText(q.question)));
+        for (let i = questions.length - 1; i >= 0 && starredCount > starredTarget; i--) {
+          const q = questions[i];
+          if (q.isStarred && !mandatoryKeys.has(normalizeText(q.question))) {
+            q.isStarred = false;
+            starredCount--;
+          }
         }
-      }
-      for (let i = questions.length - 1; i >= 0 && starredCount > starredTarget; i--) {
-        const q = questions[i];
-        if (q.isStarred) {
-          q.isStarred = false;
-          starredCount--;
+        for (let i = questions.length - 1; i >= 0 && starredCount > starredTarget; i--) {
+          const q = questions[i];
+          if (q.isStarred) {
+            q.isStarred = false;
+            starredCount--;
+          }
         }
+        warnings.push(`Star count exceeded target; auto-trimmed to ${starredTarget}.`);
       }
-      warnings.push(`Star count exceeded target; auto-trimmed to ${starredTarget}.`);
     }
 
     const pathMap = new Map<string, { nodeId: string; unitSubtopicId: string }>();
 
-    await db.transaction(async (tx) => {
+    if (isQuestionsOnlyImport) {
+      const existingNodes = await db
+        .select({
+          id: nodesTable.id,
+          title: nodesTable.title,
+          type: nodesTable.type,
+          parentId: nodesTable.parentId,
+          unitSubtopicId: nodesTable.unitSubtopicId,
+          configId: nodesTable.configId,
+        })
+        .from(nodesTable)
+        .where(eq(nodesTable.configId, id));
+
+      const nodeById = new Map(existingNodes.map((n) => [n.id, n]));
+      for (const node of existingNodes) {
+        if (node.type !== "subtopic") continue;
+        const subtopicId = String(node.unitSubtopicId || "").trim();
+        if (!subtopicId) continue;
+        const topic = node.parentId ? nodeById.get(node.parentId) : null;
+        const unit = topic?.parentId ? nodeById.get(topic.parentId) : null;
+        if (!topic || !unit) continue;
+        const key = `${normalizeText(unit.title)}|${normalizeText(topic.title)}|${normalizeText(node.title)}`;
+        pathMap.set(key, { nodeId: node.id, unitSubtopicId: subtopicId });
+      }
+
+      if (pathMap.size === 0) {
+        throw new Error("No existing subtopic chain found for questions_only import. Generate explanations/structure first.");
+      }
+
+      await db.delete(configQuestionsTable).where(eq(configQuestionsTable.configId, id));
+      warnings.push("questions_only mode: existing question bank replaced; structure and explanations were preserved.");
+    } else {
+      await db.transaction(async (tx) => {
       const existingNodes = await tx
         .select({ id: nodesTable.id })
         .from(nodesTable)
@@ -987,18 +1161,24 @@ async function performCheapImport(
         for (let ti = 0; ti < unit.topics.length; ti++) {
           const topic = unit.topics[ti];
           const topicId = `${id}_u${ui + 1}_t${ti + 1}`;
-          let topicExplanation = (topic.explanation || "").trim();
-          if (!topicExplanation) {
+          let topicCoreExplanation = (topic.explanation || "").trim();
+          if (!topicCoreExplanation) {
             try {
-              topicExplanation = await generateTopicExplanation(
+              topicCoreExplanation = await generateTopicExplanation(
                 pkg.subject,
                 unit.title,
                 topic.title,
               );
             } catch {
-              topicExplanation = "Topic summary will be updated soon.";
+              topicCoreExplanation = "Topic summary will be updated soon.";
             }
           }
+          const topicExplanation = buildStructuredExplanationText({
+            explanation: topicCoreExplanation,
+            learningGoal: topic.learning_goal,
+            exampleBlock: topic.example_block,
+            supportNote: topic.support_note,
+          });
 
           const normalizedTopicTitle = normalizeText(topic.title);
           const topicCanonicalId = `utp_${unitLibraryId}_${toSlug(topic.title)}`;
@@ -1039,15 +1219,15 @@ async function performCheapImport(
             const sub = topic.subtopics[si];
             const subId = `${id}_u${ui + 1}_t${ti + 1}_s${si + 1}`;
             const key = explanationKey(unit.title, topic.title, sub.title);
-            let explanation = (sub.explanation || "").trim();
-            if (!explanation) {
+            let coreExplanation = (sub.explanation || "").trim();
+            if (!coreExplanation) {
               const reused = reusableExplanationMap.get(key);
               if (reused?.trim()) {
-                explanation = reused;
+                coreExplanation = reused;
                 reusedExplanations++;
               } else {
                 try {
-                  explanation = await generateSubtopicExplanation(
+                  coreExplanation = await generateSubtopicExplanation(
                     pkg.subject,
                     unit.title,
                     topic.title,
@@ -1055,10 +1235,16 @@ async function performCheapImport(
                   );
                   generatedExplanations++;
                 } catch {
-                  explanation = "Content will be updated soon.";
+                  coreExplanation = "Content will be updated soon.";
                 }
               }
             }
+            const explanation = buildStructuredExplanationText({
+              explanation: coreExplanation,
+              learningGoal: sub.learning_goal,
+              exampleBlock: sub.example_block,
+              supportNote: sub.support_note,
+            });
 
             const normalizedSubtopicTitle = normalizeText(sub.title);
             const subCanonicalId = `ust_${unitTopicId}_${toSlug(sub.title)}`;
@@ -1070,7 +1256,7 @@ async function performCheapImport(
                 title: sub.title,
                 normalizedTitle: normalizedSubtopicTitle,
                 sortOrder: si + 1,
-                explanation: repairBrokenFormulaBullets(explanation),
+              explanation: repairBrokenFormulaBullets(explanation),
               })
               .onConflictDoUpdate({
                 target: [unitSubtopicsTable.unitTopicId, unitSubtopicsTable.normalizedTitle],
@@ -1098,19 +1284,29 @@ async function performCheapImport(
           }
         }
       }
-    });
+      });
+    }
 
-    setCheapImportProgress(id, {
-      stage: "saving_questions",
-      message: "Saving question bank...",
-    });
+    if (!isExplanationsOnlyImport) {
+      setCheapImportProgress(id, {
+        stage: "saving_questions",
+        message: "Saving question bank...",
+      });
+    }
 
     let processedQuestions = 0;
     for (let i = 0; i < questions.length; i++) {
       const q = questions[i];
       const key = `${normalizeText(q.unitTitle)}|${normalizeText(q.topicTitle)}|${normalizeText(q.subtopicTitle)}`;
-      const mapped = pathMap.get(key) || Array.from(pathMap.values())[0];
-      if (!mapped) continue;
+      const mapped = pathMap.get(key);
+      if (!mapped) {
+        if (isQuestionsOnlyImport) {
+          throw new Error(
+            `Question mapping failed for "${q.question}" at ${q.unitTitle} > ${q.topicTitle} > ${q.subtopicTitle}.`,
+          );
+        }
+        continue;
+      }
 
       await db.insert(configQuestionsTable).values({
         configId: id,

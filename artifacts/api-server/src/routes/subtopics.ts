@@ -18,6 +18,92 @@ import { requireAdmin } from "../middleware/adminAuth";
 
 const router: IRouter = Router();
 
+function parseStructuredExplanation(rawText: string | null | undefined): {
+  coreExplanation: string;
+  learningGoal: string | null;
+  exampleBlock: string | null;
+  supportNote: string | null;
+} {
+  const text = String(rawText || "").trim();
+  if (!text) {
+    return {
+      coreExplanation: "",
+      learningGoal: null,
+      exampleBlock: null,
+      supportNote: null,
+    };
+  }
+
+  const sections: Record<"core" | "goal" | "example" | "note", string[]> = {
+    core: [],
+    goal: [],
+    example: [],
+    note: [],
+  };
+
+  let current: keyof typeof sections = "core";
+  for (const line of text.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed) {
+      sections[current].push("");
+      continue;
+    }
+
+    const headingRules: Array<{ key: keyof typeof sections; re: RegExp }> = [
+      { key: "core", re: /^\s*core idea\s*:?\s*(.*)$/i },
+      { key: "goal", re: /^\s*learning goal\s*:?\s*(.*)$/i },
+      { key: "example", re: /^\s*quick example\s*:?\s*(.*)$/i },
+      { key: "note", re: /^\s*(?:helper note|helpful note|support note)\s*:?\s*(.*)$/i },
+    ];
+
+    let matched = false;
+    for (const rule of headingRules) {
+      const m = trimmed.match(rule.re);
+      if (m) {
+        current = rule.key;
+        const tail = String(m[1] || "").trim();
+        if (tail) sections[current].push(tail);
+        matched = true;
+        break;
+      }
+    }
+    if (!matched) sections[current].push(trimmed);
+  }
+
+  const clean = (value: string) => value.trim() || null;
+  return {
+    coreExplanation: clean(sections.core.join("\n")) || text,
+    learningGoal: clean(sections.goal.join("\n")),
+    exampleBlock: clean(sections.example.join("\n")),
+    supportNote: clean(sections.note.join("\n")),
+  };
+}
+
+function toOrder(value: string | null | undefined): number {
+  const n = Number(String(value || "").trim());
+  return Number.isFinite(n) ? n : 0;
+}
+
+function parseTextArray(raw: unknown): string[] {
+  if (Array.isArray(raw)) {
+    return raw.map((v) => String(v || "").trim()).filter(Boolean);
+  }
+  const text = String(raw ?? "").trim();
+  if (!text) return [];
+  try {
+    const parsed = JSON.parse(text);
+    if (Array.isArray(parsed)) {
+      return parsed.map((v) => String(v || "").trim()).filter(Boolean);
+    }
+  } catch {
+    // fall through
+  }
+  if (text.includes(",")) {
+    return text.split(",").map((v) => v.trim()).filter(Boolean);
+  }
+  return [text];
+}
+
 function normalizeToken(value: string | null | undefined): string {
   return String(value ?? "")
     .trim()
@@ -94,6 +180,15 @@ router.get("/subtopics/:id", async (req, res) => {
       .select({
         id: nodesTable.id,
         configId: nodesTable.configId,
+        parentId: nodesTable.parentId,
+        explanation: nodesTable.explanation,
+        learningGoal: nodesTable.learningGoal,
+        exampleBlock: nodesTable.exampleBlock,
+        supportNote: nodesTable.supportNote,
+        prerequisiteTitles: nodesTable.prerequisiteTitles,
+        prerequisiteNodeIds: nodesTable.prerequisiteNodeIds,
+        nextRecommendedTitles: nodesTable.nextRecommendedTitles,
+        nextRecommendedNodeIds: nodesTable.nextRecommendedNodeIds,
         unitSubtopicId: nodesTable.unitSubtopicId,
       })
       .from(nodesTable)
@@ -199,10 +294,42 @@ router.get("/subtopics/:id", async (req, res) => {
         ),
       );
 
+    const allNodesForConfig = await db
+      .select({
+        id: nodesTable.id,
+        title: nodesTable.title,
+        parentId: nodesTable.parentId,
+        sortOrder: nodesTable.sortOrder,
+      })
+      .from(nodesTable)
+      .where(eq(nodesTable.configId, node.configId));
+    const siblings = allNodesForConfig
+      .filter((n) => String(n.parentId || "") === String(node.parentId || ""))
+      .sort((a, b) => {
+        const byOrder = toOrder(a.sortOrder) - toOrder(b.sortOrder);
+        if (byOrder !== 0) return byOrder;
+        return String(a.title || "").localeCompare(String(b.title || ""));
+      });
+    const currentIndex = siblings.findIndex((n) => n.id === node.id);
+    const prev = currentIndex > 0 ? siblings[currentIndex - 1] : null;
+    const next = currentIndex >= 0 && currentIndex < siblings.length - 1 ? siblings[currentIndex + 1] : null;
+
+    const structured = parseStructuredExplanation(subtopic.explanation || node.explanation);
+    const explicitPrereqTitles = parseTextArray(node.prerequisiteTitles);
+    const explicitPrereqNodeIds = parseTextArray(node.prerequisiteNodeIds);
+    const explicitNextTitles = parseTextArray(node.nextRecommendedTitles);
+    const explicitNextNodeIds = parseTextArray(node.nextRecommendedNodeIds);
     const response = GetSubtopicContentResponse.parse({
       id: subtopic.id,
       nodeId: id,
-      explanation: String(subtopic.explanation || ""),
+      explanation: structured.coreExplanation,
+      learningGoal: String(node.learningGoal || "").trim() || structured.learningGoal,
+      exampleBlock: String(node.exampleBlock || "").trim() || structured.exampleBlock,
+      supportNote: String(node.supportNote || "").trim() || structured.supportNote,
+      prerequisiteTitles: explicitPrereqTitles.length > 0 ? explicitPrereqTitles : prev ? [prev.title] : [],
+      prerequisiteNodeIds: explicitPrereqNodeIds.length > 0 ? explicitPrereqNodeIds : prev ? [prev.id] : [],
+      nextRecommendedTitles: explicitNextTitles.length > 0 ? explicitNextTitles : next ? [next.title] : [],
+      nextRecommendedNodeIds: explicitNextNodeIds.length > 0 ? explicitNextNodeIds : next ? [next.id] : [],
       questions: questions.map((q) => ({
         id: q.id,
         markType: q.markType === "2" ? "Foundational" : q.markType === "5" ? "Applied" : q.markType,

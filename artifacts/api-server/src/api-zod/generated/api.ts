@@ -164,6 +164,13 @@ export const GetNodesResponseItem = zod.object({
   type: zod.enum(["unit", "topic", "subtopic"]),
   parentId: zod.string().nullish(),
   explanation: zod.string().nullish(),
+  learningGoal: zod.string().nullish(),
+  exampleBlock: zod.string().nullish(),
+  supportNote: zod.string().nullish(),
+  prerequisiteTitles: zod.array(zod.string()).optional(),
+  prerequisiteNodeIds: zod.array(zod.string()).optional(),
+  nextRecommendedTitles: zod.array(zod.string()).optional(),
+  nextRecommendedNodeIds: zod.array(zod.string()).optional(),
   sortOrder: zod.string().optional(),
 });
 export const GetNodesResponse = zod.array(GetNodesResponseItem);
@@ -179,6 +186,13 @@ export const GetSubtopicContentResponse = zod.object({
   id: zod.string(),
   nodeId: zod.string(),
   explanation: zod.string(),
+  learningGoal: zod.string().nullish(),
+  exampleBlock: zod.string().nullish(),
+  supportNote: zod.string().nullish(),
+  prerequisiteTitles: zod.array(zod.string()).optional(),
+  prerequisiteNodeIds: zod.array(zod.string()).optional(),
+  nextRecommendedTitles: zod.array(zod.string()).optional(),
+  nextRecommendedNodeIds: zod.array(zod.string()).optional(),
   questions: zod.array(
     zod.object({
       id: zod.number(),

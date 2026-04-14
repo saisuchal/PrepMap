@@ -134,6 +134,13 @@ export interface Node {
   type: NodeType;
   parentId?: string | null;
   explanation?: string | null;
+  learningGoal?: string | null;
+  exampleBlock?: string | null;
+  supportNote?: string | null;
+  prerequisiteTitles?: string[];
+  prerequisiteNodeIds?: string[];
+  nextRecommendedTitles?: string[];
+  nextRecommendedNodeIds?: string[];
   sortOrder?: string;
 }
 
@@ -158,6 +165,13 @@ export interface SubtopicContent {
   id: string;
   nodeId: string;
   explanation: string;
+  learningGoal?: string | null;
+  exampleBlock?: string | null;
+  supportNote?: string | null;
+  prerequisiteTitles?: string[];
+  prerequisiteNodeIds?: string[];
+  nextRecommendedTitles?: string[];
+  nextRecommendedNodeIds?: string[];
   questions: SubtopicQuestion[];
 }
 

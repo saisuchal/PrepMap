@@ -16,7 +16,7 @@ import {
 } from "@/api-client";
 import { buildTree, type TreeNode } from "@/lib/utils";
 import { getStoredUser } from "@/lib/auth";
-import { parseStructuredExplanation, repairBrokenFormulaBullets } from "@/lib/text-format";
+import { repairBrokenFormulaBullets } from "@/lib/text-format";
 import { Button } from "@/components/ui/button";
 import { EXAM_TYPES, SEMESTERS, UNIVERSITIES } from "@/lib/constants";
 
@@ -39,6 +39,7 @@ const UNIT_GAP = 64;
 const LAYOUT_W = 1400;
 const QUESTION_BANK_LANE_H = 88;
 const QUESTION_BANK_EVENT_PREFIX = "__qb__:";
+const TOPIC_INTERACTION_PREFIX = "__topic__:";
 const ZOOM_STEP = 1.1;
 const MAX_AUTO_FOCUS_ZOOM = 1.1;
 
@@ -889,16 +890,8 @@ export default function Roadmap() {
   const navigateToNodeDetail = useCallback((nodeId: string) => {
     const nextId = String(nodeId || "").trim();
     if (!nextId) return;
-    const target = nodeById.get(nextId);
-    if (target) {
-      expandPathForNode(nextId, {
-        skipCamera: false,
-        focusTopicId: target.type === "subtopic" ? (target.parentId || null) : target.type === "topic" ? target.id : null,
-      });
-    }
-    setQuestionBankOpen(false);
     setSelectedNodeId(nextId);
-  }, [expandPathForNode, nodeById]);
+  }, []);
 
   const completion = useMemo(() => {
     const doneSubtopics = new Set<string>();
@@ -2074,7 +2067,6 @@ export default function Roadmap() {
                 node={selectedNode}
                 configId={configId}
                 examParam={examParam}
-                allNodesData={nodes ?? []}
                 onTracked={() => setCompletionVersion((v) => v + 1)}
                 isNodeCompleted={isNodeCompleted}
                 onNavigate={navigateToNodeDetail}
@@ -2102,7 +2094,6 @@ export default function Roadmap() {
             node={selectedNode}
             configId={configId}
             examParam={examParam}
-            allNodesData={nodes ?? []}
             onTracked={() => setCompletionVersion((v) => v + 1)}
             isNodeCompleted={isNodeCompleted}
             onNavigate={navigateToNodeDetail}
@@ -2129,7 +2120,6 @@ function ContentModal({
   node,
   configId,
   examParam,
-  allNodesData,
   onTracked,
   isNodeCompleted,
   onNavigate,
@@ -2139,15 +2129,6 @@ function ContentModal({
   node: LayoutNode;
   configId: string;
   examParam: string;
-  allNodesData?: Array<{
-    id: string;
-    type: string;
-    title: string;
-    parentId?: string | null;
-    sortOrder?: string;
-    nextRecommendedNodeIds?: string[];
-    nextRecommendedTitles?: string[];
-  }>;
   onTracked?: () => void;
   isNodeCompleted?: (nodeId: string) => boolean;
   onNavigate: (nodeId: string) => void;
@@ -2164,17 +2145,14 @@ function ContentModal({
 
   const user = getStoredUser();
   const trackEventMutation = useTrackEvent();
-  const [isTracked, setIsTracked] = useState(isSubtopic ? !!sessionStorage.getItem(trackSessionKey) : false);
+  const [isTracked, setIsTracked] = useState(!!sessionStorage.getItem(trackSessionKey));
   const scrollRef = useRef<HTMLDivElement>(null);
   const trackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const topicInteractionSessionKey = `tracked_topic_interaction_${node.id}`;
 
   useEffect(() => {
-    if (isSubtopic) {
-      setIsTracked(!!sessionStorage.getItem(trackSessionKey));
-      return;
-    }
-    setIsTracked(false);
-  }, [isSubtopic, trackSessionKey]);
+    setIsTracked(!!sessionStorage.getItem(trackSessionKey));
+  }, [trackSessionKey]);
 
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -2184,13 +2162,13 @@ function ContentModal({
   }, [node.id]);
 
   useEffect(() => {
-    if (!isSubtopic || !user || (user.role !== "student" && user.role !== "super_student")) {
+    if ((!isSubtopic && !isTopic) || !user || (user.role !== "student" && user.role !== "super_student")) {
       return;
     }
-    if (!content) return;
-    const dedupeKey = trackSessionKey;
+    if (isSubtopic && !content) return;
+    const dedupeKey = isSubtopic ? trackSessionKey : topicInteractionSessionKey;
     if (sessionStorage.getItem(dedupeKey)) return;
-    if (isTracked) return;
+    if (isSubtopic && isTracked) return;
     if (trackTimerRef.current) return;
 
     // QB-like interaction condition: once content is opened for enough time,
@@ -2207,14 +2185,16 @@ function ContentModal({
           branch: user.branch,
           exam: examParam,
           configId,
-          topicId: node.parentId || "",
-          subtopicId: node.id,
+          topicId: isSubtopic ? (node.parentId || "") : node.id,
+          subtopicId: isSubtopic ? node.id : `${TOPIC_INTERACTION_PREFIX}${node.id}`,
         }
       }, {
         onSuccess: () => {
           sessionStorage.setItem(dedupeKey, "true");
-          sessionStorage.setItem(trackSessionKey, "true");
-          setIsTracked(true);
+          if (isSubtopic) {
+            sessionStorage.setItem(trackSessionKey, "true");
+            setIsTracked(true);
+          }
           onTracked?.();
         }
       });
@@ -2226,92 +2206,16 @@ function ContentModal({
         trackTimerRef.current = null;
       }
     };
-  }, [content, node.id, user, isTracked, isSubtopic, trackEventMutation, configId, examParam, node.parentId, onTracked, trackSessionKey]);
-
-  const showDoneBadge = isTopic
-    ? (isNodeCompleted?.(node.id) ?? false)
-    : isSubtopic
-    ? isTracked
-    : false;
+  }, [content, node.id, user, isTracked, isSubtopic, isTopic, trackEventMutation, configId, examParam, node.parentId, onTracked, trackSessionKey, topicInteractionSessionKey]);
 
   const colors = NODE_COLORS[node.type as keyof typeof NODE_COLORS] || NODE_COLORS.topic;
   const guidanceSource = isSubtopic ? content : node;
-  const topicParts = parseStructuredExplanation(String(node.explanation || ""), {
-    learningGoal: String((node as any).learningGoal || ""),
-    exampleBlock: String((node as any).exampleBlock || ""),
-    supportNote: String((node as any).supportNote || ""),
-  });
-  const subtopicParts = parseStructuredExplanation(String((content as any)?.explanation || ""), {
-    learningGoal: String((content as any)?.learningGoal || ""),
-    exampleBlock: String((content as any)?.exampleBlock || ""),
-    supportNote: String((content as any)?.supportNote || ""),
-  });
-  const toOrder = (value: string | undefined) => {
-    const n = Number(String(value || "").trim());
-    return Number.isFinite(n) ? n : Number.MAX_SAFE_INTEGER;
-  };
-  const fullNodes = allNodesData ?? [];
-  const topicSubtopics = isTopic
-    ? fullNodes
-        .filter((n) => n.type === "subtopic" && String(n.parentId || "") === node.id)
-        .sort((a, b) => toOrder(a.sortOrder) - toOrder(b.sortOrder))
-    : [];
-  const firstSubtopicId = isTopic ? String(topicSubtopics[0]?.id || "").trim() : "";
-
-  const siblingSubtopics = isSubtopic
-    ? fullNodes
-        .filter((n) => n.type === "subtopic" && String(n.parentId || "") === String(node.parentId || ""))
-        .sort((a, b) => toOrder(a.sortOrder) - toOrder(b.sortOrder))
-    : [];
-  const subtopicIndex = isSubtopic ? siblingSubtopics.findIndex((s) => s.id === node.id) : -1;
-  const fallbackPrevSub = subtopicIndex > 0 ? siblingSubtopics[subtopicIndex - 1] : null;
-  const fallbackNextSub =
-    subtopicIndex >= 0 && subtopicIndex < siblingSubtopics.length - 1
-      ? siblingSubtopics[subtopicIndex + 1]
-      : null;
-
-  const prerequisiteTitle = String(
-    guidanceSource?.prerequisiteTitles?.[0] || fallbackPrevSub?.title || ""
-  ).trim();
-  const prerequisiteNodeId = String(
-    guidanceSource?.prerequisiteNodeIds?.[0] || fallbackPrevSub?.id || ""
-  ).trim();
-  const nextTitle = String(
-    guidanceSource?.nextRecommendedTitles?.[0] || fallbackNextSub?.title || ""
-  ).trim();
-  const nextNodeId = String(
-    guidanceSource?.nextRecommendedNodeIds?.[0] || fallbackNextSub?.id || ""
-  ).trim();
+  const prerequisiteTitle = guidanceSource?.prerequisiteTitles?.[0] || "";
+  const prerequisiteNodeId = guidanceSource?.prerequisiteNodeIds?.[0] || "";
+  const nextTitle = guidanceSource?.nextRecommendedTitles?.[0] || "";
+  const nextNodeId = guidanceSource?.nextRecommendedNodeIds?.[0] || "";
   const prerequisiteDone = isNodeCompleted?.(prerequisiteNodeId) ?? false;
   const nextDone = isNodeCompleted?.(nextNodeId) ?? false;
-  const parentTopicNode =
-    isSubtopic && node.parentId
-      ? fullNodes.find((n) => n.id === node.parentId)
-      : null;
-  const topicSiblings = parentTopicNode?.parentId
-    ? fullNodes
-        .filter((n) => n.type === "topic" && String(n.parentId || "") === String(parentTopicNode.parentId || ""))
-        .sort((a, b) => toOrder(a.sortOrder) - toOrder(b.sortOrder))
-    : [];
-  const parentTopicIndex = parentTopicNode
-    ? topicSiblings.findIndex((t) => t.id === parentTopicNode.id)
-    : -1;
-  const fallbackNextTopic =
-    parentTopicIndex >= 0 && parentTopicIndex < topicSiblings.length - 1
-      ? topicSiblings[parentTopicIndex + 1]
-      : null;
-  const nextTopicFromParentId = String(
-    parentTopicNode?.nextRecommendedNodeIds?.[0] || fallbackNextTopic?.id || ""
-  ).trim();
-  const nextTopicFromParentTitle = String(
-    parentTopicNode?.nextRecommendedTitles?.[0] || fallbackNextTopic?.title || ""
-  ).trim();
-  const showExploreAction = isTopic && !!firstSubtopicId;
-  const showGoNextTopicAction = isSubtopic && !nextNodeId && !!nextTopicFromParentId;
-  const subtopicPathPrereqTitles = prerequisiteTitle ? [prerequisiteTitle] : [];
-  const subtopicPathPrereqIds = prerequisiteNodeId ? [prerequisiteNodeId] : [];
-  const subtopicPathNextTitles = nextTitle ? [nextTitle] : [];
-  const subtopicPathNextIds = nextNodeId ? [nextNodeId] : [];
 
   if (embedded) {
     return (
@@ -2327,29 +2231,7 @@ function ContentModal({
             </div>
           </div>
           <div className="flex items-center gap-2 shrink-0">
-            {showExploreAction && (
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => onNavigate(firstSubtopicId)}
-                className="h-8 rounded-full border-blue-300 bg-blue-50 px-3 text-blue-800 hover:bg-blue-100"
-                title="Explore subtopics"
-              >
-                Explore
-              </Button>
-            )}
-            {showGoNextTopicAction && (
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => onNavigate(nextTopicFromParentId)}
-                className="h-8 rounded-full border-blue-300 bg-blue-50 px-3 text-blue-800 hover:bg-blue-100"
-                title={nextTopicFromParentTitle ? `Go to next topic: ${nextTopicFromParentTitle}` : "Go to next topic"}
-              >
-                Go to next topic
-              </Button>
-            )}
-            {showDoneBadge && (
+            {isTracked && (
               <span className="text-xs font-semibold text-green-600 bg-green-50 px-2 py-1 rounded-full border border-green-200 flex items-center gap-1">
                 <CheckCircle2 className="w-3 h-3" /> Done
               </span>
@@ -2371,24 +2253,24 @@ function ContentModal({
                 isNodeCompleted={isNodeCompleted}
                 onNavigate={onNavigate}
               />
-              <LearningGoalBlock learningGoal={topicParts.learningGoal} />
+              <LearningGoalBlock learningGoal={node.learningGoal} />
               <div className="px-4">
                 <div className="prose prose-sm prose-slate max-w-none prose-p:text-foreground/70">
                   <div className="flex items-center gap-2 mb-2">
                     <PenLine className="w-3.5 h-3.5 text-primary" />
                     <h3 className="text-sm font-bold text-foreground uppercase tracking-wider">Core Idea</h3>
                   </div>
-                  {topicParts.coreExplanation ? (
+                  {node.explanation ? (
                     <div className="text-foreground/70 font-medium">
-                      <AnswerRenderer answer={topicParts.coreExplanation} />
+                      <AnswerRenderer answer={node.explanation} />
                     </div>
                   ) : (
                     <p className="text-muted-foreground italic">No explanation available for this topic.</p>
                   )}
                 </div>
               </div>
-              <ExampleBlock text={topicParts.exampleBlock} />
-              <SupportNoteBlock text={topicParts.supportNote} />
+              <ExampleBlock text={node.exampleBlock} />
+              <SupportNoteBlock text={node.supportNote} />
               <div className="flex items-center justify-between gap-3">
                 <ChainNavButton
                   label="Previous"
@@ -2420,14 +2302,14 @@ function ContentModal({
                   <section>
                     <div className="space-y-6">
                       <PathNavBlock
-                        prerequisiteTitles={subtopicPathPrereqTitles}
-                        nextRecommendedTitles={subtopicPathNextTitles}
-                        prerequisiteNodeIds={subtopicPathPrereqIds}
-                        nextRecommendedNodeIds={subtopicPathNextIds}
+                        prerequisiteTitles={content.prerequisiteTitles}
+                        nextRecommendedTitles={content.nextRecommendedTitles}
+                        prerequisiteNodeIds={content.prerequisiteNodeIds}
+                        nextRecommendedNodeIds={content.nextRecommendedNodeIds}
                         isNodeCompleted={isNodeCompleted}
                         onNavigate={onNavigate}
                       />
-                      <LearningGoalBlock learningGoal={subtopicParts.learningGoal} />
+                      <LearningGoalBlock learningGoal={content.learningGoal} />
                     </div>
                     <div className="px-4">
                       <div className="prose prose-sm prose-slate max-w-none mt-4 prose-p:text-foreground/70">
@@ -2436,13 +2318,13 @@ function ContentModal({
                           <h3 className="text-sm font-bold text-foreground uppercase tracking-wider">Core Idea</h3>
                         </div>
                         <div className="text-foreground/70 font-medium">
-                          <AnswerRenderer answer={subtopicParts.coreExplanation} />
+                          <AnswerRenderer answer={content.explanation} />
                         </div>
                       </div>
                     </div>
                   </section>
-                  <ExampleBlock text={subtopicParts.exampleBlock} />
-                  <SupportNoteBlock text={subtopicParts.supportNote} />
+                  <ExampleBlock text={content.exampleBlock} />
+                  <SupportNoteBlock text={content.supportNote} />
                   <div className="flex items-center justify-between gap-3">
                     <ChainNavButton
                       title={prerequisiteTitle}
@@ -2497,29 +2379,7 @@ function ContentModal({
             </div>
           </div>
           <div className="flex items-center gap-2 shrink-0">
-            {showExploreAction && (
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => onNavigate(firstSubtopicId)}
-                className="h-8 rounded-full border-blue-300 bg-blue-50 px-3 text-blue-800 hover:bg-blue-100"
-                title="Explore subtopics"
-              >
-                Explore
-              </Button>
-            )}
-            {showGoNextTopicAction && (
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => onNavigate(nextTopicFromParentId)}
-                className="h-8 rounded-full border-blue-300 bg-blue-50 px-3 text-blue-800 hover:bg-blue-100"
-                title={nextTopicFromParentTitle ? `Go to next topic: ${nextTopicFromParentTitle}` : "Go to next topic"}
-              >
-                Go to next topic
-              </Button>
-            )}
-            {showDoneBadge && (
+            {isTracked && (
               <span className="text-xs font-semibold text-green-600 bg-green-50 px-2 py-1 rounded-full border border-green-200 flex items-center gap-1">
                 <CheckCircle2 className="w-3 h-3" /> Done
               </span>
@@ -2533,7 +2393,7 @@ function ContentModal({
         <div ref={scrollRef} className="flex-1 overflow-y-auto p-5 sm:p-6 space-y-6">
           {isTopic && (
             <>
-              <LearningGoalBlock learningGoal={topicParts.learningGoal} />
+              <LearningGoalBlock learningGoal={node.learningGoal} />
               <PathNavBlock
                 prerequisiteTitles={node.prerequisiteTitles}
                 nextRecommendedTitles={node.nextRecommendedTitles}
@@ -2543,14 +2403,14 @@ function ContentModal({
                 onNavigate={onNavigate}
               />
               <div className="prose prose-sm sm:prose-base prose-slate max-w-none">
-                {topicParts.coreExplanation ? (
-                  <AnswerRenderer answer={topicParts.coreExplanation} />
+                {node.explanation ? (
+                  <AnswerRenderer answer={node.explanation} />
                 ) : (
                   <p className="text-muted-foreground italic">No explanation available for this topic.</p>
                 )}
               </div>
-              <ExampleBlock text={topicParts.exampleBlock} />
-              <SupportNoteBlock text={topicParts.supportNote} />
+              <ExampleBlock text={node.exampleBlock} />
+              <SupportNoteBlock text={node.supportNote} />
               <div className="flex items-center justify-between gap-3">
                 <ChainNavButton
                   label="Previous"
@@ -2586,23 +2446,23 @@ function ContentModal({
                     </div>
                     <div className="space-y-6">
                       <PathNavBlock
-                        prerequisiteTitles={subtopicPathPrereqTitles}
-                        nextRecommendedTitles={subtopicPathNextTitles}
-                        prerequisiteNodeIds={subtopicPathPrereqIds}
-                        nextRecommendedNodeIds={subtopicPathNextIds}
+                        prerequisiteTitles={content.prerequisiteTitles}
+                        nextRecommendedTitles={content.nextRecommendedTitles}
+                        prerequisiteNodeIds={content.prerequisiteNodeIds}
+                        nextRecommendedNodeIds={content.nextRecommendedNodeIds}
                         isNodeCompleted={isNodeCompleted}
                         onNavigate={onNavigate}
                       />
-                      <LearningGoalBlock learningGoal={subtopicParts.learningGoal} />
+                      <LearningGoalBlock learningGoal={content.learningGoal} />
                     </div>
                     <div className="prose prose-sm prose-slate max-w-none bg-secondary/30 rounded-xl p-4 border border-border">
                       <div className="font-medium">
-                        <AnswerRenderer answer={subtopicParts.coreExplanation} />
+                        <AnswerRenderer answer={content.explanation} />
                       </div>
                     </div>
                   </section>
-                  <ExampleBlock text={subtopicParts.exampleBlock} />
-                  <SupportNoteBlock text={subtopicParts.supportNote} />
+                  <ExampleBlock text={content.exampleBlock} />
+                  <SupportNoteBlock text={content.supportNote} />
                   <div className="flex items-center justify-between gap-3">
                     <ChainNavButton
                       title={prerequisiteTitle}

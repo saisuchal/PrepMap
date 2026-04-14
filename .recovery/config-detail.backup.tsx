@@ -22,7 +22,6 @@ import {
   useGenerateCheapLaneA,
   useStartCheapLaneBImport,
   useGetCheapLaneBImportStatus,
-  type CheapGenerationMode,
 } from "@/api-client";
 import { UNIVERSITIES, EXAM_TYPES, SEMESTERS } from "@/lib/constants";
 import {
@@ -570,7 +569,6 @@ interface EditableQuestion {
 }
 
 function CheapGenerationSection({ configId }: { configId: string }) {
-  const [laneAMode, setLaneAMode] = useState<CheapGenerationMode>("explanations_and_questions");
   const [masterPrompt, setMasterPrompt] = useState("");
   const [laneBJson, setLaneBJson] = useState("");
   const [laneAStructure, setLaneAStructure] = useState<Array<{
@@ -677,7 +675,7 @@ function CheapGenerationSection({ configId }: { configId: string }) {
 
   const handleLaneA = () => {
     generateLaneA.mutate(
-      { configId, mode: laneAMode },
+      { configId },
       {
         onSuccess: (data) => {
           setMasterPrompt(data.masterPrompt);
@@ -718,13 +716,7 @@ function CheapGenerationSection({ configId }: { configId: string }) {
     setExpectedImportQuestionCount(parsedQuestions);
 
     startImportLaneB.mutate(
-      {
-        configId,
-        payload: {
-          ...(parsed as any),
-          generationMode: laneAMode,
-        } as any,
-      },
+      { configId, payload: parsed as any },
       {
         onSuccess: () => {
           setImportPolling(true);
@@ -793,19 +785,6 @@ function CheapGenerationSection({ configId }: { configId: string }) {
         <p className="text-xs text-muted-foreground">
           Extracts structure + replica mandatory/starred questions and prepares a master prompt for external bulk generation.
         </p>
-        <div className="max-w-[340px]">
-          <label className="block text-xs font-medium text-muted-foreground mb-1">Lane A Output Mode</label>
-          <Select value={laneAMode} onValueChange={(v) => setLaneAMode(v as CheapGenerationMode)}>
-            <SelectTrigger className="h-9">
-              <SelectValue placeholder="Select mode" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="explanations_and_questions">Explanations + Questions</SelectItem>
-              <SelectItem value="explanations_only">Explanations only</SelectItem>
-              <SelectItem value="questions_only">Questions only</SelectItem>
-            </SelectContent>
-          </Select>
-        </div>
         <Button onClick={handleLaneA} disabled={generateLaneA.isPending} className="gap-2">
           {generateLaneA.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
           Generate Lane A Package
@@ -1107,7 +1086,7 @@ function ReusableUnitLibrarySection({ configId, subjectName }: { configId: strin
     );
   };
 
-  const handleExtractFromText = async () => {
+  const handleExtractFromText = () => {
     if (!subject?.id) return;
     const validMaterials = readingMaterials
       .map((m) => ({ ...m, title: m.title.trim(), text: m.text.trim() }))
@@ -1117,32 +1096,35 @@ function ReusableUnitLibrarySection({ configId, subjectName }: { configId: strin
       toast({ title: "Paste reading material", description: "Add at least one reading material before extracting.", variant: "destructive" });
       return;
     }
-    if (validMaterials.length > 3) {
-      toast({ title: "Too many materials", description: "You can extract up to 3 materials at once.", variant: "destructive" });
-      return;
-    }
 
-    try {
-      const data = await extractUnits.mutateAsync({
-        subjectId: subject.id,
-        materials: validMaterials.map((m) => ({
-          id: m.id,
-          title: m.title || undefined,
-          readingText: m.text,
-        })),
-      });
-      queryClient.invalidateQueries({ queryKey: ["library-units", subject.id] });
-      toast({
-        title: "Units extracted",
-        description: `Processed ${validMaterials.length} material(s). Extracted/upserted ${data.extractedCount} unit(s) to library.`,
-      });
-    } catch (error) {
-      toast({
-        title: "Extraction failed",
-        description: error instanceof Error ? error.message : "Please try again.",
-        variant: "destructive",
-      });
-    }
+    const mergedReadingText = validMaterials
+      .map((material, idx) => {
+        const header = material.title
+          ? `Reading Material ${idx + 1}: ${material.title}`
+          : `Reading Material ${idx + 1}`;
+        return `${header}\n${material.text}`;
+      })
+      .join("\n\n-----\n\n");
+
+    extractUnits.mutate(
+      { subjectId: subject.id, readingText: mergedReadingText },
+      {
+        onSuccess: (data) => {
+          queryClient.invalidateQueries({ queryKey: ["library-units", subject.id] });
+          toast({
+            title: "Units extracted",
+            description: `Processed ${validMaterials.length} material(s). Extracted/upserted ${data.extractedCount} unit(s) to library.`,
+          });
+        },
+        onError: (error) => {
+          toast({
+            title: "Extraction failed",
+            description: error instanceof Error ? error.message : "Please try again.",
+            variant: "destructive",
+          });
+        },
+      }
+    );
   };
 
   return (
@@ -1203,7 +1185,6 @@ function ReusableUnitLibrarySection({ configId, subjectName }: { configId: strin
                 <div className="flex items-center justify-end gap-2">
                   <Button
                     variant="outline"
-                    disabled={readingMaterials.length >= 3}
                     onClick={() =>
                       setReadingMaterials((prev) => [
                         ...prev,
@@ -1216,7 +1197,6 @@ function ReusableUnitLibrarySection({ configId, subjectName }: { configId: strin
                     Add Material
                   </Button>
                 </div>
-                <p className="text-[11px] text-muted-foreground">Maximum 3 materials per extraction request.</p>
                 <div className="space-y-3">
                   {readingMaterials.map((material, index) => (
                     <div key={material.id} className="rounded-lg border border-border bg-background p-2.5 space-y-2">
@@ -1321,7 +1301,7 @@ function ReusableUnitLibrarySection({ configId, subjectName }: { configId: strin
                 </div>
 
                 <div>
-                  <label className="block text-xs font-medium text-muted-foreground mb-1">Reading Material Text (optional)</label>
+                  <label className="block text-xs font-medium text-muted-foreground mb-1">Reading Material Text</label>
                   <Textarea
                     rows={4}
                     value={sourceText}

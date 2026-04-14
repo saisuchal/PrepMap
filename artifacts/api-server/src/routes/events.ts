@@ -1,9 +1,61 @@
 import { Router, type IRouter } from "express";
 import { TrackEventBody } from "../api-zod";
 import { db, eventsTable, usersTable } from "../db";
-import { eq } from "drizzle-orm";
+import { and, desc, eq } from "drizzle-orm";
 
 const router: IRouter = Router();
+const TOPIC_INTERACTION_PREFIX = "__topic__:";
+
+router.get("/configs/:configId/latest-interaction-state", async (req, res) => {
+  try {
+    const authUserId = String(req.headers["x-user-id"] || "").trim();
+    if (!authUserId) {
+      res.status(401).json({ error: "Authentication required. Provide x-user-id header." });
+      return;
+    }
+
+    const configId = String(req.params.configId || "").trim();
+    if (!configId) {
+      res.status(400).json({ error: "configId is required." });
+      return;
+    }
+
+    const latestEvents = await db
+      .select({
+        topicId: eventsTable.topicId,
+        subtopicId: eventsTable.subtopicId,
+        timestamp: eventsTable.timestamp,
+      })
+      .from(eventsTable)
+      .where(and(eq(eventsTable.userId, authUserId), eq(eventsTable.configId, configId)))
+      .orderBy(desc(eventsTable.timestamp))
+      .limit(25);
+
+    const row = latestEvents[0];
+    const latest = latestEvents.find((e) => String(e.subtopicId || "").trim()) || null;
+    const rawSubtopicId = String(latest?.subtopicId || "").trim();
+    const isTopicInteraction = rawSubtopicId.startsWith(TOPIC_INTERACTION_PREFIX);
+    const derivedTopicFromPrefix = isTopicInteraction
+      ? rawSubtopicId.slice(TOPIC_INTERACTION_PREFIX.length).trim()
+      : "";
+    const mapNodeId = isTopicInteraction
+      ? (derivedTopicFromPrefix || String(latest?.topicId || "").trim() || null)
+      : null;
+    const qbSubtopicId = isTopicInteraction ? null : (rawSubtopicId || null);
+
+    res.status(200).json({
+      configId,
+      userId: authUserId,
+      mapNodeId,
+      qbSubtopicId,
+      qbQuestionId: null,
+      eventAt: latest?.timestamp ? new Date(latest.timestamp).toISOString() : null,
+    });
+  } catch (error) {
+    req.log.error({ err: error }, "Failed to fetch latest interaction state");
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
 
 router.post("/events", async (req, res) => {
   try {

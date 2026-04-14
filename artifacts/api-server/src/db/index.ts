@@ -1,8 +1,24 @@
-import "dotenv/config";
+import dotenv from "dotenv";
 import { drizzle } from "drizzle-orm/node-postgres";
 import pg from "pg";
 import * as schema from "./schema";
 import { DEFAULT_UNIVERSITIES } from "../lib/appMetadata";
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const envCandidates = [
+  path.resolve(process.cwd(), "artifacts/api-server/.env"),
+  path.resolve(process.cwd(), ".env"),
+  path.resolve(__dirname, "../.env"),
+];
+const envPath = envCandidates.find((candidate) => fs.existsSync(candidate));
+if (envPath) {
+  dotenv.config({ path: envPath });
+} else {
+  dotenv.config();
+}
 
 const { Pool } = pg;
 

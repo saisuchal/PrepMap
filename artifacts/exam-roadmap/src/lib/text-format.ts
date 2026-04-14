@@ -72,3 +72,77 @@ export function repairBrokenFormulaBullets(text: string): string {
 
   return out.join("\n").trim();
 }
+
+export type StructuredExplanationParts = {
+  coreExplanation: string;
+  learningGoal: string;
+  exampleBlock: string;
+  supportNote: string;
+};
+
+function cleanHeadingPrefix(text: string): string {
+  return String(text || "")
+    .replace(/^\s*(core idea|learning goal|quick example|helper note|helpful note|support note)\s*:\s*/i, "")
+    .trim();
+}
+
+export function parseStructuredExplanation(
+  rawText: string,
+  fallback?: Partial<StructuredExplanationParts>,
+): StructuredExplanationParts {
+  const raw = String(rawText || "");
+  const text = repairBrokenFormulaBullets(raw);
+  const sections: Record<"core" | "goal" | "example" | "note", string[]> = {
+    core: [],
+    goal: [],
+    example: [],
+    note: [],
+  };
+
+  let current: keyof typeof sections = "core";
+  for (const line of text.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed) {
+      sections[current].push("");
+      continue;
+    }
+
+    let matched = false;
+    const candidates: Array<{
+      key: keyof typeof sections;
+      re: RegExp;
+    }> = [
+      { key: "core", re: /^\s*core idea\s*:?\s*(.*)$/i },
+      { key: "goal", re: /^\s*learning goal\s*:?\s*(.*)$/i },
+      { key: "example", re: /^\s*quick example\s*:?\s*(.*)$/i },
+      { key: "note", re: /^\s*(?:help(?:er|ful)\s+note|support note)\s*:?\s*(.*)$/i },
+    ];
+
+    for (const c of candidates) {
+      const m = trimmed.match(c.re);
+      if (m) {
+        current = c.key;
+        const tail = String(m[1] || "").trim();
+        if (tail) sections[current].push(tail);
+        matched = true;
+        break;
+      }
+    }
+
+    if (!matched) {
+      sections[current].push(trimmed);
+    }
+  }
+
+  const coreFromText = sections.core.join("\n").trim();
+  const goalFromText = sections.goal.join("\n").trim();
+  const exampleFromText = sections.example.join("\n").trim();
+  const noteFromText = sections.note.join("\n").trim();
+
+  return {
+    coreExplanation: cleanHeadingPrefix(coreFromText || fallback?.coreExplanation || raw),
+    learningGoal: cleanHeadingPrefix(goalFromText || fallback?.learningGoal || ""),
+    exampleBlock: cleanHeadingPrefix(exampleFromText || fallback?.exampleBlock || ""),
+    supportNote: cleanHeadingPrefix(noteFromText || fallback?.supportNote || ""),
+  };
+}
