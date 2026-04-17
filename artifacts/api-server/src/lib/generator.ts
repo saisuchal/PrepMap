@@ -1,13 +1,13 @@
 import {
   db,
+  pool,
   configsTable,
   nodesTable,
   configQuestionsTable,
   configUnitLinksTable,
   subjectsTable,
   unitLibraryTable,
-  unitTopicsTable,
-  unitSubtopicsTable,
+  canonicalNodesTable,
 } from "../db";
 import { and, eq, inArray } from "drizzle-orm";
 import { askAI, askAIWithImage } from "./ai";
@@ -16,7 +16,7 @@ import { ObjectStorageService } from "./objectStorage";
 import { downloadSupabaseObject, isSupabaseObjectPath } from "./supabaseStorage";
 import { logger } from "./logger";
 import { parseFirstModelJsonObject } from "./parseModelJson";
-import { randomUUID } from "crypto";
+import { createHash, randomUUID } from "crypto";
 import { repairBrokenFormulaBullets } from "./textFormatting";
 
 interface GenerationProgress {
@@ -138,6 +138,27 @@ export interface LaneAStructureUnit {
   }>;
 }
 
+type FactType = "definition" | "rule" | "note" | "pitfall" | "insight" | "example_candidate";
+
+export interface LaneAFact {
+  factId: string;
+  type: FactType;
+  text: string;
+  sourceSpan: string;
+}
+
+export interface LaneAFactGroundingUnit {
+  title: string;
+  topics: Array<{
+    title: string;
+    topicFacts: LaneAFact[];
+    subtopics: Array<{
+      title: string;
+      facts: LaneAFact[];
+    }>;
+  }>;
+}
+
 export interface LaneAReplicaExtractionInfo {
   hasReplicaFile: boolean;
   extractedPaperTextLength: number;
@@ -165,6 +186,184 @@ function getTargetsForExam(exam: string): { totalQuestions: number; totalStars: 
 
 function normalizeText(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
+}
+
+function hash8(parts: string[]): string {
+  return createHash("sha1").update(parts.join("|")).digest("hex").slice(0, 8);
+}
+
+function canonicalUnitId(subjectId: string, unitTitle: string): string {
+  return `${subjectId}_u_${hash8([subjectId, normalizeText(unitTitle)])}`;
+}
+
+function canonicalTopicId(subjectId: string, unitTitle: string, topicTitle: string): string {
+  return `${subjectId}_t_${hash8([subjectId, normalizeText(unitTitle), normalizeText(topicTitle)])}`;
+}
+
+function canonicalSubtopicId(subjectId: string, unitTitle: string, topicTitle: string, subtopicTitle: string): string {
+  return `${subjectId}_s_${hash8([subjectId, normalizeText(unitTitle), normalizeText(topicTitle), normalizeText(subtopicTitle)])}`;
+}
+
+function scopedNodeId(configId: string, canonicalId: string): string {
+  return `${configId}_${canonicalId}`;
+}
+
+const allowedFactTypes = new Set<FactType>([
+  "definition",
+  "rule",
+  "note",
+  "pitfall",
+  "insight",
+  "example_candidate",
+]);
+
+function parseFactsField(raw: unknown): LaneAFact[] {
+  const value = typeof raw === "string" ? raw.trim() : "";
+  if (!value) return [];
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    return [];
+  }
+  if (!Array.isArray(parsed)) return [];
+
+  return parsed
+    .map((f) => {
+      const text = String((f as any)?.text || "").trim();
+      if (!text) return null;
+      const rawType = String((f as any)?.type || "").trim() as FactType;
+      const type: FactType = allowedFactTypes.has(rawType) ? rawType : "note";
+      return {
+        factId: String((f as any)?.factId || `uf_${randomUUID().slice(0, 8)}`).trim(),
+        type,
+        text,
+        sourceSpan: String((f as any)?.sourceSpan || "").trim(),
+      } as LaneAFact;
+    })
+    .filter((f): f is LaneAFact => Boolean(f));
+}
+
+async function loadFactGroundingFromUnitFacts(
+  unitIds: string[],
+  structure: LaneAStructureUnit[],
+  unitById: Map<string, { id: string; unitTitle: string }>,
+): Promise<Map<string, { topicFacts: Map<string, LaneAFact[]>; subtopicFacts: Map<string, LaneAFact[]> }> | null> {
+  if (unitIds.length === 0) return new Map();
+
+  const exists = await pool.query<{ regclass: string | null }>(
+    `SELECT to_regclass('public.unit_facts') AS regclass`,
+  );
+  if (!exists.rows[0]?.regclass) return null;
+
+  const cols = await pool.query<{ column_name: string }>(
+    `
+    SELECT column_name
+    FROM information_schema.columns
+    WHERE table_schema = 'public' AND table_name = 'unit_facts'
+    `,
+  );
+  const colSet = new Set(cols.rows.map((r) => String(r.column_name || "").trim().toLowerCase()));
+  const unitCol = ["unit_library_id", "unit_id", "library_unit_id"].find((c) => colSet.has(c));
+  if (!unitCol) return null;
+
+  const topicCol = ["topic_title", "topic", "topic_name"].find((c) => colSet.has(c));
+  const subtopicCol = ["subtopic_title", "subtopic", "subtopic_name"].find((c) => colSet.has(c));
+  const factTextCol = ["fact_text", "text", "fact", "content"].find((c) => colSet.has(c));
+  const factTypeCol = ["fact_type", "type"].find((c) => colSet.has(c));
+  const factIdCol = ["fact_id", "id"].find((c) => colSet.has(c));
+  const sourceCol = ["source_span", "source", "source_text", "source_ref"].find((c) => colSet.has(c));
+
+  const sql = `
+    SELECT
+      CAST(uf.${unitCol} AS text) AS unit_id
+      ${topicCol ? `, CAST(uf.${topicCol} AS text) AS topic_title` : ", NULL::text AS topic_title"}
+      ${subtopicCol ? `, CAST(uf.${subtopicCol} AS text) AS subtopic_title` : ", NULL::text AS subtopic_title"}
+      ${factTextCol ? `, CAST(uf.${factTextCol} AS text) AS fact_text` : ", ''::text AS fact_text"}
+      ${factTypeCol ? `, CAST(uf.${factTypeCol} AS text) AS fact_type` : ", 'note'::text AS fact_type"}
+      ${factIdCol ? `, CAST(uf.${factIdCol} AS text) AS fact_id` : ", ''::text AS fact_id"}
+      ${sourceCol ? `, CAST(uf.${sourceCol} AS text) AS source_span` : ", ''::text AS source_span"}
+    FROM public.unit_facts uf
+    WHERE CAST(uf.${unitCol} AS text) = ANY($1::text[])
+  `;
+
+  const rows = await pool.query<{
+    unit_id: string;
+    topic_title: string | null;
+    subtopic_title: string | null;
+    fact_text: string | null;
+    fact_type: string | null;
+    fact_id: string | null;
+    source_span: string | null;
+  }>(sql, [unitIds]);
+
+  const allowed = new Set<FactType>([
+    "definition",
+    "rule",
+    "note",
+    "pitfall",
+    "insight",
+    "example_candidate",
+  ]);
+  const fallbackByUnitNorm = new Map<string, LaneAStructureUnit>();
+  for (const unit of structure) fallbackByUnitNorm.set(normalizeText(unit.title), unit);
+
+  const out = new Map<string, { topicFacts: Map<string, LaneAFact[]>; subtopicFacts: Map<string, LaneAFact[]> }>();
+  const pushTopicFact = (unitTitle: string, topicTitle: string, fact: LaneAFact) => {
+    const key = normalizeText(unitTitle);
+    const bucket = out.get(key) ?? { topicFacts: new Map(), subtopicFacts: new Map() };
+    const topicKey = normalizeText(topicTitle);
+    const list = bucket.topicFacts.get(topicKey) ?? [];
+    list.push(fact);
+    bucket.topicFacts.set(topicKey, list);
+    out.set(key, bucket);
+  };
+  const pushSubtopicFact = (unitTitle: string, topicTitle: string, subtopicTitle: string, fact: LaneAFact) => {
+    const key = normalizeText(unitTitle);
+    const bucket = out.get(key) ?? { topicFacts: new Map(), subtopicFacts: new Map() };
+    const subKey = `${normalizeText(topicTitle)}|${normalizeText(subtopicTitle)}`;
+    const list = bucket.subtopicFacts.get(subKey) ?? [];
+    list.push(fact);
+    bucket.subtopicFacts.set(subKey, list);
+    out.set(key, bucket);
+  };
+
+  for (const row of rows.rows) {
+    const unit = unitById.get(String(row.unit_id || "").trim());
+    if (!unit) continue;
+    const unitNorm = normalizeText(unit.unitTitle);
+    const unitStruct = fallbackByUnitNorm.get(unitNorm);
+    if (!unitStruct) continue;
+
+    const text = String(row.fact_text || "").trim();
+    if (!text) continue;
+    const rawType = String(row.fact_type || "").trim() as FactType;
+    const fact: LaneAFact = {
+      factId: String(row.fact_id || `uf_${randomUUID().slice(0, 8)}`).trim(),
+      type: allowed.has(rawType) ? rawType : "note",
+      text,
+      sourceSpan: String(row.source_span || "").trim(),
+    };
+
+    const topicTitleRaw = String(row.topic_title || "").trim();
+    const subtopicTitleRaw = String(row.subtopic_title || "").trim();
+    if (topicTitleRaw && subtopicTitleRaw) {
+      pushSubtopicFact(unit.unitTitle, topicTitleRaw, subtopicTitleRaw, fact);
+      continue;
+    }
+    if (topicTitleRaw) {
+      pushTopicFact(unit.unitTitle, topicTitleRaw, fact);
+      continue;
+    }
+
+    // If row is only unit-level, attach to first topic so model still gets grounding.
+    const firstTopic = unitStruct.topics[0];
+    if (firstTopic) {
+      pushTopicFact(unit.unitTitle, firstTopic.title, fact);
+    }
+  }
+
+  return out;
 }
 
 export function isLikelyQuestionText(value: string): boolean {
@@ -679,7 +878,7 @@ async function parseFromReusableUnits(configId: string): Promise<ParsedSyllabus 
 
   if (links.length === 0) return null;
 
-  links.sort((a, b) => (a.sortOrder || "").localeCompare(b.sortOrder || ""));
+  links.sort((a, b) => Number(a.sortOrder || 0) - Number(b.sortOrder || 0));
   const unitIds = links.map((l) => l.unitLibraryId);
   const units = await db
     .select({
@@ -709,6 +908,79 @@ async function parseFromReusableUnits(configId: string): Promise<ParsedSyllabus 
   return { units: parsedUnits };
 }
 
+async function loadFactGroundingFromReusableUnits(
+  configId: string,
+  structure: LaneAStructureUnit[],
+): Promise<LaneAFactGroundingUnit[]> {
+  const links = await db
+    .select({
+      unitLibraryId: configUnitLinksTable.unitLibraryId,
+      sortOrder: configUnitLinksTable.sortOrder,
+    })
+    .from(configUnitLinksTable)
+    .where(eq(configUnitLinksTable.configId, configId));
+
+  if (links.length === 0) {
+    return structure.map((unit) => ({
+      title: unit.title,
+      topics: unit.topics.map((topic) => ({
+        title: topic.title,
+        topicFacts: [],
+        subtopics: topic.subtopics.map((subtopic) => ({ title: subtopic, facts: [] })),
+      })),
+    }));
+  }
+
+  links.sort((a, b) => Number(a.sortOrder || 0) - Number(b.sortOrder || 0));
+  const unitIds = links.map((l) => l.unitLibraryId);
+
+  const units = await db
+    .select({
+      id: unitLibraryTable.id,
+      unitTitle: unitLibraryTable.unitTitle,
+    })
+    .from(unitLibraryTable)
+    .where(inArray(unitLibraryTable.id, unitIds));
+  const unitById = new Map(units.map((u) => [u.id, u]));
+  const factsFromUnitFacts = await loadFactGroundingFromUnitFacts(unitIds, structure, unitById);
+  if (factsFromUnitFacts) {
+    return structure.map((unit) => {
+      const unitBucket = factsFromUnitFacts.get(normalizeText(unit.title));
+      return {
+        title: unit.title,
+        topics: unit.topics.map((topic) => {
+          const topicFacts = (unitBucket?.topicFacts.get(normalizeText(topic.title)) ?? []).slice(0, 8);
+          return {
+            title: topic.title,
+            topicFacts,
+            subtopics: topic.subtopics.map((subtopic) => ({
+              title: subtopic,
+              facts:
+                (unitBucket?.subtopicFacts.get(`${normalizeText(topic.title)}|${normalizeText(subtopic)}`) ?? []).slice(0, 8),
+            })),
+          };
+        }),
+      };
+    });
+  }
+
+  return structure.map((unit) => {
+    return {
+      title: unit.title,
+      topics: unit.topics.map((topic) => {
+        return {
+          title: topic.title,
+          topicFacts: [],
+          subtopics: topic.subtopics.map((subtopic) => ({
+            title: subtopic,
+            facts: [],
+          })),
+        };
+      }),
+    };
+  });
+}
+
 async function loadReusableExplanationMap(
   subject: string,
   _currentConfigId: string
@@ -732,41 +1004,35 @@ async function loadReusableExplanationMap(
     .where(eq(unitLibraryTable.subjectId, subjectRow.id));
   if (units.length === 0) return new Map();
 
-  const unitById = new Map(units.map((u) => [u.id, u.unitTitle]));
+  const unitById = new Map(units.map((u) => [u.id, u]));
   const unitIds = units.map((u) => u.id);
-
-  const topics = await db
-    .select({
-      id: unitTopicsTable.id,
-      unitLibraryId: unitTopicsTable.unitLibraryId,
-      title: unitTopicsTable.title,
-    })
-    .from(unitTopicsTable)
-    .where(inArray(unitTopicsTable.unitLibraryId, unitIds));
-  if (topics.length === 0) return new Map();
-
-  const topicById = new Map(topics.map((t) => [t.id, t]));
-  const topicIds = topics.map((t) => t.id);
-
-  const subtopics = await db
-    .select({
-      unitTopicId: unitSubtopicsTable.unitTopicId,
-      title: unitSubtopicsTable.title,
-      explanation: unitSubtopicsTable.explanation,
-    })
-    .from(unitSubtopicsTable)
-    .where(inArray(unitSubtopicsTable.unitTopicId, topicIds));
+  const canonicalRows =
+    unitIds.length > 0
+      ? await db
+          .select({
+            id: canonicalNodesTable.id,
+            unitLibraryId: canonicalNodesTable.unitLibraryId,
+            title: canonicalNodesTable.title,
+            type: canonicalNodesTable.type,
+            parentCanonicalNodeId: canonicalNodesTable.parentCanonicalNodeId,
+            explanation: canonicalNodesTable.explanation,
+          })
+          .from(canonicalNodesTable)
+          .where(inArray(canonicalNodesTable.unitLibraryId, unitIds))
+      : [];
+  const canonicalById = new Map(canonicalRows.map((row) => [row.id, row]));
 
   const reuse = new Map<string, string>();
-  for (const sub of subtopics) {
+  for (const sub of canonicalRows) {
+    if (sub.type !== "subtopic") continue;
     const explanation = String(sub.explanation || "").trim();
     if (!explanation) continue;
-    const topic = topicById.get(sub.unitTopicId);
+    const topic = sub.parentCanonicalNodeId ? canonicalById.get(sub.parentCanonicalNodeId) : null;
     if (!topic) continue;
-    const unitTitle = unitById.get(topic.unitLibraryId);
-    if (!unitTitle) continue;
+    const unit = topic.unitLibraryId ? unitById.get(topic.unitLibraryId) : null;
+    if (!unit) continue;
 
-    const key = explanationKey(unitTitle, topic.title, sub.title);
+    const key = explanationKey(unit.unitTitle, topic.title, sub.title);
     if (!reuse.has(key)) reuse.set(key, explanation);
   }
 
@@ -796,26 +1062,29 @@ async function loadReusableTopicExplanationMap(
     .where(eq(unitLibraryTable.subjectId, subjectRow.id));
   if (units.length === 0) return new Map();
 
-  const unitById = new Map(units.map((u) => [u.id, u.unitTitle]));
+  const unitById = new Map(units.map((u) => [u.id, u]));
   const unitIds = units.map((u) => u.id);
-
-  const topics = await db
-    .select({
-      id: unitTopicsTable.id,
-      unitLibraryId: unitTopicsTable.unitLibraryId,
-      title: unitTopicsTable.title,
-      explanation: unitTopicsTable.explanation,
-    })
-    .from(unitTopicsTable)
-    .where(inArray(unitTopicsTable.unitLibraryId, unitIds));
+  const topics =
+    unitIds.length > 0
+      ? await db
+          .select({
+            unitLibraryId: canonicalNodesTable.unitLibraryId,
+            title: canonicalNodesTable.title,
+            explanation: canonicalNodesTable.explanation,
+            type: canonicalNodesTable.type,
+          })
+          .from(canonicalNodesTable)
+          .where(inArray(canonicalNodesTable.unitLibraryId, unitIds))
+      : [];
 
   const reuse = new Map<string, string>();
   for (const topic of topics) {
+    if (topic.type !== "topic") continue;
     const explanation = String(topic.explanation || "").trim();
     if (!explanation) continue;
-    const unitTitle = unitById.get(topic.unitLibraryId);
-    if (!unitTitle) continue;
-    const key = topicExplanationKey(unitTitle, topic.title);
+    const unit = topic.unitLibraryId ? unitById.get(topic.unitLibraryId) : null;
+    if (!unit) continue;
+    const key = topicExplanationKey(unit.unitTitle, topic.title);
     if (!reuse.has(key)) reuse.set(key, explanation);
   }
 
@@ -1044,6 +1313,7 @@ export async function buildLaneAConfigPackage(configId: string): Promise<{
   configId: string;
   subject: string;
   structure: LaneAStructureUnit[];
+  factGrounding: LaneAFactGroundingUnit[];
   replicaQuestions: LaneAReplicaQuestion[];
   warnings: string[];
   replicaExtraction: LaneAReplicaExtractionInfo;
@@ -1120,10 +1390,13 @@ export async function buildLaneAConfigPackage(configId: string): Promise<{
     warnings.push("Replica file is attached, but no readable text was detected.");
   }
 
+  const factGrounding = await loadFactGroundingFromReusableUnits(configId, parsed.units);
+
   return {
     configId,
     subject: config.subject,
     structure: parsed.units,
+    factGrounding,
     replicaQuestions: replicaQuestions.map((q) => ({
       markType: q.markType,
       question: q.question,
@@ -1511,7 +1784,6 @@ export async function runGeneration(configId: string) {
           .set({
             unitTitle: unit.title,
             topics,
-            sourceText: "Generated by Lane A",
             updatedAt: new Date(),
           })
           .where(eq(unitLibraryTable.id, existingUnit.id));
@@ -1522,7 +1794,7 @@ export async function runGeneration(configId: string) {
           unitTitle: unit.title,
           normalizedUnitTitle,
           topics,
-          sourceText: "Generated by Lane A",
+          sourceText: null,
           createdBy: config.createdBy,
         });
       }
@@ -1559,20 +1831,49 @@ export async function runGeneration(configId: string) {
       const unit = parsed.units[ui];
       const unitLibraryId = unitLibraryIdByNormTitle.get(normalizeText(unit.title));
       if (!unitLibraryId) continue;
-      const unitId = `${configId}_u${ui + 1}`;
+      const canonUnitId = canonicalUnitId(subjectRow.id, unit.title);
+      const unitId = scopedNodeId(configId, canonUnitId);
+
+      await db
+        .insert(canonicalNodesTable)
+        .values({
+          id: canonUnitId,
+          subjectId: subjectRow.id,
+          unitLibraryId,
+          title: unit.title,
+          normalizedTitle: normalizeText(unit.title),
+          type: "unit",
+          parentCanonicalNodeId: null,
+          sortOrder: ui + 1,
+        })
+        .onConflictDoUpdate({
+          target: [canonicalNodesTable.id],
+          set: {
+            title: unit.title,
+            normalizedTitle: normalizeText(unit.title),
+            unitLibraryId,
+            sortOrder: ui + 1,
+            updatedAt: new Date(),
+          },
+        });
 
       await db.insert(nodesTable).values({
         id: unitId,
         configId,
+        canonicalNodeId: canonUnitId,
+        subjectId: subjectRow.id,
+        unitLibraryId,
         title: unit.title,
+        normalizedTitle: normalizeText(unit.title),
         type: "unit",
         parentId: null,
-        sortOrder: String(ui + 1),
+        sortOrder: ui + 1,
       });
 
       for (let ti = 0; ti < unit.topics.length; ti++) {
         const topic = unit.topics[ti];
-        const topicId = `${configId}_u${ui + 1}_t${ti + 1}`;
+        const canonTopicId = canonicalTopicId(subjectRow.id, unit.title, topic.title);
+        const topicId = scopedNodeId(configId, canonTopicId);
         const topicKey = topicExplanationKey(unit.title, topic.title);
         let topicExplanation = reusableTopicExplanationMap.get(topicKey) || "";
         if (!topicExplanation) {
@@ -1589,53 +1890,66 @@ export async function runGeneration(configId: string) {
         }
         const repairedTopicExplanation = repairBrokenFormulaBullets(topicExplanation);
 
-        const normalizedTopicTitle = normalizeText(topic.title);
-        const topicCanonicalId = `utp_${unitLibraryId}_${normalizedTopicTitle.replace(/\s+/g, "_") || "untitled"}`;
-        const topicUpsert = await db
-          .insert(unitTopicsTable)
+        const unitTopicId = canonTopicId;
+
+        await db
+          .insert(canonicalNodesTable)
           .values({
-            id: topicCanonicalId,
+            id: canonTopicId,
+            subjectId: subjectRow.id,
             unitLibraryId,
             title: topic.title,
-            normalizedTitle: normalizedTopicTitle,
-            sortOrder: ti + 1,
+            normalizedTitle: normalizeText(topic.title),
+            type: "topic",
+            parentCanonicalNodeId: canonUnitId,
             explanation: repairedTopicExplanation,
+            sortOrder: ti + 1,
           })
           .onConflictDoUpdate({
-            target: [unitTopicsTable.unitLibraryId, unitTopicsTable.normalizedTitle],
+            target: [canonicalNodesTable.id],
             set: {
               title: topic.title,
-              sortOrder: ti + 1,
+              normalizedTitle: normalizeText(topic.title),
+              unitLibraryId,
+              parentCanonicalNodeId: canonUnitId,
               explanation: repairedTopicExplanation,
+              sortOrder: ti + 1,
               updatedAt: new Date(),
             },
-          })
-          .returning({ id: unitTopicsTable.id });
-        const unitTopicId = topicUpsert[0]?.id || topicCanonicalId;
+          });
 
         await db.insert(nodesTable).values({
           id: topicId,
           configId,
+          canonicalNodeId: canonTopicId,
+          subjectId: subjectRow.id,
+          unitLibraryId,
           title: topic.title,
+          normalizedTitle: normalizeText(topic.title),
           type: "topic",
           parentId: unitId,
           explanation: repairedTopicExplanation,
           unitTopicId,
-          sortOrder: String(ti + 1),
+          sortOrder: ti + 1,
         });
         topicCount++;
 
         for (let si = 0; si < topic.subtopics.length; si++) {
           const subtopicTitle = topic.subtopics[si];
-          const subtopicId = `${configId}_u${ui + 1}_t${ti + 1}_s${si + 1}`;
+          const canonSubtopicId = canonicalSubtopicId(subjectRow.id, unit.title, topic.title, subtopicTitle);
+          const subtopicId = scopedNodeId(configId, canonSubtopicId);
 
           await db.insert(nodesTable).values({
             id: subtopicId,
             configId,
+            canonicalNodeId: canonSubtopicId,
+            subjectId: subjectRow.id,
+            unitLibraryId,
             title: subtopicTitle,
+            normalizedTitle: normalizeText(subtopicTitle),
             type: "subtopic",
             parentId: topicId,
-            sortOrder: String(si + 1),
+            sortOrder: si + 1,
           });
 
           setProgress(configId, {
@@ -1662,35 +1976,40 @@ export async function runGeneration(configId: string) {
           }
           const repairedSubtopicExplanation = repairBrokenFormulaBullets(explanation);
 
-          const normalizedSubtopicTitle = normalizeText(subtopicTitle);
-          const subtopicCanonicalId = `ust_${unitTopicId}_${normalizedSubtopicTitle.replace(/\s+/g, "_") || "untitled"}`;
-          const subtopicUpsert = await db
-            .insert(unitSubtopicsTable)
+          const unitSubtopicId = canonSubtopicId;
+
+          await db
+            .insert(canonicalNodesTable)
             .values({
-              id: subtopicCanonicalId,
-              unitTopicId,
+              id: canonSubtopicId,
+              subjectId: subjectRow.id,
+              unitLibraryId,
               title: subtopicTitle,
-              normalizedTitle: normalizedSubtopicTitle,
-              sortOrder: si + 1,
+              normalizedTitle: normalizeText(subtopicTitle),
+              type: "subtopic",
+              parentCanonicalNodeId: canonTopicId,
               explanation: repairedSubtopicExplanation,
+              sortOrder: si + 1,
             })
             .onConflictDoUpdate({
-              target: [unitSubtopicsTable.unitTopicId, unitSubtopicsTable.normalizedTitle],
+              target: [canonicalNodesTable.id],
               set: {
                 title: subtopicTitle,
-                sortOrder: si + 1,
+                normalizedTitle: normalizeText(subtopicTitle),
+                unitLibraryId,
+                parentCanonicalNodeId: canonTopicId,
                 explanation: repairedSubtopicExplanation,
+                sortOrder: si + 1,
                 updatedAt: new Date(),
               },
-            })
-            .returning({ id: unitSubtopicsTable.id });
-          const unitSubtopicId = subtopicUpsert[0]?.id || subtopicCanonicalId;
+            });
 
           await db
             .update(nodesTable)
             .set({
               unitTopicId,
               unitSubtopicId,
+              updatedAt: new Date(),
             })
             .where(eq(nodesTable.id, subtopicId));
 
@@ -1731,8 +2050,6 @@ export async function runGeneration(configId: string) {
       await db.insert(configQuestionsTable).values({
         configId,
         unitSubtopicId: mapped.unitSubtopicId,
-        legacyNodeId: mapped.nodeId,
-        legacyQuestionId: null,
         markType: q.markType,
         question: q.question,
         answer: repairBrokenFormulaBullets(q.answer),
@@ -1765,4 +2082,5 @@ export async function runGeneration(configId: string) {
     });
   }
 }
+
 

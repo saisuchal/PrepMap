@@ -10,77 +10,16 @@ import {
   nodesTable,
   configsTable,
   usersTable,
-  unitSubtopicsTable,
   configQuestionsTable,
+  canonicalNodesTable,
 } from "../db";
 import { and, eq } from "drizzle-orm";
 import { requireAdmin } from "../middleware/adminAuth";
 
 const router: IRouter = Router();
 
-function parseStructuredExplanation(rawText: string | null | undefined): {
-  coreExplanation: string;
-  learningGoal: string | null;
-  exampleBlock: string | null;
-  supportNote: string | null;
-} {
-  const text = String(rawText || "").trim();
-  if (!text) {
-    return {
-      coreExplanation: "",
-      learningGoal: null,
-      exampleBlock: null,
-      supportNote: null,
-    };
-  }
-
-  const sections: Record<"core" | "goal" | "example" | "note", string[]> = {
-    core: [],
-    goal: [],
-    example: [],
-    note: [],
-  };
-
-  let current: keyof typeof sections = "core";
-  for (const line of text.split(/\r?\n/)) {
-    const trimmed = line.trim();
-    if (!trimmed) {
-      sections[current].push("");
-      continue;
-    }
-
-    const headingRules: Array<{ key: keyof typeof sections; re: RegExp }> = [
-      { key: "core", re: /^\s*core idea\s*:?\s*(.*)$/i },
-      { key: "goal", re: /^\s*learning goal\s*:?\s*(.*)$/i },
-      { key: "example", re: /^\s*quick example\s*:?\s*(.*)$/i },
-      { key: "note", re: /^\s*(?:helper note|helpful note|support note)\s*:?\s*(.*)$/i },
-    ];
-
-    let matched = false;
-    for (const rule of headingRules) {
-      const m = trimmed.match(rule.re);
-      if (m) {
-        current = rule.key;
-        const tail = String(m[1] || "").trim();
-        if (tail) sections[current].push(tail);
-        matched = true;
-        break;
-      }
-    }
-    if (!matched) sections[current].push(trimmed);
-  }
-
-  const clean = (value: string) => value.trim() || null;
-  return {
-    coreExplanation: clean(sections.core.join("\n")) || text,
-    learningGoal: clean(sections.goal.join("\n")),
-    exampleBlock: clean(sections.example.join("\n")),
-    supportNote: clean(sections.note.join("\n")),
-  };
-}
-
-function toOrder(value: string | null | undefined): number {
-  const n = Number(String(value || "").trim());
+function toOrder(value: number | null | undefined): number {
+  const n = Number(value ?? 0);
   return Number.isFinite(n) ? n : 0;
 }
 
@@ -190,6 +129,7 @@ router.get("/subtopics/:id", async (req, res) => {
         nextRecommendedTitles: nodesTable.nextRecommendedTitles,
         nextRecommendedNodeIds: nodesTable.nextRecommendedNodeIds,
         unitSubtopicId: nodesTable.unitSubtopicId,
+        canonicalNodeId: nodesTable.canonicalNodeId,
       })
       .from(nodesTable)
       .where(eq(nodesTable.id, id))
@@ -263,19 +203,13 @@ router.get("/subtopics/:id", async (req, res) => {
       return;
     }
 
-    const [subtopic] = await db
-      .select({
-        id: unitSubtopicsTable.id,
-        explanation: unitSubtopicsTable.explanation,
-      })
-      .from(unitSubtopicsTable)
-      .where(eq(unitSubtopicsTable.id, node.unitSubtopicId))
-      .limit(1);
-
-    if (!subtopic) {
-      res.status(404).json({ error: "Subtopic not found" });
-      return;
-    }
+    const [canonical] = node.canonicalNodeId
+      ? await db
+          .select()
+          .from(canonicalNodesTable)
+          .where(eq(canonicalNodesTable.id, node.canonicalNodeId))
+          .limit(1)
+      : [];
 
     const questions = await db
       .select({
@@ -300,6 +234,7 @@ router.get("/subtopics/:id", async (req, res) => {
         title: nodesTable.title,
         parentId: nodesTable.parentId,
         sortOrder: nodesTable.sortOrder,
+        canonicalNodeId: nodesTable.canonicalNodeId,
       })
       .from(nodesTable)
       .where(eq(nodesTable.configId, node.configId));
@@ -314,18 +249,20 @@ router.get("/subtopics/:id", async (req, res) => {
     const prev = currentIndex > 0 ? siblings[currentIndex - 1] : null;
     const next = currentIndex >= 0 && currentIndex < siblings.length - 1 ? siblings[currentIndex + 1] : null;
 
-    const structured = parseStructuredExplanation(subtopic.explanation || node.explanation);
-    const explicitPrereqTitles = parseTextArray(node.prerequisiteTitles);
-    const explicitPrereqNodeIds = parseTextArray(node.prerequisiteNodeIds);
-    const explicitNextTitles = parseTextArray(node.nextRecommendedTitles);
-    const explicitNextNodeIds = parseTextArray(node.nextRecommendedNodeIds);
+    const canonicalByScoped = new Map(allNodesForConfig.map((n) => [String(n.canonicalNodeId || ""), n.id]));
+    const explicitPrereqTitles = parseTextArray(canonical?.prerequisiteTitles ?? node.prerequisiteTitles);
+    const explicitPrereqNodeIds = parseTextArray(canonical?.prerequisiteNodeIds ?? node.prerequisiteNodeIds)
+      .map((cid) => canonicalByScoped.get(cid) || cid);
+    const explicitNextTitles = parseTextArray(canonical?.nextRecommendedTitles ?? node.nextRecommendedTitles);
+    const explicitNextNodeIds = parseTextArray(canonical?.nextRecommendedNodeIds ?? node.nextRecommendedNodeIds)
+      .map((cid) => canonicalByScoped.get(cid) || cid);
     const response = GetSubtopicContentResponse.parse({
-      id: subtopic.id,
+      id: node.unitSubtopicId,
       nodeId: id,
-      explanation: structured.coreExplanation,
-      learningGoal: String(node.learningGoal || "").trim() || structured.learningGoal,
-      exampleBlock: String(node.exampleBlock || "").trim() || structured.exampleBlock,
-      supportNote: String(node.supportNote || "").trim() || structured.supportNote,
+      explanation: String(canonical?.explanation || node.explanation || "").trim(),
+      learningGoal: String(canonical?.learningGoal || node.learningGoal || "").trim() || null,
+      exampleBlock: String(canonical?.exampleBlock || node.exampleBlock || "").trim() || null,
+      supportNote: String(canonical?.supportNote || node.supportNote || "").trim() || null,
       prerequisiteTitles: explicitPrereqTitles.length > 0 ? explicitPrereqTitles : prev ? [prev.title] : [],
       prerequisiteNodeIds: explicitPrereqNodeIds.length > 0 ? explicitPrereqNodeIds : prev ? [prev.id] : [],
       nextRecommendedTitles: explicitNextTitles.length > 0 ? explicitNextTitles : next ? [next.title] : [],
@@ -368,10 +305,24 @@ router.put("/subtopics/:id", requireAdmin, async (req, res) => {
       return;
     }
 
+    const canonicalNodeId = String(content.canonicalNodeId || "").trim();
+    if (canonicalNodeId) {
+      await db
+        .update(canonicalNodesTable)
+        .set({
+          explanation: body.explanation,
+          updatedAt: new Date(),
+        })
+        .where(eq(canonicalNodesTable.id, canonicalNodeId));
+    }
+
     await db
-      .update(unitSubtopicsTable)
-      .set({ explanation: body.explanation, updatedAt: new Date() })
-      .where(eq(unitSubtopicsTable.id, content.unitSubtopicId));
+      .update(nodesTable)
+      .set({
+        explanation: body.explanation,
+        updatedAt: new Date(),
+      })
+      .where(eq(nodesTable.id, id));
 
     await db
       .delete(configQuestionsTable)
@@ -392,7 +343,6 @@ router.put("/subtopics/:id", requireAdmin, async (req, res) => {
           answer: q.answer,
           isStarred: q.isStarred ?? false,
           starSource: q.starSource ?? (q.isStarred ? "manual" : "none"),
-          legacyNodeId: id,
         })),
       );
     }

@@ -1,73 +1,12 @@
 import { Router, type IRouter } from "express";
 import { GetNodesQueryParams, GetNodesResponse } from "../api-zod";
-import { db, nodesTable, configsTable, usersTable } from "../db";
-import { eq } from "drizzle-orm";
+import { db, nodesTable, configsTable, usersTable, configUnitLinksTable, canonicalNodesTable } from "../db";
+import { eq, inArray } from "drizzle-orm";
 
 const router: IRouter = Router();
 
-function parseStructuredExplanation(rawText: string | null | undefined): {
-  coreExplanation: string | null;
-  learningGoal: string | null;
-  exampleBlock: string | null;
-  supportNote: string | null;
-} {
-  const text = String(rawText || "").trim();
-  if (!text) {
-    return {
-      coreExplanation: null,
-      learningGoal: null,
-      exampleBlock: null,
-      supportNote: null,
-    };
-  }
-
-  const sections: Record<"core" | "goal" | "example" | "note", string[]> = {
-    core: [],
-    goal: [],
-    example: [],
-    note: [],
-  };
-
-  let current: keyof typeof sections = "core";
-  for (const line of text.split(/\r?\n/)) {
-    const trimmed = line.trim();
-    if (!trimmed) {
-      sections[current].push("");
-      continue;
-    }
-
-    const headingRules: Array<{ key: keyof typeof sections; re: RegExp }> = [
-      { key: "core", re: /^\s*core idea\s*:?\s*(.*)$/i },
-      { key: "goal", re: /^\s*learning goal\s*:?\s*(.*)$/i },
-      { key: "example", re: /^\s*quick example\s*:?\s*(.*)$/i },
-      { key: "note", re: /^\s*(?:helper note|helpful note|support note)\s*:?\s*(.*)$/i },
-    ];
-
-    let matched = false;
-    for (const rule of headingRules) {
-      const m = trimmed.match(rule.re);
-      if (m) {
-        current = rule.key;
-        const tail = String(m[1] || "").trim();
-        if (tail) sections[current].push(tail);
-        matched = true;
-        break;
-      }
-    }
-    if (!matched) sections[current].push(trimmed);
-  }
-
-  const clean = (value: string) => value.trim() || null;
-  return {
-    coreExplanation: clean(sections.core.join("\n")) ?? text,
-    learningGoal: clean(sections.goal.join("\n")),
-    exampleBlock: clean(sections.example.join("\n")),
-    supportNote: clean(sections.note.join("\n")),
-  };
-}
-
-function toOrder(value: string | null | undefined): number {
-  const n = Number(String(value || "").trim());
+function toOrder(value: number | null | undefined): number {
+  const n = Number(value ?? 0);
   return Number.isFinite(n) ? n : 0;
 }
 
@@ -221,10 +160,36 @@ router.get("/nodes", async (req, res) => {
       return;
     }
 
-    const nodes = await db
+    const selectedLinks = await db
+      .select({ unitLibraryId: configUnitLinksTable.unitLibraryId })
+      .from(configUnitLinksTable)
+      .where(eq(configUnitLinksTable.configId, configId));
+    const selectedUnitIds = selectedLinks.map((l) => l.unitLibraryId);
+
+    let nodes = await db
       .select()
       .from(nodesTable)
       .where(eq(nodesTable.configId, configId));
+
+    if (selectedUnitIds.length > 0) {
+      nodes = nodes.filter((n) => selectedUnitIds.includes(String(n.unitLibraryId || "")));
+    }
+
+    const canonicalIds = nodes
+      .map((n) => String(n.canonicalNodeId || "").trim())
+      .filter(Boolean);
+    const canonicalRows = canonicalIds.length > 0
+      ? await db
+          .select()
+          .from(canonicalNodesTable)
+          .where(inArray(canonicalNodesTable.id, canonicalIds))
+      : [];
+    const canonicalById = new Map(canonicalRows.map((c) => [c.id, c]));
+    const scopedByCanonical = new Map<string, string>();
+    for (const n of nodes) {
+      const cId = String(n.canonicalNodeId || "").trim();
+      if (cId) scopedByCanonical.set(cId, n.id);
+    }
 
     const siblingMap = new Map<string, typeof nodes>();
     for (const n of nodes) {
@@ -244,29 +209,35 @@ router.get("/nodes", async (req, res) => {
 
     const response = GetNodesResponse.parse(
       nodes.map((n) => {
-        const structured = parseStructuredExplanation(n.explanation);
+        const canonical = canonicalById.get(String(n.canonicalNodeId || "").trim());
         const siblings = siblingMap.get(String(n.parentId || "__root__")) || [];
         const idx = siblings.findIndex((s) => s.id === n.id);
         const prev = idx > 0 ? siblings[idx - 1] : null;
         const next = idx >= 0 && idx < siblings.length - 1 ? siblings[idx + 1] : null;
-        const explicitPrereqTitles = parseTextArray((n as any).prerequisiteTitles);
-        const explicitPrereqNodeIds = parseTextArray((n as any).prerequisiteNodeIds);
-        const explicitNextTitles = parseTextArray((n as any).nextRecommendedTitles);
-        const explicitNextNodeIds = parseTextArray((n as any).nextRecommendedNodeIds);
+        const explicitPrereqTitles = parseTextArray(canonical?.prerequisiteTitles ?? n.prerequisiteTitles);
+        const explicitPrereqCanonicalIds = parseTextArray(canonical?.prerequisiteNodeIds ?? n.prerequisiteNodeIds);
+        const explicitNextTitles = parseTextArray(canonical?.nextRecommendedTitles ?? n.nextRecommendedTitles);
+        const explicitNextCanonicalIds = parseTextArray(canonical?.nextRecommendedNodeIds ?? n.nextRecommendedNodeIds);
+        const mappedPrereqNodeIds = explicitPrereqCanonicalIds
+          .map((cid) => scopedByCanonical.get(cid) || cid)
+          .filter(Boolean);
+        const mappedNextNodeIds = explicitNextCanonicalIds
+          .map((cid) => scopedByCanonical.get(cid) || cid)
+          .filter(Boolean);
         return {
           id: n.id,
           configId: n.configId,
           title: n.title,
           type: n.type,
           parentId: n.parentId,
-          explanation: structured.coreExplanation,
-          learningGoal: String((n as any).learningGoal || "").trim() || structured.learningGoal,
-          exampleBlock: String((n as any).exampleBlock || "").trim() || structured.exampleBlock,
-          supportNote: String((n as any).supportNote || "").trim() || structured.supportNote,
+          explanation: String(canonical?.explanation || n.explanation || "").trim() || null,
+          learningGoal: String(canonical?.learningGoal || n.learningGoal || "").trim() || null,
+          exampleBlock: String(canonical?.exampleBlock || n.exampleBlock || "").trim() || null,
+          supportNote: String(canonical?.supportNote || n.supportNote || "").trim() || null,
           prerequisiteTitles: explicitPrereqTitles.length > 0 ? explicitPrereqTitles : prev ? [prev.title] : [],
-          prerequisiteNodeIds: explicitPrereqNodeIds.length > 0 ? explicitPrereqNodeIds : prev ? [prev.id] : [],
+          prerequisiteNodeIds: mappedPrereqNodeIds.length > 0 ? mappedPrereqNodeIds : prev ? [prev.id] : [],
           nextRecommendedTitles: explicitNextTitles.length > 0 ? explicitNextTitles : next ? [next.title] : [],
-          nextRecommendedNodeIds: explicitNextNodeIds.length > 0 ? explicitNextNodeIds : next ? [next.id] : [],
+          nextRecommendedNodeIds: mappedNextNodeIds.length > 0 ? mappedNextNodeIds : next ? [next.id] : [],
           sortOrder: n.sortOrder,
         };
       })

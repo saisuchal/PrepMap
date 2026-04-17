@@ -36,7 +36,7 @@ router.post("/auth/login", async (req, res) => {
 
     await db
       .update(usersTable)
-      .set({ lastSuccessfulLoginAt: new Date() })
+      .set({ lastSuccessfulLoginAt: new Date(), updatedAt: new Date() })
       .where(eq(usersTable.id, user.id));
 
     const response = LoginResponse.parse({
@@ -87,6 +87,7 @@ router.post("/auth/reset-password", async (req, res) => {
         password: hashedNew,
         mustResetPassword: false,
         lastPasswordResetAt: new Date(),
+        updatedAt: new Date(),
       })
       .where(eq(usersTable.id, body.collegeId));
 
@@ -128,6 +129,7 @@ router.post("/auth/complete-first-login-setup", async (req, res) => {
         securityAnswerHash: hashedAnswer,
         mustResetPassword: false,
         lastPasswordResetAt: new Date(),
+        updatedAt: new Date(),
       })
       .where(eq(usersTable.id, body.collegeId));
 
@@ -198,6 +200,7 @@ router.post("/auth/reset-password-with-security", async (req, res) => {
         password: hashedNew,
         mustResetPassword: false,
         lastPasswordResetAt: new Date(),
+        updatedAt: new Date(),
       })
       .where(eq(usersTable.id, body.collegeId));
 

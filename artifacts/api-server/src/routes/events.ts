@@ -57,6 +57,46 @@ router.get("/configs/:configId/latest-interaction-state", async (req, res) => {
   }
 });
 
+router.get("/configs/:configId/completion-state", async (req, res) => {
+  try {
+    const authUserId = String(req.headers["x-user-id"] || "").trim();
+    if (!authUserId) {
+      res.status(401).json({ error: "Authentication required. Provide x-user-id header." });
+      return;
+    }
+
+    const configId = String(req.params.configId || "").trim();
+    if (!configId) {
+      res.status(400).json({ error: "configId is required." });
+      return;
+    }
+
+    const rows = await db
+      .select({
+        subtopicId: eventsTable.subtopicId,
+      })
+      .from(eventsTable)
+      .where(and(eq(eventsTable.userId, authUserId), eq(eventsTable.configId, configId)));
+
+    const doneSubtopicIds = Array.from(
+      new Set(
+        rows
+          .map((r) => String(r.subtopicId || "").trim())
+          .filter((id) => !!id && !id.startsWith(TOPIC_INTERACTION_PREFIX)),
+      ),
+    );
+
+    res.status(200).json({
+      configId,
+      userId: authUserId,
+      doneSubtopicIds,
+    });
+  } catch (error) {
+    req.log.error({ err: error }, "Failed to fetch completion state");
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
 router.post("/events", async (req, res) => {
   try {
     const authUserId = String(req.headers["x-user-id"] || "").trim();

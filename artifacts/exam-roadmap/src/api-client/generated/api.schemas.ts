@@ -63,6 +63,8 @@ export interface CreateConfigRequest {
   branch: string;
   subject: string;
   exam: CreateConfigRequestExam;
+  reuseDisabledConfigId?: string;
+  forceCreateNew?: boolean;
 }
 
 export interface UploadConfigFilesRequest {
@@ -83,6 +85,8 @@ export type ConfigStatus = (typeof ConfigStatus)[keyof typeof ConfigStatus];
 export const ConfigStatus = {
   draft: "draft",
   live: "live",
+  disabled: "disabled",
+  deleted: "deleted",
 } as const;
 
 export interface Config {
@@ -141,7 +145,7 @@ export interface Node {
   prerequisiteNodeIds?: string[];
   nextRecommendedTitles?: string[];
   nextRecommendedNodeIds?: string[];
-  sortOrder?: string;
+  sortOrder?: number;
 }
 
 export type SubtopicQuestionMarkType =
@@ -240,6 +244,8 @@ export type GetConfigsStatus =
 export const GetConfigsStatus = {
   draft: "draft",
   live: "live",
+  disabled: "disabled",
+  deleted: "deleted",
 } as const;
 
 export type GetNodesParams = {

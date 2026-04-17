@@ -14,6 +14,7 @@ import {
   useGetLibraryUnits,
   useUpsertLibrarySubject,
   useSaveConfigUnitLinks,
+  usePurgeConfig,
 } from "@/api-client";
 import { UNIVERSITIES, EXAM_TYPES, COMMON_BRANCH, SEMESTERS } from "@/lib/constants";
 import { useLocation } from "wouter";
@@ -46,6 +47,23 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/hooks/use-toast";
 
 function CreateConfigDialog({ onCreated }: { onCreated: () => void }) {
+  type DisabledConfigMatch = {
+    id: string;
+    createdAt?: string;
+    createdBy?: string;
+    year: string;
+    exam: string;
+    branch: string;
+    status: string;
+  };
+
+  type DisabledReusePrompt = {
+    subject: string;
+    matches: DisabledConfigMatch[];
+    selectedId: string;
+    resolve: (choice: { mode: "reuse"; id: string } | { mode: "new" }) => void;
+  };
+
   const CUSTOM_SUBJECT_OPTION = "__create_new__";
   const [open, setOpen] = useState(false);
   const [universityId, setUniversityId] = useState("");
@@ -58,14 +76,19 @@ function CreateConfigDialog({ onCreated }: { onCreated: () => void }) {
   const universities = metadata?.universities?.length ? metadata.universities : UNIVERSITIES;
   const semesters = metadata?.semesters?.length ? metadata.semesters : SEMESTERS;
   const examTypes = metadata?.examTypes?.length ? metadata.examTypes : EXAM_TYPES;
+  const semesterLabel = (id: string) => semesters.find((s) => s.id === id)?.name ?? id;
+  const examLabel = (id: string) => examTypes.find((e) => e.id === id)?.name ?? id;
+  const semExamLabel = (semesterId: string, examId: string) =>
+    `${semesterLabel(semesterId)} - ${examLabel(examId)}`;
   const commonBranch = metadata?.commonBranch || COMMON_BRANCH;
-  const { data: existingConfigs } = useGetConfigs({});
+  const { data: existingConfigs } = useGetConfigs({}, { query: { queryKey: ["configs", "all"] } });
   const createConfig = useCreateConfig();
   const { data: librarySubjects } = useGetLibrarySubjects();
   const upsertLibrarySubject = useUpsertLibrarySubject();
   const [selectedUnitIds, setSelectedUnitIds] = useState<string[]>([]);
   const saveConfigUnitLinks = useSaveConfigUnitLinks();
   const { toast } = useToast();
+  const [disabledReusePrompt, setDisabledReusePrompt] = useState<DisabledReusePrompt | null>(null);
 
   const normalizeText = (value: string) =>
     value.toLowerCase().replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
@@ -106,8 +129,19 @@ function CreateConfigDialog({ onCreated }: { onCreated: () => void }) {
     setSubjectDrafts((prev) => prev.filter((_, i) => i !== index));
   };
 
+  const askDisabledReuseChoice = (subjectName: string, matches: DisabledConfigMatch[]) =>
+    new Promise<{ mode: "reuse"; id: string } | { mode: "new" }>((resolve) => {
+      setDisabledReusePrompt({
+        subject: subjectName,
+        matches,
+        selectedId: matches[0]?.id ?? "",
+        resolve,
+      });
+    });
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    const createdConfigs: Array<{ id: string; subject: string }> = [];
     try {
       const enteredSubject = subject.trim();
       const allSubjects = [...subjectDrafts, ...(enteredSubject ? [enteredSubject] : [])];
@@ -130,7 +164,9 @@ function CreateConfigDialog({ onCreated }: { onCreated: () => void }) {
               c.universityId === universityId &&
               c.year === year &&
               c.branch === commonBranch &&
-              c.exam === exam
+              c.exam === exam &&
+              c.status !== "disabled" &&
+              c.status !== "deleted"
           )
           .map((c) => normalizeText(c.subject))
       );
@@ -146,7 +182,7 @@ function CreateConfigDialog({ onCreated }: { onCreated: () => void }) {
         return;
       }
 
-      const createdConfigIds: string[] = [];
+      let revivedCount = 0;
       for (const pendingSubject of pendingSubjects) {
         const normalizedPending = normalizeText(pendingSubject);
         const existingLibrarySubject =
@@ -155,21 +191,75 @@ function CreateConfigDialog({ onCreated }: { onCreated: () => void }) {
           await upsertLibrarySubject.mutateAsync({ name: pendingSubject });
         }
 
-        const created = await createConfig.mutateAsync({
-          data: {
-            universityId,
-            year,
-            branch: commonBranch,
-            subject: pendingSubject,
-            exam: exam as "mid1" | "mid2" | "endsem",
-          },
-        });
-        createdConfigIds.push(created.id);
+        const disabledMatches = (existingConfigs ?? [])
+          .filter(
+            (c) =>
+              c.universityId === universityId &&
+              c.year === year &&
+              c.branch === commonBranch &&
+              c.exam === exam &&
+              c.status === "disabled" &&
+              normalizeText(c.subject) === normalizedPending
+          )
+          .map((c) => ({
+            id: c.id,
+            createdAt: c.createdAt,
+            createdBy: c.createdBy,
+            year: c.year,
+            exam: c.exam,
+            branch: c.branch,
+            status: c.status,
+          }));
+
+        let createPayload: {
+          universityId: string;
+          year: string;
+          branch: string;
+          subject: string;
+          exam: "mid1" | "mid2" | "endsem";
+          reuseDisabledConfigId?: string;
+          forceCreateNew?: boolean;
+        } = {
+          universityId,
+          year,
+          branch: commonBranch,
+          subject: pendingSubject,
+          exam: exam as "mid1" | "mid2" | "endsem",
+        };
+
+        if (disabledMatches.length > 0) {
+          const choice = await askDisabledReuseChoice(pendingSubject, disabledMatches);
+          if (choice.mode === "reuse") {
+            createPayload = { ...createPayload, reuseDisabledConfigId: choice.id };
+          } else {
+            createPayload = { ...createPayload, forceCreateNew: true };
+          }
+        }
+
+        const created = await createConfig.mutateAsync({ data: createPayload });
+        if ((created as any)?.revived) revivedCount += 1;
+        createdConfigs.push({ id: created.id, subject: created.subject });
       }
 
-      if (selectedUnitIds.length > 0 && createdConfigIds.length === 1) {
-        for (const configId of createdConfigIds) {
-          await saveConfigUnitLinks.mutateAsync({ configId, unitIds: selectedUnitIds });
+      const unitLinkFailures: Array<{ configId: string; reason: string }> = [];
+      if (selectedUnitIds.length > 0 && uniqueSubjects.length === 1) {
+        for (const cfg of createdConfigs) {
+          try {
+            const linkResult: any = await saveConfigUnitLinks.mutateAsync({
+              configId: cfg.id,
+              unitIds: selectedUnitIds,
+            });
+            if (linkResult?.nodesMaterialized === false) {
+              const reason = String(linkResult?.warning || "Unit links saved, but nodes could not be materialized.");
+              unitLinkFailures.push({ configId: cfg.id, reason });
+            }
+          } catch (err: any) {
+            const reason =
+              err?.response?.data?.error ||
+              err?.message ||
+              "Failed to apply selected units.";
+            unitLinkFailures.push({ configId: cfg.id, reason: String(reason) });
+          }
         }
       }
 
@@ -186,11 +276,31 @@ function CreateConfigDialog({ onCreated }: { onCreated: () => void }) {
         title: "Configs created",
         description:
           skippedCount > 0
-            ? `${createdConfigIds.length} created, ${skippedCount} skipped (already existed).`
-            : `${createdConfigIds.length} config drafts created successfully.`,
+            ? `${createdConfigs.length} processed (${revivedCount} enabled, ${createdConfigs.length - revivedCount} new), ${skippedCount} skipped (already active).`
+            : `${createdConfigs.length} processed (${revivedCount} enabled, ${createdConfigs.length - revivedCount} new).`,
       });
-    } catch {
-      toast({ title: "Failed to create config", description: "Something went wrong. Please try again.", variant: "destructive" });
+      if (unitLinkFailures.length > 0) {
+        toast({
+          title: "Config created, but unit linking failed",
+          description: `${unitLinkFailures[0].reason}`,
+          variant: "destructive",
+        });
+      }
+    } catch (err: any) {
+      const backendMessage =
+        err?.response?.data?.error ||
+        err?.message ||
+        "Something went wrong. Please try again.";
+      if (createdConfigs.length > 0) {
+        toast({
+          title: "Config created partially",
+          description: `Created ${createdConfigs.length} config(s), but follow-up setup failed: ${backendMessage}`,
+          variant: "destructive",
+        });
+        onCreated();
+        return;
+      }
+      toast({ title: "Failed to create config", description: backendMessage, variant: "destructive" });
     }
   };
 
@@ -371,11 +481,90 @@ function CreateConfigDialog({ onCreated }: { onCreated: () => void }) {
           </Button>
         </form>
       </DialogContent>
+      <Dialog
+        open={Boolean(disabledReusePrompt)}
+        onOpenChange={(nextOpen) => {
+          if (!nextOpen && disabledReusePrompt) {
+            disabledReusePrompt.resolve({ mode: "new" });
+            setDisabledReusePrompt(null);
+          }
+        }}
+      >
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Matching Disabled Config Found</DialogTitle>
+          </DialogHeader>
+          {disabledReusePrompt && (
+            <div className="space-y-4">
+              <p className="text-sm text-muted-foreground">
+                Disabled config(s) already exist for <span className="font-medium text-foreground">{disabledReusePrompt.subject}</span>.
+                Choose one to enable, or create a fresh config.
+              </p>
+              <div className="space-y-2 rounded-md border border-border p-3 max-h-52 overflow-y-auto">
+                {disabledReusePrompt.matches.map((m) => (
+                  <label key={m.id} className="flex items-start gap-2 text-sm cursor-pointer">
+                    <input
+                      type="radio"
+                      name="disabledReusePick"
+                      checked={disabledReusePrompt.selectedId === m.id}
+                      onChange={() =>
+                        setDisabledReusePrompt((prev) => (prev ? { ...prev, selectedId: m.id } : prev))
+                      }
+                    />
+                    <span>
+                      <span className="font-medium">{m.id}</span>
+                      <span className="block text-xs text-muted-foreground">
+                        {semExamLabel(m.year, m.exam)} &middot; {m.branch}
+                      </span>
+                      <span className="block text-xs text-muted-foreground">
+                        {m.createdAt ? `Created: ${new Date(m.createdAt).toLocaleString()}` : "Created: unknown"}
+                        {m.createdBy ? ` · By: ${m.createdBy}` : ""}
+                      </span>
+                    </span>
+                  </label>
+                ))}
+              </div>
+              <div className="flex items-center justify-end gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => {
+                    disabledReusePrompt.resolve({ mode: "new" });
+                    setDisabledReusePrompt(null);
+                  }}
+                >
+                  Create New
+                </Button>
+                <Button
+                  type="button"
+                  onClick={() => {
+                    disabledReusePrompt.resolve({
+                      mode: "reuse",
+                      id: disabledReusePrompt.selectedId,
+                    });
+                    setDisabledReusePrompt(null);
+                  }}
+                  disabled={!disabledReusePrompt.selectedId}
+                >
+                  Enable Selected
+                </Button>
+              </div>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
     </Dialog>
   );
 }
 
 function ConfigsTab() {
+  const getUniversityIdFromSearch = () => {
+    if (typeof window === "undefined") return null;
+    const params = new URLSearchParams(window.location.search);
+    const value = (params.get("universityId") || "").trim();
+    return value || null;
+  };
+
   const { data: metadata } = useGetAppMetadata();
   const universities = metadata?.universities?.length ? metadata.universities : UNIVERSITIES;
   const semesters = metadata?.semesters?.length ? metadata.semesters : SEMESTERS;
@@ -385,7 +574,7 @@ function ConfigsTab() {
   const examLabel = (id: string) => examTypes.find((e) => e.id === id)?.name ?? id;
   const semExamLabel = (semesterId: string, examId: string) => `${semesterLabel(semesterId)} - ${examLabel(examId)}`;
   const [, setLocation] = useLocation();
-  const [selectedUniversityId, setSelectedUniversityId] = useState<string | null>(null);
+  const [selectedUniversityId, setSelectedUniversityId] = useState<string | null>(getUniversityIdFromSearch);
   const [search, setSearch] = useState("");
   const [yearFilter, setYearFilter] = useState<string>("all");
   const [branchFilter, setBranchFilter] = useState<string>("all");
@@ -393,8 +582,16 @@ function ConfigsTab() {
   const [subjectFilter, setSubjectFilter] = useState<string>("all");
   const { data: configs, isLoading, refetch } = useGetConfigs({}, { query: { queryKey: ["configs", "all"] } });
   const deleteConfig = useDeleteConfig();
+  const purgeConfig = usePurgeConfig();
+  const enableConfig = useCreateConfig();
   const { toast } = useToast();
   const [disableTarget, setDisableTarget] = useState<{
+    id: string;
+    subject: string;
+    year: string;
+    exam: string;
+  } | null>(null);
+  const [purgeTarget, setPurgeTarget] = useState<{
     id: string;
     subject: string;
     year: string;
@@ -446,6 +643,19 @@ function ConfigsTab() {
     );
   });
 
+  const activeConfigs = filteredConfigs.filter((c) => c.status !== "disabled");
+  const disabledConfigs = filteredConfigs.filter((c) => c.status === "disabled");
+
+  useEffect(() => {
+    const syncFromSearch = () => {
+      const fromSearch = getUniversityIdFromSearch();
+      setSelectedUniversityId((prev) => (prev === fromSearch ? prev : fromSearch));
+    };
+    window.addEventListener("popstate", syncFromSearch);
+    syncFromSearch();
+    return () => window.removeEventListener("popstate", syncFromSearch);
+  }, []);
+
   useEffect(() => {
     setYearFilter("all");
     setBranchFilter("all");
@@ -457,34 +667,45 @@ function ConfigsTab() {
     <div>
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 mb-6">
         <div className="flex items-center gap-3 flex-1 w-full sm:w-auto">
-          <div className="relative flex-1 max-w-sm">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-            <Input
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder={selectedUniversityId ? "Search subjects in this university..." : "Search universities..."}
-              className="pl-9"
-            />
-          </div>
+          {!selectedUniversityId ? (
+            <div className="relative flex-1 max-w-sm">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+              <Input
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Search universities..."
+                className="pl-9"
+              />
+            </div>
+          ) : (
+            <div className="flex flex-col items-start gap-2 min-w-0">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  setSelectedUniversityId(null);
+                  setSearch("");
+                  setLocation("/admin");
+                }}
+              >
+                {"<- Back to Universities"}
+              </Button>
+              <span
+                className="max-w-[14rem] sm:max-w-[24rem] truncate text-lg sm:text-xl font-bold uppercase tracking-wide text-foreground"
+                title={uniLabel(selectedUniversityId)}
+              >
+                {uniLabel(selectedUniversityId)}
+              </span>
+            </div>
+          )}
         </div>
-        <CreateConfigDialog onCreated={() => refetch()} />
+        <div className="flex w-full sm:w-auto items-center justify-end gap-2 sm:gap-3">
+          <CreateConfigDialog onCreated={() => refetch()} />
+        </div>
       </div>
       {selectedUniversityId && (
         <div className="mb-4">
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => {
-              setSelectedUniversityId(null);
-              setSearch("");
-            }}
-          >
-            {"<- Back to Universities"}
-          </Button>
-          <p className="mt-2 text-sm text-muted-foreground">
-            Showing configs for <span className="font-medium text-foreground">{uniLabel(selectedUniversityId)}</span>
-          </p>
-          <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
             <div>
               <Select value={yearFilter} onValueChange={setYearFilter}>
                 <SelectTrigger>
@@ -576,7 +797,11 @@ function ConfigsTab() {
                 initial={{ opacity: 0, y: 12 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ delay: i * 0.04 }}
-                onClick={() => u.total > 0 && setSelectedUniversityId(u.id)}
+                onClick={() => {
+                  if (u.total <= 0) return;
+                  setSelectedUniversityId(u.id);
+                  setLocation(`/admin?universityId=${encodeURIComponent(u.id)}`);
+                }}
                 className={`bg-card rounded-2xl border border-border p-5 transition-all ${
                   u.total > 0
                     ? "cursor-pointer hover:border-primary/40 hover:shadow-lg hover:shadow-primary/5"
@@ -600,82 +825,183 @@ function ConfigsTab() {
           </AnimatePresence>
         </div>
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          <AnimatePresence>
-            {filteredConfigs.map((config, i) => {
-              const hasFiles = !!config.syllabusFileUrl;
-              return (
-                <motion.div
-                  key={config.id}
-                  initial={{ opacity: 0, y: 12 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  transition={{ delay: i * 0.04 }}
-                  onClick={() => setLocation(`/admin/config/${config.id}`)}
-                  className="bg-card rounded-2xl border border-border p-5 hover:border-primary/40 hover:shadow-lg hover:shadow-primary/5 transition-all cursor-pointer group"
-                >
-                  <div className="flex items-start justify-between mb-3">
-                    <Badge variant={config.status === "live" ? "default" : "secondary"} className="text-xs">
-                      {config.status === "live" ? (
-                        <><CheckCircle2 className="w-3 h-3 mr-1" /> Live</>
-                      ) : (
-                        <><Clock className="w-3 h-3 mr-1" /> Draft</>
-                      )}
-                    </Badge>
-                    <div className="flex items-center gap-2">
-                      <span className="text-xs font-medium text-primary bg-primary/10 px-2 py-1 rounded-md">
-                        {semExamLabel(config.year, config.exam)}
-                      </span>
+        <div className="space-y-6">
+          {activeConfigs.length > 0 && (
+            <div>
+              <p className="text-sm font-semibold text-foreground mb-3">Active Configs</p>
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                <AnimatePresence>
+                  {activeConfigs.map((config, i) => {
+                    const hasFiles = !!config.syllabusFileUrl;
+                    return (
+                      <motion.div
+                        key={config.id}
+                        initial={{ opacity: 0, y: 12 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        transition={{ delay: i * 0.04 }}
+                        onClick={() =>
+                          setLocation(
+                            `/admin/config/${config.id}?universityId=${encodeURIComponent(config.universityId)}`
+                          )
+                        }
+                        className="bg-card rounded-2xl border border-border p-5 hover:border-primary/40 hover:shadow-lg hover:shadow-primary/5 transition-all cursor-pointer group"
+                      >
+                        <div className="flex items-start justify-between mb-3">
+                          <Badge variant={config.status === "live" ? "default" : "secondary"} className="text-xs">
+                            {config.status === "live" ? (
+                              <><CheckCircle2 className="w-3 h-3 mr-1" /> Live</>
+                            ) : (
+                              <><Clock className="w-3 h-3 mr-1" /> Draft</>
+                            )}
+                          </Badge>
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs font-medium text-primary bg-primary/10 px-2 py-1 rounded-md">
+                              {semExamLabel(config.year, config.exam)}
+                            </span>
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="icon"
+                              className="h-7 w-7 text-destructive hover:text-destructive"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setDisableTarget({
+                                  id: config.id,
+                                  subject: config.subject,
+                                  year: config.year,
+                                  exam: config.exam,
+                                });
+                              }}
+                              disabled={deleteConfig.isPending || config.status !== "draft"}
+                              aria-label={`Disable ${config.subject}`}
+                              title={
+                                config.status === "live"
+                                  ? "Only draft configs can be disabled"
+                                  : "Disable config"
+                              }
+                            >
+                              <Ban className="w-4 h-4" />
+                            </Button>
+                            <ChevronRight className="w-4 h-4 text-muted-foreground group-hover:text-primary transition-colors" />
+                          </div>
+                        </div>
+                        <h3 className="font-semibold text-foreground text-lg mb-1 line-clamp-1">{config.subject}</h3>
+                        <p className="text-sm text-muted-foreground mb-3">
+                          {uniLabel(config.universityId)} &middot; {config.branch}
+                        </p>
+                        <div className="flex items-center justify-between">
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            className="h-7 text-xs gap-1.5"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setLocation(
+                                `/roadmap?configId=${encodeURIComponent(config.id)}&subject=${encodeURIComponent(config.subject)}&exam=${encodeURIComponent(config.exam)}`
+                              );
+                            }}
+                          >
+                            <Eye className="w-3.5 h-3.5" />
+                            Preview
+                          </Button>
+                          <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                            {hasFiles && <FileText className="w-3.5 h-3.5 text-green-500" />}
+                            {config.createdAt && new Date(config.createdAt).toLocaleDateString()}
+                          </div>
+                        </div>
+                      </motion.div>
+                    );
+                  })}
+                </AnimatePresence>
+              </div>
+            </div>
+          )}
+
+          {disabledConfigs.length > 0 && (
+            <div>
+              <p className="text-sm font-semibold text-foreground mb-3">Disabled Configs</p>
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                <AnimatePresence>
+                  {disabledConfigs.map((config, i) => (
+                    <motion.div
+                      key={config.id}
+                      initial={{ opacity: 0, y: 12 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      transition={{ delay: i * 0.04 }}
+                      className="bg-card rounded-2xl border border-dashed border-border p-5"
+                    >
+                      <div className="flex items-start justify-between mb-3">
+                        <Badge variant="secondary" className="text-xs">Disabled</Badge>
+                        <span className="text-xs font-medium text-primary bg-primary/10 px-2 py-1 rounded-md">
+                          {semExamLabel(config.year, config.exam)}
+                        </span>
+                      </div>
+                      <h3 className="font-semibold text-foreground text-lg mb-1 line-clamp-1">{config.subject}</h3>
+                      <p className="text-sm text-muted-foreground mb-3">
+                        {uniLabel(config.universityId)} &middot; {config.branch}
+                      </p>
                       <Button
                         type="button"
-                        variant="ghost"
-                        size="icon"
-                        className="h-7 w-7 text-destructive hover:text-destructive"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setDisableTarget({
+                        size="sm"
+                        className="h-8 text-xs"
+                        disabled={enableConfig.isPending}
+                        onClick={() => {
+                          enableConfig.mutate(
+                            {
+                              data: {
+                                universityId: config.universityId,
+                                year: config.year,
+                                branch: config.branch,
+                                subject: config.subject,
+                                exam: config.exam as "mid1" | "mid2" | "endsem",
+                                reuseDisabledConfigId: config.id,
+                              },
+                            },
+                            {
+                              onSuccess: () => {
+                                refetch();
+                                toast({
+                                  title: "Config enabled",
+                                  description: `${config.subject} has been enabled as draft.`,
+                                });
+                              },
+                              onError: () => {
+                                toast({
+                                  title: "Enable failed",
+                                  description: "Could not enable this config. Please try again.",
+                                  variant: "destructive",
+                                });
+                              },
+                            }
+                          );
+                        }}
+                      >
+                        Enable
+                      </Button>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="destructive"
+                        className="h-8 text-xs ml-2"
+                        disabled={purgeConfig.isPending}
+                        onClick={() =>
+                          setPurgeTarget({
                             id: config.id,
                             subject: config.subject,
                             year: config.year,
                             exam: config.exam,
-                          });
-                        }}
-                        disabled={deleteConfig.isPending}
-                        aria-label={`Disable ${config.subject}`}
+                          })
+                        }
                       >
-                        <Ban className="w-4 h-4" />
+                        Delete
                       </Button>
-                      <ChevronRight className="w-4 h-4 text-muted-foreground group-hover:text-primary transition-colors" />
-                    </div>
-                  </div>
-                  <h3 className="font-semibold text-foreground text-lg mb-1 line-clamp-1">{config.subject}</h3>
-                  <p className="text-sm text-muted-foreground mb-3">
-                    {uniLabel(config.universityId)} &middot; {config.branch}
-                  </p>
-                  <div className="flex items-center justify-between">
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      className="h-7 text-xs gap-1.5"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setLocation(
-                          `/roadmap?configId=${encodeURIComponent(config.id)}&subject=${encodeURIComponent(config.subject)}&exam=${encodeURIComponent(config.exam)}`
-                        );
-                      }}
-                    >
-                      <Eye className="w-3.5 h-3.5" />
-                      Preview
-                    </Button>
-                    <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                      {hasFiles && <FileText className="w-3.5 h-3.5 text-green-500" />}
-                      {config.createdAt && new Date(config.createdAt).toLocaleDateString()}
-                    </div>
-                  </div>
-                </motion.div>
-              );
-            })}
-          </AnimatePresence>
+                    </motion.div>
+                  ))}
+                </AnimatePresence>
+              </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -718,6 +1044,63 @@ function ConfigsTab() {
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
             >
               Disable
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog open={!!purgeTarget} onOpenChange={(open) => !open && setPurgeTarget(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete Disabled Config Permanently?</AlertDialogTitle>
+            <AlertDialogDescription>
+              <div className="space-y-3">
+                <p>
+                  You are deleting <b>{purgeTarget?.subject}</b> (
+                  {purgeTarget ? semExamLabel(purgeTarget.year, purgeTarget.exam) : ""}).
+                </p>
+                <div className="rounded-md border border-destructive/30 bg-destructive/5 p-3 text-foreground">
+                  <p className="font-medium mb-1">This will permanently remove:</p>
+                  <p>- Config-scoped roadmap node rows for this config (not global canonical/unit content)</p>
+                  <p>- Question bank entries linked to this config</p>
+                  <p>- Interaction/progress events and related analytics for this config</p>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  This action cannot be undone. If you may need this config later, use <b>Enable</b> instead.
+                </p>
+              </div>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={purgeConfig.isPending}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              disabled={purgeConfig.isPending}
+              onClick={() => {
+                if (!purgeTarget) return;
+                purgeConfig.mutate(
+                  { id: purgeTarget.id },
+                  {
+                    onSuccess: () => {
+                      toast({
+                        title: "Config deleted",
+                        description: `${purgeTarget.subject} was permanently deleted.`,
+                      });
+                      setPurgeTarget(null);
+                      refetch();
+                    },
+                    onError: () => {
+                      toast({
+                        title: "Delete failed",
+                        description: "Could not permanently delete this config.",
+                        variant: "destructive",
+                      });
+                    },
+                  }
+                );
+              }}
+            >
+              {purgeConfig.isPending ? "Deleting..." : "Delete Permanently"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
@@ -1281,6 +1664,18 @@ function AnalyticsTab() {
 }
 
 export default function Admin() {
+  const [adminLocation] = useLocation();
+  const [isUniversityScoped, setIsUniversityScoped] = useState<boolean>(() => {
+    if (typeof window === "undefined") return false;
+    const params = new URLSearchParams(window.location.search);
+    return Boolean((params.get("universityId") || "").trim());
+  });
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    setIsUniversityScoped(Boolean((params.get("universityId") || "").trim()));
+  }, [adminLocation]);
+
   return (
     <div className="w-full max-w-6xl mx-auto pt-4 pb-20 px-4 sm:px-6 lg:px-8">
       <div className="mb-8">
@@ -1294,14 +1689,16 @@ export default function Admin() {
       </div>
 
       <Tabs defaultValue="configs">
-        <TabsList className="mb-6">
-          <TabsTrigger value="configs" className="gap-2">
-            <FileText className="w-4 h-4" /> Configs
-          </TabsTrigger>
-          <TabsTrigger value="analytics" className="gap-2">
-            <BarChart3 className="w-4 h-4" /> Analytics
-          </TabsTrigger>
-        </TabsList>
+        {!isUniversityScoped && (
+          <TabsList className="mb-6">
+            <TabsTrigger value="configs" className="gap-2">
+              <FileText className="w-4 h-4" /> Configs
+            </TabsTrigger>
+            <TabsTrigger value="analytics" className="gap-2">
+              <BarChart3 className="w-4 h-4" /> Analytics
+            </TabsTrigger>
+          </TabsList>
+        )}
 
         <TabsContent value="configs">
           <ConfigsTab />

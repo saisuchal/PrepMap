@@ -14,6 +14,6 @@ export interface Node {
   type: NodeType;
   parentId?: string | null;
   explanation?: string | null;
-  sortOrder?: string;
+  sortOrder?: number;
 }
 

@@ -4,7 +4,7 @@ export const universitiesTable = pgTable("universities", {
   id: text("id").primaryKey(),
   name: text("name").notNull(),
   createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });
 
 export type University = typeof universitiesTable.$inferSelect;
-

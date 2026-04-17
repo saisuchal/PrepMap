@@ -11,8 +11,6 @@ export const configQuestionsTable = pgTable("config_questions", {
   answer: text("answer").notNull(),
   isStarred: boolean("is_starred").notNull().default(false),
   starSource: text("star_source").notNull().default("none"),
-  legacyNodeId: text("legacy_node_id"),
-  legacyQuestionId: integer("legacy_question_id"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });

@@ -79,6 +79,21 @@ export async function initializeDatabase(): Promise<void> {
   `);
 
   await pool.query(`
+    ALTER TABLE IF EXISTS public.users
+    ADD COLUMN IF NOT EXISTS created_at timestamp without time zone NOT NULL DEFAULT now();
+  `);
+
+  await pool.query(`
+    ALTER TABLE IF EXISTS public.users
+    ADD COLUMN IF NOT EXISTS updated_at timestamp without time zone NOT NULL DEFAULT now();
+  `);
+
+  await pool.query(`
+    ALTER TABLE IF EXISTS public.universities
+    ADD COLUMN IF NOT EXISTS updated_at timestamp without time zone NOT NULL DEFAULT now();
+  `);
+
+  await pool.query(`
     DO $$
     BEGIN
       IF EXISTS (
@@ -143,33 +158,18 @@ export async function initializeDatabase(): Promise<void> {
   `);
 
   await pool.query(`
-    CREATE TABLE IF NOT EXISTS public.subject_reading_materials (
-      id text PRIMARY KEY,
-      subject_id text NOT NULL,
-      title text NOT NULL,
-      material_type text NOT NULL DEFAULT 'reference',
-      file_url text NOT NULL,
-      source_order integer NOT NULL DEFAULT 0,
-      is_active boolean NOT NULL DEFAULT true,
-      created_by text NOT NULL,
-      created_at timestamp without time zone NOT NULL DEFAULT now(),
-      updated_at timestamp without time zone NOT NULL DEFAULT now()
-    );
-  `);
-
-  await pool.query(`
-    CREATE INDEX IF NOT EXISTS subject_reading_materials_subject_active_idx
-    ON public.subject_reading_materials (subject_id, is_active, source_order);
-  `);
-
-  await pool.query(`
     CREATE TABLE IF NOT EXISTS public.config_unit_links (
       id text PRIMARY KEY,
       config_id text NOT NULL,
       unit_library_id text NOT NULL,
-      sort_order text NOT NULL DEFAULT '0',
+      sort_order integer NOT NULL DEFAULT 0,
       created_at timestamp without time zone NOT NULL DEFAULT now()
     );
+  `);
+
+  await pool.query(`
+    ALTER TABLE IF EXISTS public.config_unit_links
+    ADD COLUMN IF NOT EXISTS updated_at timestamp without time zone NOT NULL DEFAULT now();
   `);
 
   await pool.query(`
@@ -178,49 +178,131 @@ export async function initializeDatabase(): Promise<void> {
   `);
 
   await pool.query(`
-    CREATE TABLE IF NOT EXISTS public.unit_topics (
+    CREATE TABLE IF NOT EXISTS public.canonical_nodes (
       id text PRIMARY KEY,
+      subject_id text NOT NULL,
       unit_library_id text NOT NULL,
       title text NOT NULL,
-      normalized_title text NOT NULL,
-      sort_order integer NOT NULL DEFAULT 0,
+      normalized_title text,
+      type text NOT NULL,
+      parent_canonical_node_id text,
       explanation text,
+      learning_goal text,
+      example_block text,
+      support_note text,
+      prerequisite_titles text,
+      prerequisite_node_ids text,
+      next_recommended_titles text,
+      next_recommended_node_ids text,
+      sort_order integer NOT NULL DEFAULT 0,
       created_at timestamp without time zone NOT NULL DEFAULT now(),
       updated_at timestamp without time zone NOT NULL DEFAULT now()
     );
   `);
 
   await pool.query(`
-    CREATE UNIQUE INDEX IF NOT EXISTS unit_topics_unit_norm_unique
-    ON public.unit_topics (unit_library_id, normalized_title);
+    CREATE INDEX IF NOT EXISTS canonical_nodes_subject_idx
+    ON public.canonical_nodes (subject_id);
   `);
 
   await pool.query(`
-    CREATE INDEX IF NOT EXISTS unit_topics_unit_sort_idx
-    ON public.unit_topics (unit_library_id, sort_order);
+    CREATE INDEX IF NOT EXISTS canonical_nodes_unit_idx
+    ON public.canonical_nodes (unit_library_id);
   `);
 
   await pool.query(`
-    CREATE TABLE IF NOT EXISTS public.unit_subtopics (
-      id text PRIMARY KEY,
-      unit_topic_id text NOT NULL,
-      title text NOT NULL,
-      normalized_title text NOT NULL,
-      sort_order integer NOT NULL DEFAULT 0,
-      explanation text,
-      created_at timestamp without time zone NOT NULL DEFAULT now(),
-      updated_at timestamp without time zone NOT NULL DEFAULT now()
-    );
+    CREATE INDEX IF NOT EXISTS canonical_nodes_parent_idx
+    ON public.canonical_nodes (parent_canonical_node_id);
   `);
 
   await pool.query(`
-    CREATE UNIQUE INDEX IF NOT EXISTS unit_subtopics_topic_norm_unique
-    ON public.unit_subtopics (unit_topic_id, normalized_title);
+    ALTER TABLE IF EXISTS public.canonical_nodes
+    ADD COLUMN IF NOT EXISTS normalized_title text;
   `);
 
   await pool.query(`
-    CREATE INDEX IF NOT EXISTS unit_subtopics_topic_sort_idx
-    ON public.unit_subtopics (unit_topic_id, sort_order);
+    CREATE INDEX IF NOT EXISTS canonical_nodes_subject_norm_title_idx
+    ON public.canonical_nodes (subject_id, normalized_title);
+  `);
+
+  await pool.query(`
+    UPDATE public.canonical_nodes
+    SET normalized_title = regexp_replace(lower(trim(title)), '[^a-z0-9\\s]+', ' ', 'g')
+    WHERE normalized_title IS NULL OR btrim(normalized_title) = '';
+  `);
+
+  await pool.query(`
+    ALTER TABLE public.nodes
+    ADD COLUMN IF NOT EXISTS canonical_node_id text;
+  `);
+
+  await pool.query(`
+    ALTER TABLE IF EXISTS public.nodes
+    ADD COLUMN IF NOT EXISTS normalized_title text;
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS nodes_config_norm_title_idx
+    ON public.nodes (config_id, normalized_title);
+  `);
+
+  await pool.query(`
+    UPDATE public.nodes
+    SET normalized_title = regexp_replace(lower(trim(title)), '[^a-z0-9\\s]+', ' ', 'g')
+    WHERE normalized_title IS NULL OR btrim(normalized_title) = '';
+  `);
+
+  await pool.query(`
+    ALTER TABLE IF EXISTS public.nodes
+    ADD COLUMN IF NOT EXISTS created_at timestamp without time zone NOT NULL DEFAULT now();
+  `);
+
+  await pool.query(`
+    ALTER TABLE IF EXISTS public.nodes
+    ADD COLUMN IF NOT EXISTS updated_at timestamp without time zone NOT NULL DEFAULT now();
+  `);
+
+  await pool.query(`
+    ALTER TABLE IF EXISTS public.configs
+    ADD COLUMN IF NOT EXISTS updated_at timestamp without time zone NOT NULL DEFAULT now();
+  `);
+
+  await pool.query(`
+    ALTER TABLE IF EXISTS public.events
+    ADD COLUMN IF NOT EXISTS created_at timestamp without time zone NOT NULL DEFAULT now();
+  `);
+
+  await pool.query(`
+    ALTER TABLE IF EXISTS public.events
+    ADD COLUMN IF NOT EXISTS updated_at timestamp without time zone NOT NULL DEFAULT now();
+  `);
+
+  // Legacy tables (subtopic_contents, subtopic_questions) are intentionally
+  // not created/managed here. The app uses canonical/config-scoped tables.
+
+  await pool.query(`
+    ALTER TABLE public.nodes
+    ADD COLUMN IF NOT EXISTS subject_id text;
+  `);
+
+  await pool.query(`
+    ALTER TABLE public.nodes
+    ADD COLUMN IF NOT EXISTS unit_library_id text;
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS nodes_config_canonical_idx
+    ON public.nodes (config_id, canonical_node_id);
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS nodes_subject_idx
+    ON public.nodes (subject_id);
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS nodes_unit_library_idx
+    ON public.nodes (unit_library_id);
   `);
 
   await pool.query(`
@@ -233,11 +315,19 @@ export async function initializeDatabase(): Promise<void> {
       answer text NOT NULL,
       is_starred boolean NOT NULL DEFAULT false,
       star_source text NOT NULL DEFAULT 'none',
-      legacy_node_id text,
-      legacy_question_id integer UNIQUE,
       created_at timestamp without time zone NOT NULL DEFAULT now(),
       updated_at timestamp without time zone NOT NULL DEFAULT now()
     );
+  `);
+
+  await pool.query(`
+    ALTER TABLE IF EXISTS public.config_questions
+    DROP COLUMN IF EXISTS legacy_node_id;
+  `);
+
+  await pool.query(`
+    ALTER TABLE IF EXISTS public.config_questions
+    DROP COLUMN IF EXISTS legacy_question_id;
   `);
 
   await pool.query(`
@@ -248,6 +338,36 @@ export async function initializeDatabase(): Promise<void> {
   await pool.query(`
     CREATE INDEX IF NOT EXISTS config_questions_subtopic_idx
     ON public.config_questions (unit_subtopic_id);
+  `);
+
+  // Migrate legacy scoped node ids in config_questions.unit_subtopic_id -> canonical subtopic ids.
+  await pool.query(`
+    UPDATE public.config_questions q
+    SET unit_subtopic_id = n.unit_subtopic_id
+    FROM public.nodes n
+    WHERE n.config_id = q.config_id
+      AND n.id = q.unit_subtopic_id
+      AND n.unit_subtopic_id IS NOT NULL
+      AND btrim(n.unit_subtopic_id) <> '';
+  `);
+
+  // Remove any legacy FK to dropped unit_subtopics table, then enforce canonical-node FK.
+  await pool.query(`
+    ALTER TABLE public.config_questions
+    DROP CONSTRAINT IF EXISTS config_questions_unit_subtopic_id_fkey;
+  `);
+
+  await pool.query(`
+    ALTER TABLE public.config_questions
+    DROP CONSTRAINT IF EXISTS config_questions_unit_subtopic_id_canonical_fkey;
+  `);
+
+  await pool.query(`
+    ALTER TABLE public.config_questions
+    ADD CONSTRAINT config_questions_unit_subtopic_id_canonical_fkey
+    FOREIGN KEY (unit_subtopic_id)
+    REFERENCES public.canonical_nodes(id)
+    NOT VALID;
   `);
 
   await pool.query(`
@@ -261,6 +381,41 @@ export async function initializeDatabase(): Promise<void> {
   `);
 
   await pool.query(`
+    ALTER TABLE public.nodes
+    ADD COLUMN IF NOT EXISTS learning_goal text;
+  `);
+
+  await pool.query(`
+    ALTER TABLE public.nodes
+    ADD COLUMN IF NOT EXISTS example_block text;
+  `);
+
+  await pool.query(`
+    ALTER TABLE public.nodes
+    ADD COLUMN IF NOT EXISTS support_note text;
+  `);
+
+  await pool.query(`
+    ALTER TABLE public.nodes
+    ADD COLUMN IF NOT EXISTS prerequisite_titles text;
+  `);
+
+  await pool.query(`
+    ALTER TABLE public.nodes
+    ADD COLUMN IF NOT EXISTS prerequisite_node_ids text;
+  `);
+
+  await pool.query(`
+    ALTER TABLE public.nodes
+    ADD COLUMN IF NOT EXISTS next_recommended_titles text;
+  `);
+
+  await pool.query(`
+    ALTER TABLE public.nodes
+    ADD COLUMN IF NOT EXISTS next_recommended_node_ids text;
+  `);
+
+  await pool.query(`
     CREATE INDEX IF NOT EXISTS nodes_config_unit_topic_idx
     ON public.nodes (config_id, unit_topic_id);
   `);
@@ -269,6 +424,23 @@ export async function initializeDatabase(): Promise<void> {
     CREATE INDEX IF NOT EXISTS nodes_config_unit_subtopic_idx
     ON public.nodes (config_id, unit_subtopic_id);
   `);
+
+  // Normalize legacy sort_order columns to integer safely.
+  for (const tableName of ["config_unit_links", "canonical_nodes", "nodes"] as const) {
+    await pool.query(`
+      ALTER TABLE IF EXISTS public.${tableName}
+      ALTER COLUMN sort_order DROP DEFAULT;
+    `);
+    await pool.query(`
+      ALTER TABLE IF EXISTS public.${tableName}
+      ALTER COLUMN sort_order TYPE integer
+      USING COALESCE(NULLIF(trim(sort_order::text), ''), '0')::integer;
+    `);
+    await pool.query(`
+      ALTER TABLE IF EXISTS public.${tableName}
+      ALTER COLUMN sort_order SET DEFAULT 0;
+    `);
+  }
 
   const existingSubjects = await pool.query<{ subject: string }>(`
     SELECT DISTINCT subject

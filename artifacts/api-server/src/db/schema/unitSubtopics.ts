@@ -9,6 +9,7 @@ export const unitSubtopicsTable = pgTable("unit_subtopics", {
   normalizedTitle: text("normalized_title").notNull(),
   sortOrder: integer("sort_order").notNull().default(0),
   explanation: text("explanation"),
+  facts: text("facts"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });

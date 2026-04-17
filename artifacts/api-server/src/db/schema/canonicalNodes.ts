@@ -2,13 +2,14 @@ import { integer, pgTable, text, timestamp } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 
-export const nodesTable = pgTable("nodes", {
+export const canonicalNodesTable = pgTable("canonical_nodes", {
   id: text("id").primaryKey(),
-  configId: text("config_id").notNull(),
+  subjectId: text("subject_id").notNull(),
+  unitLibraryId: text("unit_library_id").notNull(),
   title: text("title").notNull(),
   normalizedTitle: text("normalized_title"),
   type: text("type").notNull(),
-  parentId: text("parent_id"),
+  parentCanonicalNodeId: text("parent_canonical_node_id"),
   explanation: text("explanation"),
   learningGoal: text("learning_goal"),
   exampleBlock: text("example_block"),
@@ -17,16 +18,11 @@ export const nodesTable = pgTable("nodes", {
   prerequisiteNodeIds: text("prerequisite_node_ids"),
   nextRecommendedTitles: text("next_recommended_titles"),
   nextRecommendedNodeIds: text("next_recommended_node_ids"),
-  canonicalNodeId: text("canonical_node_id"),
-  subjectId: text("subject_id"),
-  unitLibraryId: text("unit_library_id"),
-  unitTopicId: text("unit_topic_id"),
-  unitSubtopicId: text("unit_subtopic_id"),
   sortOrder: integer("sort_order").notNull().default(0),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });
 
-export const insertNodeSchema = createInsertSchema(nodesTable);
-export type InsertNode = z.infer<typeof insertNodeSchema>;
-export type Node = typeof nodesTable.$inferSelect;
+export const insertCanonicalNodeSchema = createInsertSchema(canonicalNodesTable);
+export type InsertCanonicalNode = z.infer<typeof insertCanonicalNodeSchema>;
+export type CanonicalNode = typeof canonicalNodesTable.$inferSelect;

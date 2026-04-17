@@ -14,6 +14,7 @@ export const configsTable = pgTable("configs", {
   syllabusFileUrl: text("syllabus_file_url"),
   paperFileUrls: text("paper_file_urls").array(),
   createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });
 
 export const insertConfigSchema = createInsertSchema(configsTable);

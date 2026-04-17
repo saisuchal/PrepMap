@@ -22,6 +22,7 @@ import {
   useGenerateCheapLaneA,
   useStartCheapLaneBImport,
   useGetCheapLaneBImportStatus,
+  useGetCheapGapReport,
   type CheapGenerationMode,
 } from "@/api-client";
 import { UNIVERSITIES, EXAM_TYPES, SEMESTERS } from "@/lib/constants";
@@ -571,6 +572,7 @@ interface EditableQuestion {
 
 function CheapGenerationSection({ configId }: { configId: string }) {
   const [laneAMode, setLaneAMode] = useState<CheapGenerationMode>("explanations_and_questions");
+  const [forceOverwrite, setForceOverwrite] = useState(false);
   const [masterPrompt, setMasterPrompt] = useState("");
   const [laneBJson, setLaneBJson] = useState("");
   const [laneAStructure, setLaneAStructure] = useState<Array<{
@@ -601,6 +603,11 @@ function CheapGenerationSection({ configId }: { configId: string }) {
   } | null>(null);
   const generateLaneA = useGenerateCheapLaneA();
   const startImportLaneB = useStartCheapLaneBImport();
+  const {
+    data: gapReport,
+    refetch: refetchGapReport,
+    isFetching: gapReportLoading,
+  } = useGetCheapGapReport(configId, laneAMode, { enabled: false });
   const [importPolling, setImportPolling] = useState(false);
   const [expectedImportQuestionCount, setExpectedImportQuestionCount] = useState(0);
   const { data: importStatus } = useGetCheapLaneBImportStatus(configId, {
@@ -723,6 +730,7 @@ function CheapGenerationSection({ configId }: { configId: string }) {
         payload: {
           ...(parsed as any),
           generationMode: laneAMode,
+          forceOverwrite,
         } as any,
       },
       {
@@ -731,7 +739,7 @@ function CheapGenerationSection({ configId }: { configId: string }) {
           setImportWarnings([]);
           toast({
             title: "Import started",
-            description: "Saving content in stages. Please wait...",
+            description: `Saving content in stages (${forceOverwrite ? "force overwrite" : "preserve existing"}). Please wait...`,
           });
         },
         onError: (error) => {
@@ -758,8 +766,8 @@ function CheapGenerationSection({ configId }: { configId: string }) {
       toast({
         title: "Lane B imported",
         description: warningCount > 0
-          ? `${savedQuestions} questions saved with ${warningCount} warning(s).`
-          : `${savedQuestions} questions saved successfully.`,
+          ? `${savedQuestions} questions saved with ${warningCount} warning(s). Policy: ${importStatus.overwritePolicy || "preserve_existing"}.`
+          : `${savedQuestions} questions saved successfully. Policy: ${importStatus.overwritePolicy || "preserve_existing"}.`,
       });
       return;
     }
@@ -780,6 +788,12 @@ function CheapGenerationSection({ configId }: { configId: string }) {
       setImportPolling(true);
     }
   }, [importStatus?.status]);
+
+  const explanationGapRows = gapReport?.rows?.length ?? 0;
+  const questionGapCount = gapReport?.summary?.questionGapCount ?? 0;
+  const hasExplanationGaps = explanationGapRows > 0;
+  const hasQuestionGaps = !!gapReport?.summary?.includeQuestionGaps && questionGapCount > 0;
+  const hasAnyGaps = hasExplanationGaps || hasQuestionGaps;
 
   return (
     <div className="bg-card rounded-2xl border border-border p-6 space-y-4">
@@ -810,6 +824,86 @@ function CheapGenerationSection({ configId }: { configId: string }) {
           {generateLaneA.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
           Generate Lane A Package
         </Button>
+        <Button
+          type="button"
+          variant="outline"
+          onClick={() => {
+            refetchGapReport();
+          }}
+          disabled={gapReportLoading}
+          className="gap-2 h-8 text-xs"
+        >
+          {gapReportLoading ? <Loader2 className="w-3 h-3 animate-spin" /> : <HelpCircle className="w-3 h-3" />}
+          Refresh Gap Report
+        </Button>
+        {gapReport && (
+          <div className="rounded-lg border border-border bg-background p-3 text-xs space-y-2">
+            <p className="font-semibold text-foreground">Gap Report (Before Lane A)</p>
+            <p className="text-muted-foreground">
+              {gapReport.summary.includeExplanationGaps ? (
+                <>
+                  Topics: {gapReport.summary.topicGapCount}/{gapReport.summary.totalTopicTargets} missing
+                  {" | "}
+                  Subtopics: {gapReport.summary.subtopicGapCount}/{gapReport.summary.totalSubtopicTargets} missing
+                  {" | "}
+                  Total rows: {gapReport.summary.totalGapRows}
+                </>
+              ) : (
+                <>
+                  Explanation gap check skipped for this mode
+                  {" | "}
+                  Total rows: {gapReport.summary.totalGapRows}
+                </>
+              )}
+            </p>
+            {gapReport.summary.includeQuestionGaps && (
+              <p className="text-muted-foreground">
+                Questions: {gapReport.summary.existingQuestionCount ?? 0}/{gapReport.summary.expectedQuestionCount ?? 0}
+                {" | "}
+                Missing questions: {gapReport.summary.questionGapCount ?? 0}
+              </p>
+            )}
+            {hasExplanationGaps ? (
+              <div className="max-h-40 overflow-auto rounded border border-border/70">
+                <table className="w-full text-[11px]">
+                  <thead className="bg-secondary/50 sticky top-0">
+                    <tr className="text-left">
+                      <th className="px-2 py-1">Level</th>
+                      <th className="px-2 py-1">Path</th>
+                      <th className="px-2 py-1">Missing</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {gapReport.rows.map((row, idx) => (
+                      <tr key={`${row.level}-${row.unitTitle}-${row.topicTitle}-${row.subtopicTitle || ""}-${idx}`} className="border-t border-border/50">
+                        <td className="px-2 py-1 capitalize">{row.level}</td>
+                        <td className="px-2 py-1">
+                          {row.unitTitle} / {row.topicTitle}
+                          {row.subtopicTitle ? ` / ${row.subtopicTitle}` : ""}
+                        </td>
+                        <td className="px-2 py-1">{row.missing.join(", ")}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : hasAnyGaps ? (
+              <p className="text-amber-700">
+                {gapReport.summary.includeExplanationGaps
+                  ? "Explanations are complete, but question generation is still needed for this mode."
+                  : "Explanation checks are skipped in this mode. Question generation is still needed."}
+              </p>
+            ) : (
+              <p className="text-emerald-700">
+                {gapReport.summary.includeQuestionGaps
+                  ? (gapReport.summary.includeExplanationGaps
+                      ? "No explanation or question gaps found for this mode. Lane A can be skipped."
+                      : "No question gaps found for this mode. Lane A can be skipped.")
+                  : "No explanation gaps found. Lane A should skip explanation generation for existing content."}
+              </p>
+            )}
+          </div>
+        )}
         <div className="flex items-center gap-2">
           <Button type="button" variant="outline" onClick={handleCopyPrompt} disabled={!masterPrompt.trim()} className="h-8 text-xs">
             Copy Prompt
@@ -857,6 +951,15 @@ function CheapGenerationSection({ configId }: { configId: string }) {
         <p className="text-xs text-muted-foreground">
           Paste externally generated JSON (editable) and import. Auto-fix/warnings will be applied before save.
         </p>
+        <label className="flex items-center gap-2 text-xs text-foreground">
+          <input
+            type="checkbox"
+            checked={forceOverwrite}
+            onChange={(e) => setForceOverwrite(e.target.checked)}
+            className="h-3.5 w-3.5"
+          />
+          Overwrite existing canonical content (force overwrite)
+        </label>
         <Textarea
           rows={14}
           value={laneBJson}
@@ -903,6 +1006,9 @@ function CheapGenerationSection({ configId }: { configId: string }) {
             />
             <p className="text-[11px] text-muted-foreground capitalize">
               Stage: {importStatus.stage.replace("_", " ")}
+            </p>
+            <p className="text-[11px] text-muted-foreground">
+              Policy: {importStatus.overwritePolicy || "preserve_existing"}
             </p>
             {effectiveTotal > 0 && (
               <p className="text-[11px] text-muted-foreground">
@@ -1176,14 +1282,22 @@ function ReusableUnitLibrarySection({ configId, subjectName }: { configId: strin
             ) : (
               <div className="space-y-2 max-h-44 overflow-y-auto pr-1">
                 {reusableUnits.map((u) => (
-                  <label key={u.id} className="flex items-start gap-2 text-sm text-foreground">
+                  <label key={u.id} className="flex items-start justify-between gap-2 text-sm text-foreground">
                     <input
                       type="checkbox"
                       className="mt-1"
                       checked={selectedUnitIds.includes(u.id)}
                       onChange={(e) => toggleUnitSelection(u.id, e.target.checked)}
                     />
-                    <span>{u.unitTitle}</span>
+                    <span className="flex-1">{u.unitTitle}</span>
+                    <span className="flex items-center gap-1.5 shrink-0">
+                      <Badge variant="outline" className="h-5 px-2 text-[10px] font-medium">
+                        {`Facts ${u.factsSummary?.factAtomsCount ?? 0}`}
+                      </Badge>
+                      <Badge variant={u.factsSummary?.hasFacts ? "default" : "secondary"} className="h-5 px-2 text-[10px] font-medium">
+                        {u.factsSummary?.hasFacts ? "Facts Present" : "Facts Absent"}
+                      </Badge>
+                    </span>
                   </label>
                 ))}
               </div>
@@ -1194,12 +1308,14 @@ function ReusableUnitLibrarySection({ configId, subjectName }: { configId: strin
             </Button>
           </div>
 
-          <Accordion type="multiple" className="space-y-3">
-            <AccordionItem value="extract-materials" className="rounded-xl border border-border bg-secondary/10 px-3">
+          <Accordion type="multiple" className="space-y-3" defaultValue={["unit-builder"]}>
+            <AccordionItem value="unit-builder" className="rounded-xl border border-border bg-secondary/10 px-3">
               <AccordionTrigger className="text-xs font-semibold text-foreground py-3">
-                Extract Units From Reading Materials
+                Unit Builder
               </AccordionTrigger>
-              <AccordionContent className="space-y-2 pb-3">
+              <AccordionContent className="space-y-4 pb-3">
+                <div className="rounded-lg border border-border bg-background p-3 space-y-2">
+                  <p className="text-xs font-semibold text-foreground">Extract Units From Reading Materials</p>
                 <div className="flex items-center justify-end gap-2">
                   <Button
                     variant="outline"
@@ -1262,14 +1378,10 @@ function ReusableUnitLibrarySection({ configId, subjectName }: { configId: strin
                   {extracting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5" />}
                   Extract And Save Units (All Materials)
                 </Button>
-              </AccordionContent>
-            </AccordionItem>
+                </div>
 
-            <AccordionItem value="edit-existing-units" className="rounded-xl border border-border bg-secondary/10 px-3">
-              <AccordionTrigger className="text-xs font-semibold text-foreground py-3">
-                Edit Existing Units
-              </AccordionTrigger>
-              <AccordionContent className="space-y-3 pb-3">
+                <div className="rounded-lg border border-border bg-background p-3 space-y-3">
+                  <p className="text-xs font-semibold text-foreground">Edit Existing Units</p>
                 <div>
                   <label className="block text-xs font-medium text-muted-foreground mb-1">Existing Units</label>
                   <Select value={selectedUnitId || undefined} onValueChange={setSelectedUnitId}>
@@ -1334,6 +1446,7 @@ function ReusableUnitLibrarySection({ configId, subjectName }: { configId: strin
                   {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
                   {selectedUnitId ? "Update Unit" : "Save Unit"}
                 </Button>
+                </div>
               </AccordionContent>
             </AccordionItem>
           </Accordion>
@@ -1599,11 +1712,11 @@ function ContentReviewSection({ configId }: { configId: string }) {
 
       <Accordion type="multiple" className="space-y-2">
         {units
-          .sort((a, b) => (a.sortOrder ?? "").localeCompare(b.sortOrder ?? ""))
+          .sort((a, b) => Number(a.sortOrder ?? 0) - Number(b.sortOrder ?? 0))
           .map((unit) => {
             const unitTopics = topics
               .filter((t) => t.parentId === unit.id)
-              .sort((a, b) => (a.sortOrder ?? "").localeCompare(b.sortOrder ?? ""));
+              .sort((a, b) => Number(a.sortOrder ?? 0) - Number(b.sortOrder ?? 0));
 
             return (
               <AccordionItem key={unit.id} value={unit.id} className="border border-border rounded-xl overflow-hidden">
@@ -1615,7 +1728,7 @@ function ContentReviewSection({ configId }: { configId: string }) {
                     {unitTopics.map((topic) => {
                       const topicSubtopics = subtopics
                         .filter((s) => s.parentId === topic.id)
-                        .sort((a, b) => (a.sortOrder ?? "").localeCompare(b.sortOrder ?? ""));
+                        .sort((a, b) => Number(a.sortOrder ?? 0) - Number(b.sortOrder ?? 0));
 
                       return (
                         <div key={topic.id} className="ml-2">
@@ -1668,6 +1781,11 @@ export default function ConfigDetail() {
   const [, params] = useRoute("/admin/config/:id");
   const [, setLocation] = useLocation();
   const configId = params?.id ?? "";
+  const queryParams = new URLSearchParams(typeof window !== "undefined" ? window.location.search : "");
+  const backUniversityId = (queryParams.get("universityId") || "").trim();
+  const backToConfigsPath = backUniversityId
+    ? `/admin?universityId=${encodeURIComponent(backUniversityId)}`
+    : "/admin";
 
   const { data: configs, isLoading: configsLoading, refetch } = useGetConfigs(
     {},
@@ -1683,7 +1801,7 @@ export default function ConfigDetail() {
   const config = configs?.find((c) => c.id === configId);
   const { data: genStatus } = useGetGenerationStatus(configId);
   const { data: publishNodes } = useGetNodes({ configId });
-  const [generationMode, setGenerationMode] = useState<"expensive" | "cheap">("expensive");
+  const [generationMode, setGenerationMode] = useState<"expensive" | "cheap">("cheap");
 
   const hasFiles = !!config?.syllabusFileUrl;
   const hasContent = genStatus?.status === "complete" || (publishNodes?.length ?? 0) > 0;
@@ -1691,8 +1809,8 @@ export default function ConfigDetail() {
   if (configsLoading) {
     return (
       <div className="w-full max-w-4xl mx-auto pt-4 pb-20 px-4 sm:px-6 lg:px-8">
-        <Button variant="ghost" onClick={() => setLocation("/admin")} className="gap-2 mb-6">
-          <ArrowLeft className="w-4 h-4" /> Back to Dashboard
+        <Button variant="ghost" onClick={() => setLocation(backToConfigsPath)} className="gap-2 mb-6">
+          <ArrowLeft className="w-4 h-4" /> Back to Configs
         </Button>
         <div className="flex items-center justify-center py-20">
           <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
@@ -1704,8 +1822,8 @@ export default function ConfigDetail() {
   if (!config) {
     return (
       <div className="w-full max-w-4xl mx-auto pt-4 pb-20 px-4 sm:px-6 lg:px-8">
-        <Button variant="ghost" onClick={() => setLocation("/admin")} className="gap-2 mb-6">
-          <ArrowLeft className="w-4 h-4" /> Back to Dashboard
+        <Button variant="ghost" onClick={() => setLocation(backToConfigsPath)} className="gap-2 mb-6">
+          <ArrowLeft className="w-4 h-4" /> Back to Configs
         </Button>
         <div className="flex flex-col items-center justify-center py-20 text-center">
           <AlertCircle className="w-12 h-12 text-muted-foreground mb-4" />
@@ -1718,8 +1836,8 @@ export default function ConfigDetail() {
 
   return (
     <div className="w-full max-w-5xl mx-auto pt-4 pb-20">
-      <Button variant="ghost" onClick={() => setLocation("/admin")} className="gap-2 mb-6">
-        <ArrowLeft className="w-4 h-4" /> Back to Dashboard
+      <Button variant="ghost" onClick={() => setLocation(backToConfigsPath)} className="gap-2 mb-6">
+        <ArrowLeft className="w-4 h-4" /> Back to Configs
       </Button>
 
       <div className="mb-8">

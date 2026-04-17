@@ -15,6 +15,8 @@ export const usersTable = pgTable("users", {
   securityAnswerHash: text("security_answer_hash"),
   lastSuccessfulLoginAt: timestamp("last_successful_login_at"),
   lastPasswordResetAt: timestamp("last_password_reset_at"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });
 
 export const insertUserSchema = createInsertSchema(usersTable);

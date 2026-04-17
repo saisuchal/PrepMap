@@ -1,4 +1,4 @@
-import { pgTable, text, serial, boolean } from "drizzle-orm/pg-core";
+import { pgTable, text, serial, boolean, timestamp } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 
@@ -10,6 +10,8 @@ export const subtopicQuestionsTable = pgTable("subtopic_questions", {
   answer: text("answer").notNull(),
   isStarred: boolean("is_starred").notNull().default(false),
   starSource: text("star_source").notNull().default("none"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });
 
 export const insertSubtopicQuestionSchema = createInsertSchema(subtopicQuestionsTable).omit({ id: true });

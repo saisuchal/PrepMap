@@ -71,7 +71,7 @@ export const ForgotPasswordBySecurityBody = zod.object({
  */
 export const GetConfigsQueryParams = zod.object({
   universityId: zod.coerce.string().optional(),
-  status: zod.enum(["draft", "live"]).optional(),
+  status: zod.enum(["draft", "live", "disabled", "deleted"]).optional(),
 });
 
 export const GetConfigsResponseItem = zod.object({
@@ -81,7 +81,7 @@ export const GetConfigsResponseItem = zod.object({
   branch: zod.string(),
   subject: zod.string(),
   exam: zod.enum(["mid1", "mid2", "endsem"]),
-  status: zod.enum(["draft", "live"]),
+  status: zod.enum(["draft", "live", "disabled", "deleted"]),
   createdBy: zod.string(),
   createdAt: zod.string().optional(),
   syllabusFileUrl: zod.string().nullish(),
@@ -98,6 +98,8 @@ export const CreateConfigBody = zod.object({
   branch: zod.string(),
   subject: zod.string(),
   exam: zod.enum(["mid1", "mid2", "endsem"]),
+  reuseDisabledConfigId: zod.string().optional(),
+  forceCreateNew: zod.boolean().optional(),
 });
 
 /**
@@ -171,7 +173,7 @@ export const GetNodesResponseItem = zod.object({
   prerequisiteNodeIds: zod.array(zod.string()).optional(),
   nextRecommendedTitles: zod.array(zod.string()).optional(),
   nextRecommendedNodeIds: zod.array(zod.string()).optional(),
-  sortOrder: zod.string().optional(),
+  sortOrder: zod.number().optional(),
 });
 export const GetNodesResponse = zod.array(GetNodesResponseItem);
 

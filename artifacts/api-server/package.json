@@ -13,6 +13,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "import:students": "node ./scripts/import_students.mjs",
     "seed:super-students": "node ./scripts/seed_super_students.mjs",
+    "db:ensure-timestamps": "node ./scripts/ensure_timestamps.mjs",
     "export:csv-all": "node ./scripts/export_all_tables_csv.mjs",
     "copy:db": "node ./scripts/copy_db_to_db.mjs",
     "copy:storage": "node ./scripts/copy_supabase_bucket.mjs",

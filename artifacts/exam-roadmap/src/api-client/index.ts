@@ -147,6 +147,14 @@ export interface LibraryUnit {
   normalizedUnitTitle: string;
   topics: LibraryUnitTopic[];
   sourceText: string | null;
+  factsSummary?: {
+    factAtomsCount: number;
+    itemsWithFacts: number;
+    itemsWithoutFacts: number;
+    topicItems: number;
+    subtopicItems: number;
+    hasFacts: boolean;
+  };
   createdBy: string;
   createdAt: string | null;
   updatedAt: string | null;
@@ -225,6 +233,38 @@ export interface CheapLaneBImportStatusResponse {
     generatedExplanations: number;
   };
   error?: string;
+  overwritePolicy?: "preserve_existing" | "force_overwrite";
+}
+
+export interface CheapGapReportResponse {
+  success: boolean;
+  configId: string;
+  mode?: "explanations_only" | "explanations_and_questions" | "questions_only";
+  summary: {
+    totalTopicTargets: number;
+    totalSubtopicTargets: number;
+    topicGapCount: number;
+    subtopicGapCount: number;
+    totalGapRows: number;
+    includeExplanationGaps?: boolean;
+    includeQuestionGaps?: boolean;
+    expectedQuestionCount?: number;
+    existingQuestionCount?: number;
+    questionGapCount?: number;
+  };
+  rows: Array<{
+    level: "topic" | "subtopic";
+    unitTitle: string;
+    topicTitle: string;
+    subtopicTitle?: string;
+    missing: string[];
+  }>;
+}
+
+export interface CompletionStateResponse {
+  configId: string;
+  userId: string;
+  doneSubtopicIds: string[];
 }
 
 export interface QuestionBankQuestion {
@@ -459,6 +499,26 @@ export const getQuestionBank = async (configId: string, options?: RequestInit) =
   });
 };
 
+export const purgeConfig = async (id: string, options?: RequestInit) => {
+  return customFetch<SuccessResponse>(`/api/configs/${id}/permanent`, {
+    ...options,
+    method: "DELETE",
+  });
+};
+
+export const usePurgeConfig = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(
+  options?: UseMutationOptions<SuccessResponse, TError, { id: string }, TContext>,
+) => {
+  return useMutation<SuccessResponse, TError, { id: string }, TContext>({
+    mutationKey: ["purgeConfig"],
+    mutationFn: ({ id }) => purgeConfig(id),
+    ...options,
+  });
+};
+
 export const getLatestInteractionState = async (configId: string, options?: RequestInit) => {
   return customFetch<LatestInteractionStateResponse>(
     `/api/configs/${configId}/latest-interaction-state`,
@@ -528,6 +588,7 @@ export const generateCheapLaneA = async (
 export const importCheapLaneB = async (
   configId: string,
   payload: {
+    forceOverwrite?: boolean;
     units: Array<{
       title: string;
       topics: Array<{
@@ -562,6 +623,7 @@ export const importCheapLaneB = async (
 export const startCheapLaneBImport = async (
   configId: string,
   payload: {
+    forceOverwrite?: boolean;
     units: Array<{
       title: string;
       topics: Array<{
@@ -595,6 +657,25 @@ export const startCheapLaneBImport = async (
 
 export const getCheapLaneBImportStatus = async (configId: string, options?: RequestInit) => {
   return customFetch<CheapLaneBImportStatusResponse>(`/api/configs/${configId}/cheap/import-status`, {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getCheapGapReport = async (
+  configId: string,
+  mode?: CheapGenerationMode,
+  options?: RequestInit
+) => {
+  const modeQuery = mode ? `?mode=${encodeURIComponent(mode)}` : "";
+  return customFetch<CheapGapReportResponse>(`/api/configs/${configId}/cheap/gap-report${modeQuery}`, {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getCompletionState = async (configId: string, options?: RequestInit) => {
+  return customFetch<CompletionStateResponse>(`/api/configs/${configId}/completion-state`, {
     ...options,
     method: "GET",
   });
@@ -678,6 +759,21 @@ export const useGetLiveConfigQuestionBankInteractionSummary = <
   return useQuery<LiveConfigQuestionBankInteractionSummaryResponse, TError, TData>({
     queryKey: ["admin-analytics-live-config-qb-summary"],
     queryFn: () => getLiveConfigQuestionBankInteractionSummary(),
+    ...options,
+  });
+};
+
+export const useGetCheapGapReport = <
+  TError = ErrorType<unknown>,
+  TData = CheapGapReportResponse,
+>(
+  configId: string,
+  mode?: CheapGenerationMode,
+  options?: Omit<UseQueryOptions<CheapGapReportResponse, TError, TData>, "queryKey" | "queryFn">,
+) => {
+  return useQuery<CheapGapReportResponse, TError, TData>({
+    queryKey: ["cheap-gap-report", configId, mode || "explanations_and_questions"],
+    queryFn: () => getCheapGapReport(configId, mode),
     ...options,
   });
 };
@@ -920,6 +1016,21 @@ export const useGetLatestInteractionState = <
   });
 };
 
+export const useGetCompletionState = <
+  TError = ErrorType<unknown>,
+  TData = CompletionStateResponse,
+>(
+  configId: string | null,
+  options?: Omit<UseQueryOptions<CompletionStateResponse, TError, TData>, "queryKey" | "queryFn">,
+) => {
+  return useQuery<CompletionStateResponse, TError, TData>({
+    queryKey: ["config-completion-state", configId],
+    queryFn: () => getCompletionState(configId!),
+    enabled: !!configId,
+    ...options,
+  });
+};
+
 export const useCompleteFirstLoginSetup = <
   TError = ErrorType<unknown>,
   TContext = unknown,
@@ -994,6 +1105,7 @@ export const useImportCheapLaneB = <
     {
       configId: string;
       payload: {
+        forceOverwrite?: boolean;
         units: Array<{
           title: string;
           topics: Array<{
@@ -1022,6 +1134,7 @@ export const useImportCheapLaneB = <
     {
       configId: string;
       payload: {
+        forceOverwrite?: boolean;
         units: Array<{
           title: string;
           topics: Array<{
@@ -1059,6 +1172,7 @@ export const useStartCheapLaneBImport = <
     {
       configId: string;
       payload: {
+        forceOverwrite?: boolean;
         units: Array<{
           title: string;
           topics: Array<{
@@ -1087,6 +1201,7 @@ export const useStartCheapLaneBImport = <
     {
       configId: string;
       payload: {
+        forceOverwrite?: boolean;
         units: Array<{
           title: string;
           topics: Array<{

@@ -122,7 +122,6 @@ router.get("/configs", async (req, res) => {
       conditions.push(eq(configsTable.status, "live"));
     } else {
       conditions.push(ne(configsTable.status, "deleted"));
-      conditions.push(ne(configsTable.status, "disabled"));
     }
 
     const configs = await db
@@ -252,15 +251,12 @@ router.get("/configs/:id/question-bank", async (req, res) => {
         isStarred: configQuestionsTable.isStarred,
         starSource: configQuestionsTable.starSource,
         unitSubtopicId: configQuestionsTable.unitSubtopicId,
-        legacyNodeId: configQuestionsTable.legacyNodeId,
       })
       .from(configQuestionsTable)
       .where(eq(configQuestionsTable.configId, id));
 
     const questions = canonicalQuestions.map((q) => {
-      let nodeId = q.legacyNodeId && nodeById.has(q.legacyNodeId)
-        ? q.legacyNodeId
-        : "";
+      let nodeId = "";
       if (!nodeId) {
         const mapped = subtopicNodeByCanonicalId.get(q.unitSubtopicId) ?? [];
         nodeId = mapped[0] ?? "";

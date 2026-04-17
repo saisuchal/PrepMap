@@ -9,6 +9,7 @@ import {
   useGetAppMetadata,
   useGetConfigs,
   useGetLatestInteractionState,
+  useGetCompletionState,
   useGetNodes,
   useGetQuestionBank,
   useGetSubtopicContent,
@@ -41,6 +42,10 @@ const QUESTION_BANK_LANE_H = 88;
 const QUESTION_BANK_EVENT_PREFIX = "__qb__:";
 const ZOOM_STEP = 1.1;
 const MAX_AUTO_FOCUS_ZOOM = 1.1;
+
+function getSubtopicTrackSessionKey(configId: string, userId: string, subtopicId: string): string {
+  return `tracked_subtopic_${configId}_${userId}_${subtopicId}`;
+}
 
 function estimateSubtopicWidth(title: string, maxWidth: number): number {
   // Heuristic width estimate so longer titles can grow and use lane space.
@@ -768,6 +773,9 @@ export default function Roadmap() {
   const { data: latestInteractionState, isLoading: isLatestInteractionLoading } = useGetLatestInteractionState(
     isStudentViewer ? configId : null
   );
+  const { data: completionState } = useGetCompletionState(
+    isStudentViewer ? configId : null
+  );
   const [expandedListUnitIds, setExpandedListUnitIds] = useState<Set<string>>(new Set());
   const [expandedListTopicIds, setExpandedListTopicIds] = useState<Set<string>>(new Set());
   const [expandedMobileUnitIds, setExpandedMobileUnitIds] = useState<Set<string>>(new Set());
@@ -901,13 +909,20 @@ export default function Roadmap() {
   }, [expandPathForNode, nodeById]);
 
   const completion = useMemo(() => {
-    const doneSubtopics = new Set<string>();
+    const doneSubtopics = new Set<string>(
+      Array.isArray(completionState?.doneSubtopicIds)
+        ? completionState.doneSubtopicIds.map((id) => String(id || "").trim()).filter(Boolean)
+        : []
+    );
     const subtopicsByTopic = new Map<string, string[]>();
     const topicsByUnit = new Map<string, string[]>();
 
     for (const n of nodes ?? []) {
       if (n.type === "subtopic") {
-        if (sessionStorage.getItem(`tracked_${n.id}`)) doneSubtopics.add(n.id);
+        if (viewer?.id && configId) {
+          const key = getSubtopicTrackSessionKey(configId, viewer.id, n.id);
+          if (sessionStorage.getItem(key)) doneSubtopics.add(n.id);
+        }
         if (n.parentId) {
           subtopicsByTopic.set(n.parentId, [...(subtopicsByTopic.get(n.parentId) ?? []), n.id]);
         }
@@ -932,7 +947,7 @@ export default function Roadmap() {
     }
 
     return { doneSubtopics, doneTopics, doneUnits };
-  }, [nodes, completionVersion]);
+  }, [nodes, completionVersion, completionState?.doneSubtopicIds, viewer?.id, configId]);
 
   const isNodeCompleted = useCallback((nodeId: string) => {
     const id = String(nodeId || "").trim();
@@ -2144,7 +2159,7 @@ function ContentModal({
     type: string;
     title: string;
     parentId?: string | null;
-    sortOrder?: string;
+    sortOrder?: number;
     nextRecommendedNodeIds?: string[];
     nextRecommendedTitles?: string[];
   }>;
@@ -2156,20 +2171,25 @@ function ContentModal({
 }) {
   const isTopic = node.type === "topic";
   const isSubtopic = node.type === "subtopic";
-  const trackSessionKey = `tracked_${node.id}`;
 
   const { data: content, isLoading } = useGetSubtopicContent(node.id, {
     query: { enabled: isSubtopic }
   });
 
   const user = getStoredUser();
+  const trackSessionKey =
+    isSubtopic && user?.id
+      ? getSubtopicTrackSessionKey(configId, user.id, node.id)
+      : "";
   const trackEventMutation = useTrackEvent();
-  const [isTracked, setIsTracked] = useState(isSubtopic ? !!sessionStorage.getItem(trackSessionKey) : false);
+  const [isTracked, setIsTracked] = useState(
+    isSubtopic && !!trackSessionKey ? !!sessionStorage.getItem(trackSessionKey) : false
+  );
   const scrollRef = useRef<HTMLDivElement>(null);
   const trackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
-    if (isSubtopic) {
+    if (isSubtopic && trackSessionKey) {
       setIsTracked(!!sessionStorage.getItem(trackSessionKey));
       return;
     }
