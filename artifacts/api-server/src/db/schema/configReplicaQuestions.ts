@@ -8,9 +8,9 @@ export const configReplicaQuestionsTable = pgTable("config_replica_questions", {
   markType: text("mark_type").notNull(),
   question: text("question").notNull(),
   answer: text("answer").notNull(),
-  unitTitle: text("unit_title").notNull(),
-  topicTitle: text("topic_title").notNull(),
-  subtopicTitle: text("subtopic_title").notNull(),
+  unitTitle: text("unit_title"),
+  topicTitle: text("topic_title"),
+  subtopicTitle: text("subtopic_title"),
   isStarred: boolean("is_starred").notNull().default(true),
   sortOrder: integer("sort_order").notNull().default(0),
   createdAt: timestamp("created_at").notNull().defaultNow(),
@@ -20,4 +20,3 @@ export const configReplicaQuestionsTable = pgTable("config_replica_questions", {
 export const insertConfigReplicaQuestionSchema = createInsertSchema(configReplicaQuestionsTable).omit({ id: true });
 export type InsertConfigReplicaQuestion = z.infer<typeof insertConfigReplicaQuestionSchema>;
 export type ConfigReplicaQuestion = typeof configReplicaQuestionsTable.$inferSelect;
-

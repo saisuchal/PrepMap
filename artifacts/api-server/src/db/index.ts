@@ -309,7 +309,7 @@ export async function initializeDatabase(): Promise<void> {
     CREATE TABLE IF NOT EXISTS public.config_questions (
       id bigserial PRIMARY KEY,
       config_id text NOT NULL,
-      unit_subtopic_id text NOT NULL,
+      unit_subtopic_id text,
       mark_type text NOT NULL,
       question text NOT NULL,
       answer text NOT NULL,
@@ -327,14 +327,21 @@ export async function initializeDatabase(): Promise<void> {
       mark_type text NOT NULL,
       question text NOT NULL,
       answer text NOT NULL,
-      unit_title text NOT NULL,
-      topic_title text NOT NULL,
-      subtopic_title text NOT NULL,
+      unit_title text,
+      topic_title text,
+      subtopic_title text,
       is_starred boolean NOT NULL DEFAULT true,
       sort_order integer NOT NULL DEFAULT 0,
       created_at timestamp without time zone NOT NULL DEFAULT now(),
       updated_at timestamp without time zone NOT NULL DEFAULT now()
     );
+  `);
+
+  await pool.query(`
+    ALTER TABLE IF EXISTS public.config_replica_questions
+    ALTER COLUMN unit_title DROP NOT NULL,
+    ALTER COLUMN topic_title DROP NOT NULL,
+    ALTER COLUMN subtopic_title DROP NOT NULL;
   `);
 
   await pool.query(`
@@ -350,6 +357,11 @@ export async function initializeDatabase(): Promise<void> {
   await pool.query(`
     ALTER TABLE IF EXISTS public.config_questions
     DROP COLUMN IF EXISTS legacy_question_id;
+  `);
+
+  await pool.query(`
+    ALTER TABLE IF EXISTS public.config_questions
+    ALTER COLUMN unit_subtopic_id DROP NOT NULL;
   `);
 
   await pool.query(`

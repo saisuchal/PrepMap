@@ -5,7 +5,7 @@ import { z } from "zod/v4";
 export const configQuestionsTable = pgTable("config_questions", {
   id: bigserial("id", { mode: "number" }).primaryKey(),
   configId: text("config_id").notNull(),
-  unitSubtopicId: text("unit_subtopic_id").notNull(),
+  unitSubtopicId: text("unit_subtopic_id"),
   markType: text("mark_type").notNull(),
   question: text("question").notNull(),
   answer: text("answer").notNull(),

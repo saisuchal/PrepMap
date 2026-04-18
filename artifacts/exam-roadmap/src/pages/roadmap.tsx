@@ -292,7 +292,7 @@ function isLikelyQuestionText(value: string): boolean {
   if (!text) return false;
 
   const informationalPatterns = [
-    /^part\s*[-–]?\s*[abc]\b/i,
+    /^part\s*[-�]?\s*[abc]\b/i,
     /^answer\b/i,
     /^course outcomes?\b/i,
     /^knowledge level\b/i,
@@ -300,7 +300,7 @@ function isLikelyQuestionText(value: string): boolean {
     /^marks?\b/i,
     /^q\.?\s*no\b/i,
     /^or$/i,
-    /^k[1-6]\s*[-–]?\s*(remember|understand|apply|analy[sz]e|evaluate|create)\b/i,
+    /^k[1-6]\s*[-�]?\s*(remember|understand|apply|analy[sz]e|evaluate|create)\b/i,
   ];
 
   if (informationalPatterns.some((pattern) => pattern.test(text))) {
@@ -309,8 +309,8 @@ function isLikelyQuestionText(value: string): boolean {
 
   // Common Bloom's-level listing accidentally extracted as "questions".
   if (
-    /k1\s*[-–]?\s*remember/i.test(text) &&
-    /k2\s*[-–]?\s*understand/i.test(text)
+    /k1\s*[-�]?\s*remember/i.test(text) &&
+    /k2\s*[-�]?\s*understand/i.test(text)
   ) {
     return false;
   }
@@ -340,7 +340,7 @@ function highlightCode(code: string, language: string): string {
       out = tokenChars[n % tokenChars.length] + out;
       n = Math.floor(n / tokenChars.length) - 1;
     } while (n >= 0);
-    return `¤${out}¤`;
+    return `�${out}�`;
   };
   let tokenIndex = 0;
 
@@ -413,7 +413,7 @@ function AnswerRenderer({ answer }: { answer: string }) {
             .map((s) => s.trim())
             .filter(Boolean);
           const numberedItemPattern = /(?:^|\s)(?:\d+[.)]|[ivxlcdm]+[.)])\s+/im;
-          const bulletMarkerPattern = /(?:^|\n)\s*[-*•]\s+/m;
+          const bulletMarkerPattern = /(?:^|\n)\s*[-*�]\s+/m;
           const listCuePattern = /\b(steps?|advantages?|disadvantages?|differences?|types?|uses?|key points?|points?)\b/i;
           const listConnectorPattern = /\b(first|second|third|next|finally)\b/i;
           const explicitListSignals =
@@ -463,7 +463,7 @@ function AnswerRenderer({ answer }: { answer: string }) {
         return (
           <div key={`code-${idx}`} className="rounded-lg overflow-hidden border border-slate-700/70 bg-slate-950">
             <div className="px-3 py-1.5 text-[11px] font-semibold tracking-wide text-slate-300 bg-slate-900 border-b border-slate-700/70">
-              Stand-alone Example · {languageLabel}
+              Stand-alone Example � {languageLabel}
             </div>
             <pre className="p-4 overflow-x-auto text-[13px] leading-6 font-mono text-slate-100">
               <code dangerouslySetInnerHTML={{ __html: highlightCode(seg.code, seg.language) }} />
@@ -683,7 +683,7 @@ export default function Roadmap() {
     ? (semesters.find((s) => s.id === activeConfig.year)?.name ?? activeConfig.year)
     : "";
   const branchLabel = activeConfig?.branch ?? "";
-  const subtitleMeta = [universityLabel, branchLabel, semesterLabel, examLabel].filter(Boolean).join(" • ");
+  const subtitleMeta = [universityLabel, branchLabel, semesterLabel, examLabel].filter(Boolean).join(" | ");
 
   const { data: nodes, isLoading, isError } = useGetNodes({ configId: configId! }, {
     query: { enabled: !!configId }
@@ -2915,7 +2915,7 @@ function QuestionBankModal({
                 className="h-8"
                 onClick={() => setSelectedQuestion(null)}
               >
-                {"<- Back to Question List"}
+                {"<-Back to Question List"}
               </Button>
               <div className="relative bg-card border border-blue-200 rounded-xl overflow-hidden shadow-sm">
                 {selectedQuestion.codeStyle !== "none" && (
@@ -2949,7 +2949,9 @@ function QuestionBankModal({
                     </div>
                     <div className="w-full rounded-lg border border-blue-100 bg-white/70 p-3">
                       <p className="text-sm font-semibold text-foreground leading-snug">{selectedQuestion.question}</p>
-                      <p className="text-xs text-muted-foreground mt-1 break-words">{selectedQuestion.context}</p>
+                      {selectedQuestion.context && (
+                        <p className="text-xs text-muted-foreground mt-1 break-words">{selectedQuestion.context}</p>
+                      )}
                     </div>
                   </div>
 
@@ -2975,7 +2977,9 @@ function QuestionBankModal({
                     )}
                     <div className="min-w-0">
                       <p className="text-sm font-semibold text-foreground leading-snug">{selectedQuestion.question}</p>
-                      <p className="text-xs text-muted-foreground mt-1 break-words">{selectedQuestion.context}</p>
+                      {selectedQuestion.context && (
+                        <p className="text-xs text-muted-foreground mt-1 break-words">{selectedQuestion.context}</p>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -3012,7 +3016,7 @@ function QuestionBankModal({
                           starred: !!q.isStarred,
                           codeStyle: detectCodeStyle(q.answer),
                           question: q.question,
-                          context: `${q.unitTitle} -> ${q.topicTitle} -> ${q.subtopicTitle}`,
+                          context: formatQuestionContext(q.unitTitle, q.topicTitle, q.subtopicTitle),
                           answer: q.answer,
                           subtopicId: q.subtopicId,
                         });
@@ -3025,7 +3029,7 @@ function QuestionBankModal({
                       starred={!!q.isStarred}
                       codeStyle={detectCodeStyle(q.answer)}
                       question={q.question}
-                      context={`${q.unitTitle} -> ${q.topicTitle} -> ${q.subtopicTitle}`}
+                      context={formatQuestionContext(q.unitTitle, q.topicTitle, q.subtopicTitle)}
                     />
                   ))}
                 </section>
@@ -3045,7 +3049,7 @@ function QuestionBankModal({
                           starred: !!q.isStarred,
                           codeStyle: detectCodeStyle(q.answer),
                           question: q.question,
-                          context: `${q.unitTitle} -> ${q.topicTitle} -> ${q.subtopicTitle}`,
+                          context: formatQuestionContext(q.unitTitle, q.topicTitle, q.subtopicTitle),
                           answer: q.answer,
                           subtopicId: q.subtopicId,
                         });
@@ -3058,7 +3062,7 @@ function QuestionBankModal({
                       starred={!!q.isStarred}
                       codeStyle={detectCodeStyle(q.answer)}
                       question={q.question}
-                      context={`${q.unitTitle} -> ${q.topicTitle} -> ${q.subtopicTitle}`}
+                      context={formatQuestionContext(q.unitTitle, q.topicTitle, q.subtopicTitle)}
                     />
                   ))}
                 </section>
@@ -3306,7 +3310,9 @@ function QuestionBankPane({
               </div>
               <div className="p-4 border-b border-blue-100 bg-white/70">
                 <p className="text-sm font-semibold text-foreground leading-snug">{selectedQuestion.question}</p>
-                <p className="text-xs text-muted-foreground mt-1 break-words">{selectedQuestion.context}</p>
+                {selectedQuestion.context && (
+                  <p className="text-xs text-muted-foreground mt-1 break-words">{selectedQuestion.context}</p>
+                )}
               </div>
               <div className="p-4">
                 <AnswerRenderer answer={selectedQuestion.answer} />
@@ -3341,7 +3347,7 @@ function QuestionBankPane({
                           starred: !!q.isStarred,
                           codeStyle: detectCodeStyle(q.answer),
                           question: q.question,
-                          context: `${q.unitTitle} -> ${q.topicTitle} -> ${q.subtopicTitle}`,
+                          context: formatQuestionContext(q.unitTitle, q.topicTitle, q.subtopicTitle),
                           answer: q.answer,
                           subtopicId: q.subtopicId,
                         });
@@ -3356,7 +3362,7 @@ function QuestionBankPane({
                     starred={!!q.isStarred}
                     codeStyle={detectCodeStyle(q.answer)}
                     question={q.question}
-                    context={`${q.unitTitle} -> ${q.topicTitle} -> ${q.subtopicTitle}`}
+                    context={formatQuestionContext(q.unitTitle, q.topicTitle, q.subtopicTitle)}
                   />
                 ))}
               </section>
@@ -3376,7 +3382,7 @@ function QuestionBankPane({
                           starred: !!q.isStarred,
                           codeStyle: detectCodeStyle(q.answer),
                           question: q.question,
-                          context: `${q.unitTitle} -> ${q.topicTitle} -> ${q.subtopicTitle}`,
+                          context: formatQuestionContext(q.unitTitle, q.topicTitle, q.subtopicTitle),
                           answer: q.answer,
                           subtopicId: q.subtopicId,
                         });
@@ -3390,7 +3396,7 @@ function QuestionBankPane({
                     starred={!!q.isStarred}
                     codeStyle={detectCodeStyle(q.answer)}
                     question={q.question}
-                    context={`${q.unitTitle} -> ${q.topicTitle} -> ${q.subtopicTitle}`}
+                    context={formatQuestionContext(q.unitTitle, q.topicTitle, q.subtopicTitle)}
                   />
                 ))}
               </section>
@@ -3431,6 +3437,7 @@ function QuestionBankCard({
   onOpenDetail: () => void;
 }) {
   const codeBadge = codeStyleBadgeText(codeStyle);
+  const hasContext = String(context || "").trim().length > 0;
   return (
     <div
       id={cardId}
@@ -3470,7 +3477,7 @@ function QuestionBankCard({
 
       <div className="px-4 py-3 border-b border-blue-100 bg-white/70">
         <p className="text-sm font-semibold text-foreground leading-snug">{question}</p>
-        <p className="text-xs text-muted-foreground mt-1 break-words">{context}</p>
+        {hasContext && <p className="text-xs text-muted-foreground mt-1 break-words">{context}</p>}
       </div>
 
       <div className="px-4 py-3">
@@ -3487,4 +3494,11 @@ function QuestionBankCard({
       </div>
     </div>
   );
+}
+
+function formatQuestionContext(unitTitle?: string, topicTitle?: string, subtopicTitle?: string): string {
+  return [unitTitle, topicTitle, subtopicTitle]
+    .map((v) => String(v || "").trim())
+    .filter(Boolean)
+    .join(" -> ");
 }

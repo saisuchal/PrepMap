@@ -258,7 +258,7 @@ router.get("/configs/:id/question-bank", async (req, res) => {
     const questions = canonicalQuestions.map((q) => {
       let nodeId = "";
       if (!nodeId) {
-        const mapped = subtopicNodeByCanonicalId.get(q.unitSubtopicId) ?? [];
+        const mapped = q.unitSubtopicId ? (subtopicNodeByCanonicalId.get(q.unitSubtopicId) ?? []) : [];
         nodeId = mapped[0] ?? "";
       }
       return {
@@ -273,7 +273,6 @@ router.get("/configs/:id/question-bank", async (req, res) => {
     });
 
     const filtered = questions
-      .filter((q) => q.nodeId && nodeById.has(q.nodeId))
       .map((q) => {
         const subtopic = nodeById.get(q.nodeId);
         const topic = subtopic?.parentId ? nodeById.get(subtopic.parentId) : undefined;
@@ -285,7 +284,7 @@ router.get("/configs/:id/question-bank", async (req, res) => {
           answer: q.answer,
           isStarred: q.isStarred ?? false,
           starSource: q.starSource ?? "none",
-          subtopicId: q.nodeId,
+          subtopicId: q.nodeId || "",
           subtopicTitle: subtopic?.title ?? "",
           topicTitle: topic?.title ?? "",
           unitTitle: unit?.title ?? "",

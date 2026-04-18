@@ -111,9 +111,9 @@ const SaveReplicaQuestionsBody = z.object({
     markType: z.enum(["Foundational", "Applied"]),
     question: z.string().min(1),
     answer: z.string().default(""),
-    unitTitle: z.string().min(1),
-    topicTitle: z.string().min(1),
-    subtopicTitle: z.string().min(1),
+    unitTitle: z.string().optional().default(""),
+    topicTitle: z.string().optional().default(""),
+    subtopicTitle: z.string().optional().default(""),
     isStarred: z.boolean().optional(),
   })),
 });
@@ -132,7 +132,7 @@ async function loadSavedReplicaQuestions(configId: string) {
     topicTitle: String(r.topicTitle || "").trim(),
     subtopicTitle: String(r.subtopicTitle || "").trim(),
     isStarred: Boolean(r.isStarred),
-  })).filter((q) => q.question && q.unitTitle && q.topicTitle && q.subtopicTitle);
+  })).filter((q) => q.question);
 }
 
 function isInstructionalAnswerPlaceholder(answer: string): boolean {
@@ -172,6 +172,18 @@ function buildExamReadyFallbackAnswer(
     "State the core definition or formula briefly.",
     "Apply it directly and present the final answer clearly.",
   ].join("\n");
+}
+
+function stripMainQuestionNumber(value: string): string {
+  let text = String(value || "").trim();
+  if (!text) return "";
+  const patterns: RegExp[] = [
+    /^\s*(?:q(?:uestion)?\.?\s*)?\d{1,3}\s*[\).:\-]\s*/i,
+    /^\s*\(\s*\d{1,3}\s*\)\s*/i,
+    /^\s*(?:q(?:uestion)?\.?\s*)?\d{1,3}\s+/i,
+  ];
+  for (const pattern of patterns) text = text.replace(pattern, "");
+  return text.trim();
 }
 
 function inferMarkTypeFromQuestionText(questionText: string): "Foundational" | "Applied" {
@@ -498,7 +510,7 @@ function parseImportBody(body: unknown): {
         : rawAnswer;
       return { ...q, answer };
     })
-    .filter((q: ImportQuestion) => q.question && q.answer && isLikelyQuestionText(q.question));
+    .filter((q: ImportQuestion) => q.question && q.answer);
 
   return { mode, subject, units, questions };
 }
@@ -854,26 +866,36 @@ router.post("/configs/:id/cheap/lane-a", requireAdmin, async (req, res) => {
       ? 0
       : Math.max(0, pkg.replicaQuestions.length - mandatoryReplicaQuestions.length);
     const starredReplica = mandatoryReplicaQuestions.filter((q) => q.isStarred).length;
+    // Keep a minimum starred floor for question modes (e.g., Mid=20, EndSem=25),
+    // but never down-cap replica if it already contains more starred questions.
     const effectiveStarTarget = isExplanationsOnly
       ? 0
-      : mandatoryReplicaQuestions.length >= totalQuestionTarget
-        ? starredReplica
-        : mandatoryReplicaQuestions.length > 0
-          ? pkg.totalStarTarget
-          : 0;
+      : Math.max(pkg.totalStarTarget, starredReplica);
     const remainingStarsNeeded = Math.max(0, effectiveStarTarget - starredReplica);
     const remainingQuestionsNeeded = Math.max(
       0,
       totalQuestionTarget - mandatoryReplicaQuestions.length,
     );
-    const structureWithFacts = buildStructureWithFacts(pkg.structure, pkg.factGrounding);
-    const structureForPrompt = isQuestionsOnly ? pkg.structure : structureWithFacts;
+    const structureForPrompt = pkg.structure;
     const laneAWarnings = [...pkg.warnings];
     if (droppedReplicaCount > 0) {
       laneAWarnings.push(
         `Replica-first cap applied: kept ${mandatoryReplicaQuestions.length} mandatory replica questions and dropped ${droppedReplicaCount} extras to match total question target ${totalQuestionTarget}.`
       );
     }
+
+    const promptStructureSection = isQuestionsOnly
+      ? ""
+      : `\nSTRUCTURE:\n${JSON.stringify(structureForPrompt, null, 2)}\n`;
+    const structureConstraintLine = isQuestionsOnly
+      ? '- questions_only: do not generate roadmap structure; set "units": [] exactly.'
+      : "- Keep the same unit/topic/subtopic structure.";
+    const structureValidationLine = isQuestionsOnly
+      ? '2) "units" is exactly [] in questions_only mode.'
+      : "2) units preserve the same hierarchy from STRUCTURE.";
+    const stepAInstruction = isQuestionsOnly
+      ? 'Step A) Open the artifact named "exam_prep_output.json" and write "units": [] first.'
+      : 'Step A) Open the artifact named "exam_prep_output.json" and begin streaming "units" — copy STRUCTURE titles and write all explanation/example_block/support_note/learning_goal/prerequisite_titles/next_recommended_titles fields inline as you go.';
 
     const masterPrompt = `You are an exam prep content generator. Your only job is to write a single valid JSON object directly into a downloadable file artifact named "exam_prep_output.json".
 
@@ -931,7 +953,7 @@ router.post("/configs/:id/cheap/lane-a", requireAdmin, async (req, res) => {
     }
 
     CONSTRAINTS:
-    - Keep the same unit/topic/subtopic structure.
+    ${structureConstraintLine}
     - Mode selected: ${mode}
     - Subject context (strict): ${pkg.subject}
     - All explanations, examples, terminology, and code snippets must stay aligned to this subject context.
@@ -939,7 +961,8 @@ router.post("/configs/:id/cheap/lane-a", requireAdmin, async (req, res) => {
     - If subject context is non-technical, avoid code blocks and keep examples practical and textual.
     - If subject context is technical, use conventions and syntax appropriate to this subject context only.
     - explanations_only: populate units fully, set "questions": [].
-    - questions_only: write unit/topic/subtopic titles plus all required fields (explanation, example_block, support_note, learning_goal, prerequisite_titles, next_recommended_titles) as short single-sentence placeholders — do not skip any field. Populate questions fully.
+    - questions_only: set "units": [] exactly. Populate questions fully.
+    - questions_only validation: any non-empty "units" array is invalid output and must be corrected before finalizing.
     - Include all mandatory replica questions exactly as given below (skip this only for explanations_only mode).
     - Total questions required: ${totalQuestionTarget}
     - Total starred required: ${effectiveStarTarget}
@@ -962,7 +985,8 @@ router.post("/configs/:id/cheap/lane-a", requireAdmin, async (req, res) => {
     - Pretty-print the entire JSON with 2-space indentation.
     - questions array must contain exactly ${totalQuestionTarget} items.
     - Exactly ${effectiveStarTarget} items must have "isStarred": true.
-    - unitTitle/topicTitle/subtopicTitle in each question must exactly match titles from STRUCTURE.
+    - unitTitle/topicTitle/subtopicTitle may be empty strings when mapping is unavailable at this stage.
+    - Do not hallucinate mapping fields. If uncertain, keep them empty.
     - markType must be only "Foundational" or "Applied".
     - Map marks to labels as: 1-3 marks => Foundational, 4+ marks => Applied.
     - If marks are not provided, classify by demand: definition/list/short-explain => Foundational, analyze/compare/justify/design/solve-with-steps => Applied.
@@ -981,11 +1005,9 @@ router.post("/configs/:id/cheap/lane-a", requireAdmin, async (req, res) => {
         - Prose only — no standalone code blocks.
         - Wrap any code piece in backticks for inline rendering e.g. \`COUNT(*)\`.
         - Serialize any newlines as \\n.
-    - Add "example_block", "support_note", and "learning_goal" for every topic and subtopic regardless of mode.
-    - Add prerequisite_titles and next_recommended_titles for every topic/subtopic regardless of mode (at most one title each, or []).
-    ${isQuestionsOnly
-      ? "- For questions_only mode: do not use fact grounding; generate questions from structure + saved/extracted replica set only."
-      : "- Use facts included inside STRUCTURE (topicFacts and subtopics[].facts) to keep explanations faithful to source material."}
+    - Add "example_block", "support_note", and "learning_goal" for every topic and subtopic when units are generated (non-questions_only modes).
+    - Add prerequisite_titles and next_recommended_titles for every topic/subtopic when units are generated (non-questions_only modes).
+    - Do not use fact grounding in this Lane A prompt.
     - Explanations must use 2 short paragraphs (not one dense block). No examples in explanation.
     - Tone requirement (strict): beginner-friendly simple English only.
     - Foundational answers: target 60-80 words (acceptable range 55-90), easy to revise. (Applies only when mode includes questions.)
@@ -1032,7 +1054,7 @@ router.post("/configs/:id/cheap/lane-a", requireAdmin, async (req, res) => {
 
     FINAL VALIDATION (must pass all before closing the artifact):
     1) JSON parses without error.
-    2) units preserve the same hierarchy from STRUCTURE.
+    ${structureValidationLine}
     3) questions.length === ${totalQuestionTarget}
     4) count(isStarred=true) === ${effectiveStarTarget}
     5) all mandatory replica questions are present and verbatim.
@@ -1043,9 +1065,9 @@ router.post("/configs/:id/cheap/lane-a", requireAdmin, async (req, res) => {
     - Do NOT plan, outline, draft, or write any script before writing. Open the artifact and start writing JSON immediately.
     - The very first character written into the artifact must be {. No text, no explanation, no code before it.
     - Write the JSON directly into the artifact, pretty-printed with 2-space indentation — never delegate to a script or tool.
-    Step A) Open the artifact named "exam_prep_output.json" and begin streaming "units" — copy STRUCTURE titles and write all explanation/example_block/support_note/learning_goal/prerequisite_titles/next_recommended_titles fields inline as you go.
+    ${stepAInstruction}
     Step B) explanations_only: write full unit content, then write "questions": [] and close the JSON with }.
-    Step C) questions_only: write all unit fields as short single-sentence placeholders (no field may be omitted), then stream all questions into the artifact.
+    Step C) questions_only: keep "units" as [] and stream all questions into the artifact.
     Step D) If mode includes questions, generate questions internally in 5 batches of 10 (or equivalent small batches), then merge into one final questions array before final validation. Do not output partial batches.
     Step E) In questions array: insert all MANDATORY_REPLICA_QUESTIONS first, then generate remaining questions.
     Step F) Assign isStarred flags as you write each question — do not defer starring to a second pass.
@@ -1055,8 +1077,7 @@ router.post("/configs/:id/cheap/lane-a", requireAdmin, async (req, res) => {
              - If any check fails, reopen the artifact and apply only the minimal corrective patch (targeted field edits only — do not rewrite the entire JSON).
              - Close the artifact and write exactly one line: "Done. Download exam_prep_output.json above."
 
-    STRUCTURE:
-    ${JSON.stringify(structureForPrompt, null, 2)}
+    ${promptStructureSection}
 
     MANDATORY_REPLICA_QUESTIONS:
     ${JSON.stringify(mandatoryReplicaQuestions, null, 2)}
@@ -1118,7 +1139,7 @@ router.post("/configs/:id/cheap/lane-a", requireAdmin, async (req, res) => {
 //     - Keep the same unit/topic/subtopic structure.
 //     - Mode selected: ${mode}
 //     - explanations_only: populate units fully, set "questions": [].
-//     - questions_only: keep unit/topic/subtopic titles only (minimal placeholder explanations), populate questions fully.
+//     - questions_only: set "units": [] exactly. Populate questions fully.
 //     - explanations_and_questions: populate both fully.
 //     - Include all mandatory replica questions exactly as given below (skip this only for explanations_only mode).
 //     - Total questions required: ${totalQuestionTarget}
@@ -1182,7 +1203,7 @@ router.post("/configs/:id/cheap/lane-a", requireAdmin, async (req, res) => {
 
 //     FINAL VALIDATION (must pass all before writing artifact):
 //     1) JSON parses without error.
-//     2) units preserve the same hierarchy from STRUCTURE.
+//     ${structureValidationLine}
 //     3) questions.length === ${totalQuestionTarget}
 //     4) count(isStarred=true) === ${effectiveStarTarget}
 //     5) all mandatory replica questions are present and verbatim.
@@ -1699,24 +1720,19 @@ async function performCheapImport(
 
     const pathMap = new Map<string, { nodeId: string; unitSubtopicId: string }>();
     let processedQuestions = 0;
+    let unmappedQuestions = 0;
 
     const persistQuestions = async (tx: any) => {
       for (let i = 0; i < questions.length; i++) {
         const q = questions[i];
         const key = `${normalizeText(q.unitTitle)}|${normalizeText(q.topicTitle)}|${normalizeText(q.subtopicTitle)}`;
         const mapped = pathMap.get(key);
-        if (!mapped) {
-          if (isQuestionsOnlyImport) {
-            throw new Error(
-              `Question mapping failed for "${q.question}" at ${q.unitTitle} > ${q.topicTitle} > ${q.subtopicTitle}.`,
-            );
-          }
-          continue;
-        }
+        const mappedSubtopicId = mapped?.unitSubtopicId ?? null;
+        if (!mapped) unmappedQuestions++;
 
         await tx.insert(configQuestionsTable).values({
           configId: id,
-          unitSubtopicId: mapped.unitSubtopicId,
+          unitSubtopicId: mappedSubtopicId,
           markType: q.markType,
           question: q.question,
           answer: repairBrokenFormulaBullets(q.answer),
@@ -2186,6 +2202,12 @@ async function performCheapImport(
       });
     }
 
+    if (unmappedQuestions > 0) {
+      warnings.push(
+        `${unmappedQuestions} question(s) saved without unit/topic/subtopic mapping (unit_subtopic_id = null).`,
+      );
+    }
+
     setCheapImportProgress(id, {
       stage: "finalizing",
       processedQuestions,
@@ -2358,14 +2380,14 @@ router.post("/configs/:id/cheap/replica-questions", requireAdmin, async (req, re
     const cleanQuestions = body.questions
       .map((q) => ({
         markType: q.markType,
-        question: String(q.question || "").trim(),
+        question: stripMainQuestionNumber(String(q.question || "")),
         answer: String(q.answer || "").trim(),
         unitTitle: String(q.unitTitle || "").trim(),
         topicTitle: String(q.topicTitle || "").trim(),
         subtopicTitle: String(q.subtopicTitle || "").trim(),
         isStarred: q.isStarred ?? true,
       }))
-      .filter((q) => isLikelyQuestionText(q.question) && q.unitTitle && q.topicTitle && q.subtopicTitle);
+      .filter((q) => q.question.length > 0);
 
     await db.transaction(async (tx) => {
       await tx.delete(configReplicaQuestionsTable).where(eq(configReplicaQuestionsTable.configId, id));
@@ -2376,9 +2398,9 @@ router.post("/configs/:id/cheap/replica-questions", requireAdmin, async (req, re
             markType: q.markType,
             question: q.question,
             answer: q.answer,
-            unitTitle: q.unitTitle,
-            topicTitle: q.topicTitle,
-            subtopicTitle: q.subtopicTitle,
+            unitTitle: q.unitTitle || null,
+            topicTitle: q.topicTitle || null,
+            subtopicTitle: q.subtopicTitle || null,
             isStarred: q.isStarred,
             sortOrder: index,
           })),

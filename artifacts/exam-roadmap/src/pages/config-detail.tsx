@@ -75,6 +75,7 @@ function FileUploadSection({
   const [paperFile, setPaperFile] = useState<File | null>(null);
   const [replicaText, setReplicaText] = useState("");
   const [extractedQuestions, setExtractedQuestions] = useState<Array<{
+    batchId: number;
     markType: "Foundational" | "Applied";
     question: string;
     answer: string;
@@ -93,10 +94,28 @@ function FileUploadSection({
   const { data: savedReplicaQuestionsData, refetch: refetchSavedReplicaQuestions } = useGetSavedReplicaQuestions(configId);
   const { toast } = useToast();
 
+  const stripMainQuestionNumber = (value: string): string => {
+    let text = String(value || "").trim();
+    if (!text) return "";
+    const patterns: RegExp[] = [
+      /^\s*(?:q(?:uestion)?\.?\s*)?\d{1,3}\s*[\).:\-]\s*/i,
+      /^\s*\(\s*\d{1,3}\s*\)\s*/i,
+      /^\s*(?:q(?:uestion)?\.?\s*)?\d{1,3}\s+/i,
+    ];
+    for (const pattern of patterns) text = text.replace(pattern, "");
+    return text.trim();
+  };
+
   useEffect(() => {
     const saved = savedReplicaQuestionsData?.questions ?? [];
     if (saved.length > 0) {
-      setExtractedQuestions(saved);
+      setExtractedQuestions(
+        saved.map((q) => ({
+          ...q,
+          question: stripMainQuestionNumber(q.question),
+          batchId: 0,
+        })),
+      );
     }
   }, [savedReplicaQuestionsData]);
 
@@ -258,21 +277,37 @@ function FileUploadSection({
 
       const laneAData = await generateLaneA.mutateAsync({ configId, mode: "questions_only", ignoreSavedReplica: true });
       const previewRows = Array.isArray(laneAData.replicaQuestions) ? laneAData.replicaQuestions : [];
-      setExtractedQuestions(
-        previewRows.map((q) => ({
-          markType: q.markType,
-          question: q.question,
-          answer: q.answer,
-          unitTitle: q.unitTitle,
-          topicTitle: q.topicTitle,
-          subtopicTitle: q.subtopicTitle,
-          isStarred: true,
-        })),
-      );
+      const incomingRowsBase = previewRows.map((q) => ({
+        markType: q.markType,
+        question: stripMainQuestionNumber(q.question),
+        answer: q.answer,
+        unitTitle: q.unitTitle,
+        topicTitle: q.topicTitle,
+        subtopicTitle: q.subtopicTitle,
+        isStarred: true,
+      }));
+      let appendedCount = 0;
+      setExtractedQuestions((prev) => {
+        const nextBatchId =
+          prev.reduce((max, row) => (Number.isFinite(row.batchId) ? Math.max(max, row.batchId) : max), 0) + 1;
+        const incomingRows = incomingRowsBase.map((row) => ({ ...row, batchId: nextBatchId }));
+        const seen = new Set(prev.map((row) => row.question.trim().toLowerCase()));
+        const next = [...prev];
+        for (const row of incomingRows) {
+          const key = row.question.trim().toLowerCase();
+          if (!key || seen.has(key)) continue;
+          seen.add(key);
+          next.push(row);
+          appendedCount += 1;
+        }
+        return next;
+      });
       setExtractionWarnings(laneAData.warnings || []);
       toast({
         title: "Questions extracted",
-        description: `Previewing ${previewRows.length} extracted question(s).`,
+        description: appendedCount > 0
+          ? `Appended ${appendedCount} new extracted question(s) to preview.`
+          : "No new questions were appended (all were duplicates).",
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : "Failed to extract questions.";
@@ -296,6 +331,15 @@ function FileUploadSection({
     setExtractedQuestions((prev) => prev.filter((_, i) => i !== index));
   };
 
+  const handleClearPreviewQuestions = () => {
+    setExtractedQuestions([]);
+    setExtractionWarnings([]);
+    toast({
+      title: "Preview cleared",
+      description: "All extracted preview questions were removed.",
+    });
+  };
+
   const handleSaveQuestionsToConfig = async () => {
     const cleanRows = extractedQuestions
       .map((q) => ({
@@ -307,12 +351,12 @@ function FileUploadSection({
         subtopicTitle: q.subtopicTitle.trim(),
         isStarred: true,
       }))
-      .filter((q) => q.question && q.unitTitle && q.topicTitle && q.subtopicTitle);
+      .filter((q) => q.question);
 
     if (cleanRows.length === 0) {
       toast({
         title: "No valid questions",
-        description: "Add at least one valid extracted question before saving.",
+        description: "Add at least one extracted question before saving.",
         variant: "destructive",
       });
       return;
@@ -420,20 +464,25 @@ function FileUploadSection({
                   {extractedQuestions.map((q, index) => (
                     <li key={`${q.question}-${index}`} className="p-3 space-y-1">
                       <div className="flex items-center justify-between gap-2">
-                        <Select
-                          value={q.markType}
-                          onValueChange={(value) =>
-                            handleEditExtractedQuestion(index, "markType", value as "Foundational" | "Applied")
-                          }
-                        >
-                          <SelectTrigger className="h-7 w-[130px] text-[11px]">
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="Foundational">Foundational</SelectItem>
-                            <SelectItem value="Applied">Applied</SelectItem>
-                          </SelectContent>
-                        </Select>
+                        <div className="flex items-center gap-2">
+                          <Badge variant="secondary" className="h-6 px-2 text-[11px]">
+                            {q.batchId > 0 ? `Batch ${q.batchId}` : "Saved"}
+                          </Badge>
+                          <Select
+                            value={q.markType}
+                            onValueChange={(value) =>
+                              handleEditExtractedQuestion(index, "markType", value as "Foundational" | "Applied")
+                            }
+                          >
+                            <SelectTrigger className="h-7 w-[130px] text-[11px]">
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="Foundational">Foundational</SelectItem>
+                              <SelectItem value="Applied">Applied</SelectItem>
+                            </SelectContent>
+                          </Select>
+                        </div>
                         <Button
                           type="button"
                           variant="ghost"
@@ -516,6 +565,15 @@ function FileUploadSection({
           ) : (
             <><Save className="w-4 h-4" /> Save Questions To Config</>
           )}
+        </Button>
+        <Button
+          type="button"
+          variant="outline"
+          onClick={handleClearPreviewQuestions}
+          disabled={extracting || saveReplicaQuestions.isPending || extractedQuestions.length === 0}
+          className="w-full gap-2"
+        >
+          <Trash2 className="w-4 h-4" /> Clear Preview
         </Button>
       </div>
 

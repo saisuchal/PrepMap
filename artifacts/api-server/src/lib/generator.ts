@@ -86,6 +86,23 @@ function isSubpartOnlyQuestionText(value: string): boolean {
   return /^\([a-z]\)\s+/i.test(text);
 }
 
+function stripMainQuestionNumber(value: string): string {
+  let text = String(value || "").trim();
+  if (!text) return "";
+
+  const patterns: RegExp[] = [
+    /^\s*(?:q(?:uestion)?\.?\s*)?\d{1,3}\s*[\).:\-]\s*/i,
+    /^\s*\(\s*\d{1,3}\s*\)\s*/i,
+    /^\s*(?:q(?:uestion)?\.?\s*)?\d{1,3}\s+/i,
+  ];
+
+  for (const pattern of patterns) {
+    text = text.replace(pattern, "");
+  }
+
+  return text.trim();
+}
+
 function mergeSubpartReplicaQuestions(questions: GeneratedQuestion[]): GeneratedQuestion[] {
   if (questions.length <= 1) return questions;
 
@@ -777,7 +794,7 @@ ${questions.map((q, idx) => `${idx + 1}. [${q.markType}] ${q.question}`).join("\
 
 async function fetchFileContent(
   objectPath: string
-): Promise<{ text?: string; imageBase64?: string; mediaType?: string }> {
+): Promise<{ text?: string; imageBase64?: string; mediaType?: string; contentType?: string }> {
   let contentType = "application/octet-stream";
   let buffer: Buffer;
   if (isSupabaseObjectPath(objectPath)) {
@@ -795,15 +812,15 @@ async function fetchFileContent(
 
   if (isPdfMimeType(contentType)) {
     const text = await extractTextFromPdf(buffer);
-    return { text };
+    return { text, contentType };
   }
 
   if (isImageMimeType(contentType)) {
     const base64 = buffer.toString("base64");
-    return { imageBase64: base64, mediaType: contentType };
+    return { imageBase64: base64, mediaType: contentType, contentType };
   }
 
-  return { text: buffer.toString("utf-8") };
+  return { text: buffer.toString("utf-8"), contentType };
 }
 
 async function extractSyllabusText(config: {
@@ -829,11 +846,15 @@ async function extractSyllabusText(config: {
 
 async function extractPaperText(paperFileUrls: string[]): Promise<string> {
   const texts: string[] = [];
+  let pdfWithNoTextCount = 0;
+  let failedCount = 0;
   for (const url of paperFileUrls) {
     try {
       const content = await fetchFileContent(url);
       if (content.text) {
         texts.push(content.text);
+      } else if (content.contentType && isPdfMimeType(content.contentType)) {
+        pdfWithNoTextCount += 1;
       } else if (content.imageBase64 && content.mediaType) {
         const text = await askAIWithImage(
           "You are an OCR assistant. Extract all text from this image of an exam question paper. Return only the extracted text.",
@@ -844,7 +865,16 @@ async function extractPaperText(paperFileUrls: string[]): Promise<string> {
         texts.push(text);
       }
     } catch (err) {
+      failedCount += 1;
       logger.warn({ err, url }, "Failed to extract text from paper file");
+    }
+  }
+  if (texts.length === 0) {
+    if (pdfWithNoTextCount > 0) {
+      throw new Error("Replica extraction failed: uploaded PDF has no machine-readable text layer (likely scanned/image-only PDF). Paste text directly or upload a text-based PDF/image.");
+    }
+    if (failedCount > 0) {
+      throw new Error("Replica extraction failed: unable to read uploaded file.");
     }
   }
   return texts.join("\n\n---\n\n");
@@ -1174,16 +1204,15 @@ Requirements:
 
 async function extractReplicaQuestions(
   paperText: string,
-  catalog: SubtopicCatalogItem[],
+  _catalog: SubtopicCatalogItem[],
   subject: string,
   maxQuestions: number
 ): Promise<{ questions: GeneratedQuestion[]; method: "model" | "none" }> {
   if (!paperText.trim()) return { questions: [], method: "none" };
   const cappedMaxQuestions = Math.max(1, Math.min(200, Number.isFinite(maxQuestions) ? Math.floor(maxQuestions) : 50));
+  const paperForModel = paperText.slice(0, 52000);
 
-  const catalogShort = catalog.slice(0, 120).map((c) => `${c.unitTitle} > ${c.topicTitle} > ${c.subtopicTitle}`);
-
-  const prompt = `Extract questions from this exam paper text for subject "${subject}".
+  const buildExtractionPrompt = (textBlock: string, limit: number) => `Extract the COMPLETE mandatory question list from this replica exam paper for subject "${subject}".
 
 Return ONLY valid JSON:
 {
@@ -1191,67 +1220,129 @@ Return ONLY valid JSON:
     {
       "markType": "Foundational" | "Applied",
       "question": "<exact question text from paper>",
-      "answer": "<short exam-ready answer>",
-      "unitTitle": "<best matching unit>",
-      "topicTitle": "<best matching topic>",
-      "subtopicTitle": "<best matching subtopic>",
       "isStarred": true
     }
   ]
 }
 
 Rules:
-- Keep question text as close as possible to paper wording
-- Preserve subquestion structure exactly when present: (a), (b), (i), (ii), bullet subparts, and numbered mini-parts should remain in the extracted question text.
-- Do not flatten multi-part questions into unrelated standalone questions unless the paper clearly separates them as independent questions.
-- Preserve technical symbols/formulas/identifiers faithfully in extracted question text.
-- Extract only real question statements. Do NOT extract headings/instructions like Part A/Section B, Bloom levels (K1/K2...), Course Outcomes, marks tables, "Answer any...", or "Q.No".
-- Keep answers concise: Foundational 25-55 words, Applied 60-110 words
-- Format answers for readability:
-  - Foundational: 2-4 short lines (definition + key points + one tiny real-world example when helpful), no long paragraph
-  - Applied: 4-7 short lines (steps/example), no long paragraph
-- Use line breaks and simple bullets (-) where useful
-- Star all extracted replica questions
-- Use beginner-friendly English only (no dense jargon)
-- Decide contextually:
-  - If the subject/question is technical and code genuinely improves clarity, you may include a short fenced code block.
-  - If the subject/question is non-technical, avoid code blocks and use short step-wise explanation with a tiny practical example.
-- Use only these syllabus paths for mapping when possible:
-${catalogShort.join("\n")}
-- Maximum ${cappedMaxQuestions} questions.`;
+- Keep question text faithful to paper wording.
+- Include ALL actual questions present in this paper text.
+- Important: ignore section instructions like "Answer any", "Choose any", "Attempt any", etc.
+- Important: words like "OR" indicate alternative question statements; include BOTH alternatives as separate parent questions.
+- Do NOT output subquestions as separate top-level questions.
+- Keep subparts (a), (b), (i), (ii), etc. inside the same parent question text.
+- Keep one clean readable block per parent question with simple line breaks.
+- Do not include section headers, metadata, marks summary, or instructions.
+- Star all extracted replica questions.
+- Maximum ${limit} questions.
 
-  const parsedReplica = parseReplicaQuestionsWithSections(paperText);
+PAPER TEXT:
+${textBlock}
+`;
 
-  try {
-    const parsed = await askModelForJson<{ questions?: Array<Partial<GeneratedQuestion>> }>(
-      "You extract and structure exam paper questions into strict JSON.",
-      `${prompt}\n\nPAPER TEXT:\n${paperText.substring(0, 12000)}`,
-      5200,
-      "Replica question extraction failed"
-    );
-    const questions = parsed.questions ?? [];
+  const buildVerifyPrompt = (initialQuestions: Array<Partial<GeneratedQuestion>>, textBlock: string) => `You are verifying and finalizing extracted replica exam questions.
 
-    const mapped = questions
-      .filter((q) => q.question && q.answer && isLikelyQuestionText(String(q.question)))
-      .slice(0, cappedMaxQuestions)
+Return ONLY valid JSON:
+{
+  "questions": [
+    {
+      "markType": "Foundational" | "Applied",
+      "question": "<question text>",
+      "isStarred": true
+    }
+  ]
+}
+
+Task:
+- Use PAPER TEXT as source of truth.
+- Return the FINAL COMPLETE list of parent questions.
+- Add missed questions.
+- Remove non-question noise.
+- Ignore "answer any / choose any" style instructions (they must not reduce extracted count).
+- Keep BOTH branches for every "OR" alternative as separate parent questions.
+- Keep subparts merged into their parent question.
+- Keep wording faithful and formatting clean (readable line breaks; no markdown decorations).
+- Maximum ${cappedMaxQuestions} questions.
+
+INITIAL_EXTRACTED_QUESTIONS:
+${initialQuestions
+  .map((q, i) => `${i + 1}. ${String(q?.question || "").trim()}`)
+  .filter((line) => !/^\d+\.\s*$/.test(line))
+  .join("\n")}
+
+PAPER TEXT:
+${textBlock}
+`;
+
+  const toGenerated = (rows: Array<Partial<GeneratedQuestion>>) =>
+    rows
+      .filter((q) => String(q?.question || "").trim().length > 0)
       .map((q) => ({
-        markType: inferMarkTypeFromParsedReplica(
-          String(q.question || ""),
-          parsedReplica,
-          q.markType === "Applied" ? "Applied" : "Foundational"
-        ),
-        question: String(q.question || "").trim(),
-        answer: String(q.answer || "").trim(),
-        unitTitle: String(q.unitTitle || "").trim(),
-        topicTitle: String(q.topicTitle || "").trim(),
-        subtopicTitle: String(q.subtopicTitle || "").trim(),
+        markType: q?.markType === "Applied" ? "Applied" as const : "Foundational" as const,
+        question: stripMainQuestionNumber(String(q?.question || "")),
+        answer: "",
+        unitTitle: "",
+        topicTitle: "",
+        subtopicTitle: "",
         isStarred: true,
         starSource: "auto" as const,
         origin: "replica" as const,
-      }));
+      }))
+      .filter((q) => q.question.length > 0);
+
+  const splitIntoChunks = (text: string, chunkSize = 14000, overlap = 900): string[] => {
+    const source = String(text || "").trim();
+    if (!source) return [];
+    if (source.length <= chunkSize) return [source];
+    const chunks: string[] = [];
+    let start = 0;
+    while (start < source.length) {
+      const end = Math.min(source.length, start + chunkSize);
+      chunks.push(source.slice(start, end));
+      if (end >= source.length) break;
+      start = Math.max(0, end - overlap);
+    }
+    return chunks;
+  };
+
+  try {
+    let initialRows: Array<Partial<GeneratedQuestion>> = [];
+    try {
+      const extracted = await askModelForJson<{ questions?: Array<Partial<GeneratedQuestion>> }>(
+        "You extract replica exam questions into strict JSON only.",
+        buildExtractionPrompt(paperForModel, cappedMaxQuestions),
+        7800,
+        "Replica question extraction failed"
+      );
+      initialRows = extracted.questions ?? [];
+    } catch (firstErr) {
+      logger.warn({ err: firstErr }, "Replica full-text extraction failed; switching to chunked extraction");
+      const chunks = splitIntoChunks(paperForModel);
+      for (let i = 0; i < chunks.length; i++) {
+        const chunk = chunks[i];
+        const chunkLimit = Math.max(cappedMaxQuestions, 30);
+        const extractedChunk = await askModelForJson<{ questions?: Array<Partial<GeneratedQuestion>> }>(
+          "You extract replica exam questions into strict JSON only.",
+          buildExtractionPrompt(chunk, chunkLimit),
+          4200,
+          `Replica question chunk extraction failed (${i + 1}/${chunks.length})`
+        );
+        initialRows.push(...(extractedChunk.questions ?? []));
+      }
+    }
+
+    const verified = await askModelForJson<{ questions?: Array<Partial<GeneratedQuestion>> }>(
+      "You verify completeness and formatting of extracted replica exam questions and output strict JSON only.",
+      buildVerifyPrompt(initialRows, paperForModel),
+      7800,
+      "Replica extraction verification failed",
+    );
+
+    const finalQuestions = toGenerated(verified.questions ?? initialRows).slice(0, cappedMaxQuestions);
 
     return {
-      questions: mergeSubpartReplicaQuestions(mapped),
+      questions: finalQuestions,
       method: "model",
     };
   } catch (err) {
@@ -1327,7 +1418,9 @@ export async function buildLaneAConfigPackage(configId: string): Promise<{
       config.subject,
       targets.totalQuestions
     );
-    replicaQuestions = extracted.questions.filter((q) => isLikelyQuestionText(q.question));
+    replicaQuestions = extracted.questions
+      .map((q) => ({ ...q, question: String(q.question || "").trim() }))
+      .filter((q) => q.question.length > 0);
     extractionMethod = extracted.method;
     if (replicaQuestions.length === 0) {
       throw new Error("No mandatory replica questions could be extracted from the uploaded replica.");

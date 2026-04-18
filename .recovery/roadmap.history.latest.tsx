@@ -2755,7 +2755,7 @@ function QuestionBankModal({
                 className="h-8"
                 onClick={() => setSelectedQuestion(null)}
               >
-                {"<- Back to Question List"}
+                {"<-  Back to Question List"}
               </Button>
               <div className="relative bg-card border border-blue-200 rounded-xl overflow-hidden shadow-sm">
                 {selectedQuestion.codeStyle !== "none" && (
@@ -3118,7 +3118,7 @@ function QuestionBankPane({
         {selectedQuestion ? (
           <section className="space-y-3">
             <Button variant="ghost" size="sm" className="h-8" onClick={() => setSelectedQuestion(null)}>
-              {"<- Back to Question List"}
+              {"<-  Back to Question List"}
             </Button>
             <div className="relative bg-card border border-blue-200 rounded-xl overflow-hidden shadow-sm">
               {selectedQuestion.codeStyle !== "none" && (

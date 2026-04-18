@@ -688,7 +688,7 @@ function ConfigsTab() {
                   setLocation("/admin");
                 }}
               >
-                {"<- Back to Universities"}
+                {"< Back to Universities"}
               </Button>
               <span
                 className="max-w-[14rem] sm:max-w-[24rem] truncate text-lg sm:text-xl font-bold uppercase tracking-wide text-foreground"
@@ -1458,7 +1458,7 @@ function AnalyticsTab() {
                 size="sm"
                 className="h-8 shrink-0 w-fit"
                 onClick={() => setSelectedConfigId(null)}
-              >{"<- Back to Live Configs"}</Button>
+              >{"< Back to Live Configs"}</Button>
               {studentsLoading ? (
                 <div className="py-8 text-center text-muted-foreground">Loading students...</div>
               ) : !studentProgress ? (
