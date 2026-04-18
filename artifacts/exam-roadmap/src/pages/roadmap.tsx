@@ -2828,10 +2828,10 @@ function QuestionBankModal({
 
   const scheduleQuestionInteractionTrack = (
     questionId: number,
-    subtopicId: string,
+    subtopicId?: string | null,
     delayMs: number = 10000
   ) => {
-    if (!user || (user.role !== "student" && user.role !== "super_student") || !subtopicId) return;
+    if (!user || (user.role !== "student" && user.role !== "super_student")) return;
     const sessionKey = questionSessionKey(questionId);
     if (sessionStorage.getItem(sessionKey)) return;
     if (answerTimersRef.current.has(questionId)) return;
@@ -2850,7 +2850,8 @@ function QuestionBankModal({
             exam: examParam,
             configId,
             topicId: `${QUESTION_BANK_EVENT_PREFIX}${questionId}`,
-            subtopicId,
+            subtopicId: String(subtopicId || "").trim() || undefined,
+            questionId: String(questionId),
           },
         },
         {
@@ -3220,7 +3221,7 @@ function QuestionBankPane({
 
   useEffect(() => {
     if (!selectedQuestion) return;
-    if (!user || (user.role !== "student" && user.role !== "super_student") || !selectedQuestion.subtopicId) return;
+    if (!user || (user.role !== "student" && user.role !== "super_student")) return;
     const sessionKey = questionSessionKey(selectedQuestion.id);
     if (sessionStorage.getItem(sessionKey)) return;
     const existing = answerTimersRef.current.get(selectedQuestion.id);
@@ -3239,7 +3240,8 @@ function QuestionBankPane({
             exam: examParam,
             configId,
             topicId: `${QUESTION_BANK_EVENT_PREFIX}${selectedQuestion.id}`,
-            subtopicId: selectedQuestion.subtopicId,
+            subtopicId: String(selectedQuestion.subtopicId || "").trim() || undefined,
+            questionId: String(selectedQuestion.id),
           },
         },
         {

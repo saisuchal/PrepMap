@@ -6,6 +6,8 @@ import { requireAdmin } from "../middleware/adminAuth";
 
 const router: IRouter = Router();
 const QUESTION_BANK_EVENT_PREFIX = "__qb__:";
+const isQuestionBankEvent = (topicId: string | null | undefined, questionId: string | null | undefined): boolean =>
+  !!String(questionId || "").trim() || String(topicId || "").startsWith(QUESTION_BANK_EVENT_PREFIX);
 const isLearnerRole = (role: string | null | undefined) => {
   const normalized = (role || "").toLowerCase();
   return normalized === "student" || normalized === "super_student";
@@ -101,10 +103,13 @@ router.get("/admin/analytics/universities", requireAdmin, async (req, res) => {
         .where(inArray(eventsTable.configId, latestConfigIds));
 
       for (const row of rows) {
-        if ((row.topicId || "").startsWith(QUESTION_BANK_EVENT_PREFIX)) continue;
+        if (isQuestionBankEvent(row.topicId, null)) continue;
         const key = `${row.configId}::${row.userId}`;
         if (!progressMap.has(key)) progressMap.set(key, new Set<string>());
-        progressMap.get(key)!.add(row.subtopicId);
+        const subtopicId = String(row.subtopicId || "").trim();
+        if (subtopicId) {
+          progressMap.get(key)!.add(subtopicId);
+        }
       }
     }
 
@@ -245,10 +250,13 @@ router.get("/admin/analytics/exam-configs", requireAdmin, async (req, res) => {
         .where(inArray(eventsTable.configId, selectedConfigIds));
 
       for (const row of rows) {
-        if ((row.topicId || "").startsWith(QUESTION_BANK_EVENT_PREFIX)) continue;
+        if (isQuestionBankEvent(row.topicId, null)) continue;
         const key = `${row.configId}::${row.userId}`;
         if (!progressMap.has(key)) progressMap.set(key, new Set<string>());
-        progressMap.get(key)!.add(row.subtopicId);
+        const subtopicId = String(row.subtopicId || "").trim();
+        if (subtopicId) {
+          progressMap.get(key)!.add(subtopicId);
+        }
       }
     }
 
@@ -308,11 +316,11 @@ router.get("/admin/analytics/exam-configs", requireAdmin, async (req, res) => {
 router.get("/admin/analytics/question-bank-interactions", requireAdmin, async (req, res) => {
   try {
     const rows = await db
-      .select({ topicId: eventsTable.topicId })
+      .select({ topicId: eventsTable.topicId, questionId: eventsTable.questionId })
       .from(eventsTable);
 
     const questionBankInteractionCount = rows.reduce((acc, row) => (
-      (row.topicId || "").startsWith(QUESTION_BANK_EVENT_PREFIX) ? acc + 1 : acc
+      isQuestionBankEvent(row.topicId, row.questionId) ? acc + 1 : acc
     ), 0);
 
     res.json({ questionBankInteractionCount });
@@ -329,12 +337,11 @@ router.get("/admin/analytics/question-bank-interactions/breakdown", requireAdmin
         configId: eventsTable.configId,
         universityId: eventsTable.universityId,
         topicId: eventsTable.topicId,
+        questionId: eventsTable.questionId,
       })
       .from(eventsTable);
 
-    const questionBankRows = rows.filter((row) =>
-      (row.topicId || "").startsWith(QUESTION_BANK_EVENT_PREFIX)
-    );
+    const questionBankRows = rows.filter((row) => isQuestionBankEvent(row.topicId, row.questionId));
 
     const byUniversityMap = new Map<string, number>();
     const byConfigMap = new Map<string, { configId: string; universityId: string; count: number }>();
@@ -435,12 +442,13 @@ router.get("/admin/analytics/question-bank-interactions/live-config-summary", re
           configId: eventsTable.configId,
           userId: eventsTable.userId,
           topicId: eventsTable.topicId,
+          questionId: eventsTable.questionId,
         })
         .from(eventsTable)
         .where(inArray(eventsTable.configId, liveConfigIds));
 
       for (const row of rows) {
-        if (!(row.topicId || "").startsWith(QUESTION_BANK_EVENT_PREFIX)) continue;
+        if (!isQuestionBankEvent(row.topicId, row.questionId)) continue;
         interactionCountByConfig.set(row.configId, (interactionCountByConfig.get(row.configId) ?? 0) + 1);
         if (!interactionSetsByConfig.has(row.configId)) {
           interactionSetsByConfig.set(row.configId, new Set<string>());
@@ -528,6 +536,7 @@ router.get("/admin/analytics/configs/:configId/students", requireAdmin, async (r
           userId: eventsTable.userId,
           topicId: eventsTable.topicId,
           subtopicId: eventsTable.subtopicId,
+          questionId: eventsTable.questionId,
           timestamp: eventsTable.timestamp,
         })
         .from(eventsTable)
@@ -535,7 +544,7 @@ router.get("/admin/analytics/configs/:configId/students", requireAdmin, async (r
 
       for (const row of rows) {
         if (!studentIdSet.has(row.userId)) continue;
-        const isQuestionBankInteraction = (row.topicId || "").startsWith(QUESTION_BANK_EVENT_PREFIX);
+        const isQuestionBankInteraction = isQuestionBankEvent(row.topicId, row.questionId);
         if (isQuestionBankInteraction) {
           questionBankInteractionsByUser.set(
             row.userId,
@@ -543,7 +552,10 @@ router.get("/admin/analytics/configs/:configId/students", requireAdmin, async (r
           );
         } else {
           if (!progressMap.has(row.userId)) progressMap.set(row.userId, new Set<string>());
-          progressMap.get(row.userId)!.add(row.subtopicId);
+          const subtopicId = String(row.subtopicId || "").trim();
+          if (subtopicId) {
+            progressMap.get(row.userId)!.add(subtopicId);
+          }
         }
         const last = lastActiveMap.get(row.userId);
         if (!last || (row.timestamp?.getTime() ?? 0) > last.getTime()) {
