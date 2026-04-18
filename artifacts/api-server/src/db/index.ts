@@ -321,6 +321,28 @@ export async function initializeDatabase(): Promise<void> {
   `);
 
   await pool.query(`
+    CREATE TABLE IF NOT EXISTS public.config_replica_questions (
+      id bigserial PRIMARY KEY,
+      config_id text NOT NULL,
+      mark_type text NOT NULL,
+      question text NOT NULL,
+      answer text NOT NULL,
+      unit_title text NOT NULL,
+      topic_title text NOT NULL,
+      subtopic_title text NOT NULL,
+      is_starred boolean NOT NULL DEFAULT true,
+      sort_order integer NOT NULL DEFAULT 0,
+      created_at timestamp without time zone NOT NULL DEFAULT now(),
+      updated_at timestamp without time zone NOT NULL DEFAULT now()
+    );
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS config_replica_questions_config_idx
+    ON public.config_replica_questions (config_id);
+  `);
+
+  await pool.query(`
     ALTER TABLE IF EXISTS public.config_questions
     DROP COLUMN IF EXISTS legacy_node_id;
   `);

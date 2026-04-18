@@ -122,23 +122,49 @@ async function callOpenAiChatCompletions(
 
   const data = (await response.json()) as {
     choices?: Array<{
+      finish_reason?: string | null;
       message?: {
+        refusal?: string | null;
+        parsed?: unknown;
         content?:
           | string
-          | Array<{ type?: string; text?: string }>;
+          | Array<{ type?: string; text?: string | { value?: string }; value?: string; json?: unknown }>;
       };
     }>;
   };
 
-  const content = data.choices?.[0]?.message?.content;
-  if (typeof content === "string") return content;
+  const firstChoice = data.choices?.[0];
+  const message = firstChoice?.message;
+  const parsed = message?.parsed;
+  if (parsed != null) {
+    return typeof parsed === "string" ? parsed : JSON.stringify(parsed);
+  }
+  const content = message?.content;
+  if (typeof content === "string") {
+    const trimmed = content.trim();
+    if (trimmed) return trimmed;
+  }
   if (Array.isArray(content)) {
-    return content
-      .map((c) => (typeof c?.text === "string" ? c.text : ""))
+    const merged = content
+      .map((part) => {
+        if (!part) return "";
+        if (typeof part.text === "string") return part.text;
+        if (part.text && typeof part.text === "object" && typeof part.text.value === "string") return part.text.value;
+        if (typeof part.value === "string") return part.value;
+        if (part.json != null) return typeof part.json === "string" ? part.json : JSON.stringify(part.json);
+        return "";
+      })
       .join("")
       .trim();
+    if (merged) return merged;
   }
-  return "";
+
+  const refusal = typeof message?.refusal === "string" ? message.refusal.trim() : "";
+  const finishReason = firstChoice?.finish_reason || "unknown";
+  if (refusal) {
+    throw new Error(`OpenAI refusal: ${refusal}`);
+  }
+  throw new Error(`OpenAI returned empty content (finish_reason=${finishReason})`);
 }
 
 export async function askAI(

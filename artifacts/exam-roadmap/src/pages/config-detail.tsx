@@ -3,7 +3,6 @@ import { useRoute, useLocation } from "wouter";
 import {
   useGetConfigs,
   useUploadConfigFiles,
-  useTriggerGeneration,
   useGetGenerationStatus,
   useGetAppMetadata,
   usePublishConfig,
@@ -19,10 +18,14 @@ import {
   useGetConfigUnitLinks,
   useSaveConfigUnitLinks,
   useExtractUnitsFromText,
+  useRegenerateUnitFacts,
+  useCleanupUnitTitles,
   useGenerateCheapLaneA,
   useStartCheapLaneBImport,
   useGetCheapLaneBImportStatus,
   useGetCheapGapReport,
+  useGetSavedReplicaQuestions,
+  useSaveReplicaQuestions,
   type CheapGenerationMode,
 } from "@/api-client";
 import { UNIVERSITIES, EXAM_TYPES, SEMESTERS } from "@/lib/constants";
@@ -68,15 +71,34 @@ function FileUploadSection({
   onUploaded: () => void;
 }) {
   const [uploading, setUploading] = useState(false);
-  const [syllabusText, setSyllabusText] = useState("");
-  const [syllabusFile, setSyllabusFile] = useState<File | null>(null);
+  const [extracting, setExtracting] = useState(false);
   const [paperFile, setPaperFile] = useState<File | null>(null);
   const [replicaText, setReplicaText] = useState("");
+  const [extractedQuestions, setExtractedQuestions] = useState<Array<{
+    markType: "Foundational" | "Applied";
+    question: string;
+    answer: string;
+    unitTitle: string;
+    topicTitle: string;
+    subtopicTitle: string;
+    isStarred: boolean;
+  }>>([]);
+  const [extractionWarnings, setExtractionWarnings] = useState<string[]>([]);
   const [imagePreviews, setImagePreviews] = useState<Record<string, string>>({});
   const [previewImage, setPreviewImage] = useState<{ src: string; name: string } | null>(null);
   const requestUrl = useRequestUploadUrl();
   const uploadFiles = useUploadConfigFiles();
+  const generateLaneA = useGenerateCheapLaneA();
+  const saveReplicaQuestions = useSaveReplicaQuestions();
+  const { data: savedReplicaQuestionsData, refetch: refetchSavedReplicaQuestions } = useGetSavedReplicaQuestions(configId);
   const { toast } = useToast();
+
+  useEffect(() => {
+    const saved = savedReplicaQuestionsData?.questions ?? [];
+    if (saved.length > 0) {
+      setExtractedQuestions(saved);
+    }
+  }, [savedReplicaQuestionsData]);
 
   const fileKey = (file: File) => `${file.name}_${file.size}_${file.lastModified}`;
 
@@ -85,7 +107,7 @@ function FileUploadSection({
 
     async function buildPreviews() {
       const entries = await Promise.all(
-        [syllabusFile, paperFile].filter((file): file is File => !!file && file.type.startsWith("image/")).map(
+        [paperFile].filter((file): file is File => !!file && file.type.startsWith("image/")).map(
           (file) =>
             new Promise<[string, string]>((resolve) => {
               const reader = new FileReader();
@@ -101,7 +123,7 @@ function FileUploadSection({
       }
     }
 
-    if (!paperFile && !syllabusFile) {
+    if (!paperFile) {
       setImagePreviews({});
       return () => {
         cancelled = true;
@@ -112,7 +134,7 @@ function FileUploadSection({
     return () => {
       cancelled = true;
     };
-  }, [paperFile, syllabusFile]);
+  }, [paperFile]);
 
   const uploadSingleFile = async (file: File): Promise<string> => {
     const contentType = file.type || "application/octet-stream";
@@ -148,17 +170,8 @@ function FileUploadSection({
   };
 
   const handleUpload = async () => {
-    const trimmedSyllabus = syllabusText.trim();
-    if (!trimmedSyllabus && !syllabusFile) return;
     const trimmedReplicaText = replicaText.trim();
-    if (syllabusFile && trimmedSyllabus) {
-      toast({
-        title: "Choose one syllabus input",
-        description: "Use either syllabus file or pasted syllabus text, not both.",
-        variant: "destructive",
-      });
-      return;
-    }
+    if (!paperFile && !trimmedReplicaText) return;
     if (paperFile && trimmedReplicaText) {
       toast({
         title: "Choose one replica input",
@@ -169,43 +182,155 @@ function FileUploadSection({
     }
     setUploading(true);
     try {
-      const syllabusPath = syllabusFile
-        ? await uploadSingleFile(syllabusFile)
-        : await uploadSingleFile(
-            new File([new Blob([trimmedSyllabus], { type: "text/plain" })], "syllabus.txt", { type: "text/plain" })
-          );
-      let paperPaths: string[] = [];
-      if (paperFile) {
-        paperPaths = [await uploadSingleFile(paperFile)];
-      } else if (trimmedReplicaText) {
-        const replicaBlob = new Blob([trimmedReplicaText], { type: "text/plain" });
-        const replicaFile = new File([replicaBlob], "replica-paper.txt", { type: "text/plain" });
-        paperPaths = [await uploadSingleFile(replicaFile)];
-      }
+      const paperPaths = await (async () => {
+        if (paperFile) return [await uploadSingleFile(paperFile)];
+        if (trimmedReplicaText) {
+          const replicaBlob = new Blob([trimmedReplicaText], { type: "text/plain" });
+          const replicaFile = new File([replicaBlob], "replica-paper.txt", { type: "text/plain" });
+          return [await uploadSingleFile(replicaFile)];
+        }
+        return [] as string[];
+      })();
 
       await uploadFiles.mutateAsync({
         id: configId,
         data: {
-          syllabusFileUrl: normalizeObjectPath(syllabusPath),
           paperFileUrls: paperPaths.map((p) => normalizeObjectPath(p)),
         },
       });
-      setSyllabusText("");
-      setSyllabusFile(null);
       setPaperFile(null);
       setReplicaText("");
       onUploaded();
       toast({
         title: "Content uploaded",
         description: hasFiles
-          ? "Existing content was replaced. Run Generate Content to refresh roadmap and question bank."
-          : "Syllabus text and replica paper saved successfully.",
+          ? "Existing replica was replaced. Run Generate Content to refresh roadmap and question bank."
+          : "Replica paper saved successfully.",
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : "Something went wrong. Please try again.";
       toast({ title: "Upload failed", description: message, variant: "destructive" });
     } finally {
       setUploading(false);
+    }
+  };
+
+  const handleExtractQuestions = async () => {
+    const trimmedReplicaText = replicaText.trim();
+    if (paperFile && trimmedReplicaText) {
+      toast({
+        title: "Choose one replica input",
+        description: "Use either replica file or pasted replica text, not both.",
+        variant: "destructive",
+      });
+      return;
+    }
+    if (!paperFile && !trimmedReplicaText && !hasFiles) {
+      toast({
+        title: "No replica input",
+        description: "Upload or paste replica text before extracting questions.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    setExtracting(true);
+    try {
+      if (paperFile || trimmedReplicaText) {
+        const paperPaths = await (async () => {
+          if (paperFile) return [await uploadSingleFile(paperFile)];
+          if (trimmedReplicaText) {
+            const replicaBlob = new Blob([trimmedReplicaText], { type: "text/plain" });
+            const replicaFile = new File([replicaBlob], "replica-paper.txt", { type: "text/plain" });
+            return [await uploadSingleFile(replicaFile)];
+          }
+          return [] as string[];
+        })();
+
+        await uploadFiles.mutateAsync({
+          id: configId,
+          data: {
+            paperFileUrls: paperPaths.map((p) => normalizeObjectPath(p)),
+          },
+        });
+        onUploaded();
+      }
+
+      const laneAData = await generateLaneA.mutateAsync({ configId, mode: "questions_only", ignoreSavedReplica: true });
+      const previewRows = Array.isArray(laneAData.replicaQuestions) ? laneAData.replicaQuestions : [];
+      setExtractedQuestions(
+        previewRows.map((q) => ({
+          markType: q.markType,
+          question: q.question,
+          answer: q.answer,
+          unitTitle: q.unitTitle,
+          topicTitle: q.topicTitle,
+          subtopicTitle: q.subtopicTitle,
+          isStarred: true,
+        })),
+      );
+      setExtractionWarnings(laneAData.warnings || []);
+      toast({
+        title: "Questions extracted",
+        description: `Previewing ${previewRows.length} extracted question(s).`,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to extract questions.";
+      toast({ title: "Extraction failed", description: message, variant: "destructive" });
+    } finally {
+      setExtracting(false);
+    }
+  };
+
+  const handleEditExtractedQuestion = (
+    index: number,
+    field: "markType" | "question" | "unitTitle" | "topicTitle" | "subtopicTitle",
+    value: string,
+  ) => {
+    setExtractedQuestions((prev) =>
+      prev.map((row, i) => (i === index ? { ...row, [field]: value } : row)),
+    );
+  };
+
+  const handleRemoveExtractedQuestion = (index: number) => {
+    setExtractedQuestions((prev) => prev.filter((_, i) => i !== index));
+  };
+
+  const handleSaveQuestionsToConfig = async () => {
+    const cleanRows = extractedQuestions
+      .map((q) => ({
+        markType: q.markType,
+        question: q.question.trim(),
+        answer: q.answer.trim(),
+        unitTitle: q.unitTitle.trim(),
+        topicTitle: q.topicTitle.trim(),
+        subtopicTitle: q.subtopicTitle.trim(),
+        isStarred: true,
+      }))
+      .filter((q) => q.question && q.unitTitle && q.topicTitle && q.subtopicTitle);
+
+    if (cleanRows.length === 0) {
+      toast({
+        title: "No valid questions",
+        description: "Add at least one valid extracted question before saving.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    try {
+      const result = await saveReplicaQuestions.mutateAsync({
+        configId,
+        questions: cleanRows,
+      });
+      await refetchSavedReplicaQuestions();
+      toast({
+        title: "Questions saved to config",
+        description: `Saved ${result.savedCount} question(s). Previous saved set was replaced.`,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to save extracted questions.";
+      toast({ title: "Save failed", description: message, variant: "destructive" });
     }
   };
 
@@ -220,7 +345,7 @@ function FileUploadSection({
         <div className="mb-4 p-3 bg-green-500/10 border border-green-500/20 rounded-xl text-sm text-green-700 dark:text-green-400 flex items-center gap-2">
           <CheckCircle2 className="w-4 h-4 shrink-0" />
           <div>
-            Syllabus uploaded
+            Replica uploaded
             {paperUrls && paperUrls.length > 0 && ` + ${paperUrls.length} paper(s)`}
           </div>
         </div>
@@ -228,53 +353,6 @@ function FileUploadSection({
 
       <div className="space-y-4">
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-          <div className="rounded-xl border border-border p-4 bg-secondary/10 space-y-3">
-            <p className="text-sm font-semibold text-foreground">Syllabus Input</p>
-            <Textarea
-              value={syllabusText}
-              onChange={(e) => setSyllabusText(e.target.value)}
-              rows={8}
-              placeholder="Paste full syllabus text..."
-              className="text-sm"
-            />
-            <p className="text-xs text-muted-foreground">{syllabusText.trim().length} characters</p>
-            <label className="inline-flex items-center gap-2 border border-border rounded-lg px-3 py-2 cursor-pointer hover:border-primary/40 hover:bg-primary/5 transition-all">
-              <input
-                type="file"
-                accept={ACCEPTED_FILE_TYPES}
-                className="hidden"
-                onChange={(e) => {
-                  const next = e.target.files?.[0] ?? null;
-                  setSyllabusFile(next);
-                }}
-              />
-              <FileText className="w-4 h-4 text-muted-foreground" />
-              <span className="text-sm text-muted-foreground">
-                {syllabusFile ? "Change syllabus file" : "Choose syllabus file"}
-              </span>
-            </label>
-            <p className="text-xs text-muted-foreground">Image, PDF, or text file.</p>
-            <p className="text-xs text-foreground">
-              Using: {syllabusFile ? `File - ${syllabusFile.name}` : syllabusText.trim() ? "Pasted text" : "Not set"}
-            </p>
-            {syllabusFile && (
-              <div className="rounded-lg border border-border p-2 bg-background">
-                {(() => {
-                  const key = fileKey(syllabusFile);
-                  const previewSrc = imagePreviews[key];
-                  return previewSrc ? (
-                    <button type="button" className="w-full" onClick={() => setPreviewImage({ src: previewSrc, name: syllabusFile.name })}>
-                      <img src={previewSrc} alt={syllabusFile.name} className="w-full h-28 object-cover rounded-md border border-border" />
-                      <p className="text-[11px] text-primary mt-1">Click for larger preview</p>
-                    </button>
-                  ) : (
-                    <p className="text-xs text-muted-foreground">{syllabusFile.name}</p>
-                  );
-                })()}
-              </div>
-            )}
-          </div>
-
           <div className="rounded-xl border border-border p-4 bg-secondary/10 space-y-3">
             <p className="text-sm font-semibold text-foreground">Replica Input</p>
             <Textarea
@@ -321,13 +399,122 @@ function FileUploadSection({
               </div>
             )}
           </div>
+
+          <div className="rounded-xl border border-border p-4 bg-secondary/10 space-y-3">
+            <div className="flex items-center justify-between gap-2">
+              <p className="text-sm font-semibold text-foreground">Extracted Questions Preview</p>
+              <Badge variant="secondary" className="text-[11px]">
+                {extractedQuestions.length} found
+              </Badge>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              AI extracts mandatory replica questions from the current replica input/file.
+            </p>
+            {extractedQuestions.length === 0 ? (
+              <div className="rounded-lg border border-dashed border-border p-4 text-xs text-muted-foreground">
+                Click <span className="font-medium text-foreground">Extract Questions</span> to preview extracted questions here.
+              </div>
+            ) : (
+              <div className="max-h-80 overflow-auto rounded-lg border border-border bg-background">
+                <ul className="divide-y divide-border">
+                  {extractedQuestions.map((q, index) => (
+                    <li key={`${q.question}-${index}`} className="p-3 space-y-1">
+                      <div className="flex items-center justify-between gap-2">
+                        <Select
+                          value={q.markType}
+                          onValueChange={(value) =>
+                            handleEditExtractedQuestion(index, "markType", value as "Foundational" | "Applied")
+                          }
+                        >
+                          <SelectTrigger className="h-7 w-[130px] text-[11px]">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="Foundational">Foundational</SelectItem>
+                            <SelectItem value="Applied">Applied</SelectItem>
+                          </SelectContent>
+                        </Select>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          className="h-7 px-2 text-destructive"
+                          onClick={() => handleRemoveExtractedQuestion(index)}
+                        >
+                          Remove
+                        </Button>
+                      </div>
+                      <Textarea
+                        value={q.question}
+                        onChange={(e) => handleEditExtractedQuestion(index, "question", e.target.value)}
+                        rows={3}
+                        className="text-xs"
+                      />
+                      <div className="grid grid-cols-1 gap-1">
+                        <Input
+                          value={q.unitTitle}
+                          onChange={(e) => handleEditExtractedQuestion(index, "unitTitle", e.target.value)}
+                          placeholder="Unit title"
+                          className="h-8 text-[11px]"
+                        />
+                        <Input
+                          value={q.topicTitle}
+                          onChange={(e) => handleEditExtractedQuestion(index, "topicTitle", e.target.value)}
+                          placeholder="Topic title"
+                          className="h-8 text-[11px]"
+                        />
+                        <Input
+                          value={q.subtopicTitle}
+                          onChange={(e) => handleEditExtractedQuestion(index, "subtopicTitle", e.target.value)}
+                          placeholder="Subtopic title"
+                          className="h-8 text-[11px]"
+                        />
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            {extractionWarnings.length > 0 && (
+              <div className="rounded-lg border border-amber-300 bg-amber-50 p-2 text-[11px] text-amber-900">
+                {extractionWarnings[0]}
+              </div>
+            )}
+          </div>
         </div>
 
-        <Button onClick={handleUpload} disabled={(!syllabusText.trim() && !syllabusFile) || uploading} className="w-full gap-2">
-          {uploading ? (
-            <><Loader2 className="w-4 h-4 animate-spin" /> Uploading...</>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+          <Button onClick={handleUpload} disabled={(!replicaText.trim() && !paperFile) || uploading || extracting} className="w-full gap-2">
+            {uploading ? (
+              <><Loader2 className="w-4 h-4 animate-spin" /> Uploading...</>
+            ) : (
+              <><Upload className="w-4 h-4" /> {hasFiles ? "Replace Replica" : "Upload Replica"}</>
+            )}
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            onClick={handleExtractQuestions}
+            disabled={uploading || extracting || (!hasFiles && !paperFile && !replicaText.trim())}
+            className="w-full gap-2"
+          >
+            {extracting ? (
+              <><Loader2 className="w-4 h-4 animate-spin" /> Extracting...</>
+            ) : (
+              <><Sparkles className="w-4 h-4" /> Extract Questions (AI)</>
+            )}
+          </Button>
+        </div>
+        <Button
+          type="button"
+          onClick={handleSaveQuestionsToConfig}
+          disabled={extracting || saveReplicaQuestions.isPending || extractedQuestions.length === 0}
+          className="w-full gap-2"
+        >
+          {saveReplicaQuestions.isPending ? (
+            <><Loader2 className="w-4 h-4 animate-spin" /> Saving...</>
           ) : (
-            <><Upload className="w-4 h-4" /> {hasFiles ? "Replace Content" : "Upload Content"}</>
+            <><Save className="w-4 h-4" /> Save Questions To Config</>
           )}
         </Button>
       </div>
@@ -354,116 +541,6 @@ function FileUploadSection({
             />
           </div>
         </div>
-      )}
-    </div>
-  );
-}
-
-function GenerationSection({
-  configId,
-  hasFiles,
-}: {
-  configId: string;
-  hasFiles: boolean;
-}) {
-  const [polling, setPolling] = useState(false);
-  const triggerGen = useTriggerGeneration();
-  const queryClient = useQueryClient();
-  const { toast } = useToast();
-  const { data: status, refetch: refetchStatus } = useGetGenerationStatus(configId, {
-    query: {
-      refetchInterval: polling ? 3000 : false,
-    },
-  });
-
-  useEffect(() => {
-    if (status?.status === "generating" || status?.status === "parsing") {
-      setPolling(true);
-    } else {
-      setPolling(false);
-    }
-  }, [status?.status]);
-
-  useEffect(() => {
-    if (status?.status === "complete") {
-      queryClient.invalidateQueries({ queryKey: ["/api/nodes"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/configs"] });
-    }
-  }, [status?.status, queryClient]);
-
-  const handleGenerate = () => {
-    triggerGen.mutate({ id: configId }, {
-      onSuccess: () => {
-        setPolling(true);
-        refetchStatus();
-        toast({ title: "Generation started", description: "AI is generating content. This may take a few minutes." });
-      },
-      onError: () => {
-        toast({ title: "Generation failed", description: "Could not start content generation.", variant: "destructive" });
-      },
-    });
-  };
-
-  const isActive = status?.status === "generating" || status?.status === "parsing";
-  const progressPct = status?.total && status.total > 0 ? (status.progress / status.total) * 100 : 0;
-
-  return (
-    <div className="bg-card rounded-2xl border border-border p-6">
-      <h3 className="text-lg font-semibold flex items-center gap-2 mb-4">
-        <Sparkles className="w-5 h-5 text-primary" />
-        AI Generation
-      </h3>
-
-      {status?.status === "complete" && (
-        <div className="mb-4 p-3 bg-green-500/10 border border-green-500/20 rounded-xl text-sm text-green-700 dark:text-green-400 flex items-center gap-2">
-          <CheckCircle2 className="w-4 h-4 shrink-0" />
-          Content generated successfully
-        </div>
-      )}
-
-      {status?.status === "error" && (
-        <div className="mb-4 p-3 bg-destructive/10 border border-destructive/20 rounded-xl text-sm text-destructive flex items-start gap-2">
-          <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
-          <div>
-            <p className="font-medium">Generation failed</p>
-            {status.error && <p className="text-xs mt-1 opacity-80">{status.error}</p>}
-          </div>
-        </div>
-      )}
-
-      {isActive && (
-        <div className="mb-4 space-y-3">
-          <div className="flex items-center justify-between text-sm">
-            <span className="text-muted-foreground">{status?.currentStep}</span>
-            <span className="font-medium text-foreground">
-              {status?.progress}/{status?.total}
-            </span>
-          </div>
-          <Progress value={progressPct} className="h-2" />
-          <div className="flex items-center gap-2 text-xs text-muted-foreground">
-            <Loader2 className="w-3 h-3 animate-spin" />
-            Generating content... this may take a few minutes
-          </div>
-        </div>
-      )}
-
-      <Button
-        onClick={handleGenerate}
-        disabled={!hasFiles || isActive || triggerGen.isPending}
-        className="w-full gap-2"
-        variant={status?.status === "complete" ? "outline" : "default"}
-      >
-        {isActive ? (
-          <><Loader2 className="w-4 h-4 animate-spin" /> Generating...</>
-        ) : status?.status === "complete" ? (
-          <><Sparkles className="w-4 h-4" /> Regenerate Content</>
-        ) : (
-          <><Sparkles className="w-4 h-4" /> Generate Content</>
-        )}
-      </Button>
-
-      {!hasFiles && (
-        <p className="text-xs text-muted-foreground text-center mt-2">Upload files first before generating</p>
       )}
     </div>
   );
@@ -571,7 +648,7 @@ interface EditableQuestion {
 }
 
 function CheapGenerationSection({ configId }: { configId: string }) {
-  const [laneAMode, setLaneAMode] = useState<CheapGenerationMode>("explanations_and_questions");
+  const [laneAMode, setLaneAMode] = useState<CheapGenerationMode>("explanations_only");
   const [forceOverwrite, setForceOverwrite] = useState(false);
   const [masterPrompt, setMasterPrompt] = useState("");
   const [laneBJson, setLaneBJson] = useState("");
@@ -592,7 +669,7 @@ function CheapGenerationSection({ configId }: { configId: string }) {
   const [laneAReplicaExtraction, setLaneAReplicaExtraction] = useState<{
     hasReplicaFile: boolean;
     extractedPaperTextLength: number;
-    extractionMethod: "model" | "heuristic" | "none";
+    extractionMethod: "model" | "none";
   } | null>(null);
   const [importWarnings, setImportWarnings] = useState<string[]>([]);
   const [laneAResult, setLaneAResult] = useState<{
@@ -791,7 +868,7 @@ function CheapGenerationSection({ configId }: { configId: string }) {
 
   const explanationGapRows = gapReport?.rows?.length ?? 0;
   const questionGapCount = gapReport?.summary?.questionGapCount ?? 0;
-  const hasExplanationGaps = explanationGapRows > 0;
+  const hasExplanationGaps = !!gapReport?.summary?.includeExplanationGaps && explanationGapRows > 0;
   const hasQuestionGaps = !!gapReport?.summary?.includeQuestionGaps && questionGapCount > 0;
   const hasAnyGaps = hasExplanationGaps || hasQuestionGaps;
 
@@ -814,7 +891,6 @@ function CheapGenerationSection({ configId }: { configId: string }) {
               <SelectValue placeholder="Select mode" />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="explanations_and_questions">Explanations + Questions</SelectItem>
               <SelectItem value="explanations_only">Explanations only</SelectItem>
               <SelectItem value="questions_only">Questions only</SelectItem>
             </SelectContent>
@@ -899,7 +975,9 @@ function CheapGenerationSection({ configId }: { configId: string }) {
                   ? (gapReport.summary.includeExplanationGaps
                       ? "No explanation or question gaps found for this mode. Lane A can be skipped."
                       : "No question gaps found for this mode. Lane A can be skipped.")
-                  : "No explanation gaps found. Lane A should skip explanation generation for existing content."}
+                  : (gapReport.summary.includeExplanationGaps
+                      ? "No explanation gaps found for this mode. Lane A can skip explanation generation."
+                      : "No gaps found for this mode.")}
               </p>
             )}
           </div>
@@ -1054,6 +1132,8 @@ function ReusableUnitLibrarySection({ configId, subjectName }: { configId: strin
   const { data: configUnitLinks } = useGetConfigUnitLinks(configId);
   const saveConfigUnitLinks = useSaveConfigUnitLinks();
   const extractUnits = useExtractUnitsFromText();
+  const regenerateFacts = useRegenerateUnitFacts();
+  const cleanupTitles = useCleanupUnitTitles();
 
   const [selectedUnitId, setSelectedUnitId] = useState<string>("");
   const [selectedUnitIds, setSelectedUnitIds] = useState<string[]>([]);
@@ -1069,9 +1149,8 @@ function ReusableUnitLibrarySection({ configId, subjectName }: { configId: strin
     topics.length > 0 &&
     topics.every((t) => t.title.trim().length > 0 && Array.isArray(t.subtopics) && t.subtopics.length > 0);
 
-  const reusableUnits = (units ?? []).filter((u) =>
-    hasCompleteStructure((u.topics as UnitTopicInput[] | null | undefined) ?? [])
-  );
+  const reusableUnits = units ?? [];
+  const selectedUnit = reusableUnits.find((u) => u.id === selectedUnitId) ?? null;
 
   useEffect(() => {
     if (!selectedUnitId || !units) return;
@@ -1181,6 +1260,8 @@ function ReusableUnitLibrarySection({ configId, subjectName }: { configId: strin
   };
 
   const saving = upsertUnit.isPending || updateUnit.isPending;
+  const regeneratingFacts = regenerateFacts.isPending;
+  const cleaningTitles = cleanupTitles.isPending;
   const savingConfigLinks = saveConfigUnitLinks.isPending;
   const extracting = extractUnits.isPending;
 
@@ -1251,6 +1332,91 @@ function ReusableUnitLibrarySection({ configId, subjectName }: { configId: strin
     }
   };
 
+  const handleRegenerateFactsForSelectedUnit = () => {
+    if (!subject?.id || !selectedUnitId) return;
+    regenerateFacts.mutate(
+      { unitId: selectedUnitId },
+      {
+        onSuccess: (data) => {
+          queryClient.invalidateQueries({ queryKey: ["library-units", subject.id] });
+          toast({
+            title: "Facts regenerated",
+            description: `Replaced facts for this unit. Total facts now: ${data.factCount}.`,
+          });
+        },
+        onError: (error) => {
+          toast({
+            title: "Facts generation failed",
+            description: error instanceof Error ? error.message : "Please try again.",
+            variant: "destructive",
+          });
+        },
+      }
+    );
+  };
+
+  const handleCleanupTitlesForSelectedUnit = () => {
+    if (!subject?.id || !selectedUnitId) return;
+    cleanupTitles.mutate(
+      { unitId: selectedUnitId, preview: false },
+      {
+        onSuccess: (data) => {
+          queryClient.invalidateQueries({ queryKey: ["library-units", subject.id] });
+          setTopicsText(
+            (data.topics ?? [])
+              .map((t) => `${t.title}: ${t.subtopics.join(", ")}`)
+              .join("\n"),
+          );
+          toast({
+            title: data.updated ? "Titles cleaned" : "No title cleanup needed",
+            description: `Topics ${data.topicCountBefore} -> ${data.topicCountAfter}, subtopics ${data.subtopicCountBefore} -> ${data.subtopicCountAfter}.`,
+          });
+        },
+        onError: (error) => {
+          toast({
+            title: "Cleanup failed",
+            description: error instanceof Error ? error.message : "Please try again.",
+            variant: "destructive",
+          });
+        },
+      },
+    );
+  };
+
+  const handlePreviewCleanupTitlesForSelectedUnit = () => {
+    if (!subject?.id || !selectedUnitId) return;
+    cleanupTitles.mutate(
+      { unitId: selectedUnitId, preview: true },
+      {
+        onSuccess: (data) => {
+          if (!data.updated) {
+            toast({
+              title: "No cleanup needed",
+              description: "Current titles are already in compact readable form.",
+            });
+            return;
+          }
+          setTopicsText(
+            (data.topics ?? [])
+              .map((t) => `${t.title}: ${t.subtopics.join(", ")}`)
+              .join("\n"),
+          );
+          toast({
+            title: "Preview loaded",
+            description: `Preview shows cleaned titles. Topics ${data.topicCountBefore} -> ${data.topicCountAfter}, subtopics ${data.subtopicCountBefore} -> ${data.subtopicCountAfter}. Click "Clean Topic/Subtopic Titles" to apply.`,
+          });
+        },
+        onError: (error) => {
+          toast({
+            title: "Preview failed",
+            description: error instanceof Error ? error.message : "Please try again.",
+            variant: "destructive",
+          });
+        },
+      },
+    );
+  };
+
   return (
     <div className="bg-card rounded-2xl border border-border p-6 mt-8">
       <h3 className="text-lg font-semibold flex items-center gap-2 mb-2">
@@ -1278,7 +1444,7 @@ function ReusableUnitLibrarySection({ configId, subjectName }: { configId: strin
           <div className="rounded-xl border border-border p-3 bg-secondary/20">
             <p className="text-xs font-semibold text-foreground mb-2">Units Selected For This Config</p>
             {reusableUnits.length === 0 ? (
-              <p className="text-xs text-muted-foreground">No fully structured reusable units yet for this subject.</p>
+              <p className="text-xs text-muted-foreground">No reusable units yet for this subject.</p>
             ) : (
               <div className="space-y-2 max-h-44 overflow-y-auto pr-1">
                 {reusableUnits.map((u) => (
@@ -1291,6 +1457,16 @@ function ReusableUnitLibrarySection({ configId, subjectName }: { configId: strin
                     />
                     <span className="flex-1">{u.unitTitle}</span>
                     <span className="flex items-center gap-1.5 shrink-0">
+                      {!!u.hasCanonicalNodes && (
+                        <Badge variant="secondary" className="h-5 px-2 text-[10px] font-medium">
+                          Title Cleanup Locked
+                        </Badge>
+                      )}
+                      {!hasCompleteStructure((u.topics as UnitTopicInput[] | null | undefined) ?? []) && (
+                        <Badge variant="secondary" className="h-5 px-2 text-[10px] font-medium">
+                          Incomplete Structure
+                        </Badge>
+                      )}
                       <Badge variant="outline" className="h-5 px-2 text-[10px] font-medium">
                         {`Facts ${u.factsSummary?.factAtomsCount ?? 0}`}
                       </Badge>
@@ -1390,7 +1566,9 @@ function ReusableUnitLibrarySection({ configId, subjectName }: { configId: strin
                     </SelectTrigger>
                     <SelectContent>
                       {(units ?? []).map((u) => (
-                        <SelectItem key={u.id} value={u.id}>{u.unitTitle}</SelectItem>
+                        <SelectItem key={u.id} value={u.id}>
+                          {u.unitTitle}{u.hasCanonicalNodes ? " (Title Cleanup Locked)" : ""}
+                        </SelectItem>
                       ))}
                     </SelectContent>
                   </Select>
@@ -1446,6 +1624,55 @@ function ReusableUnitLibrarySection({ configId, subjectName }: { configId: strin
                   {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
                   {selectedUnitId ? "Update Unit" : "Save Unit"}
                 </Button>
+                {selectedUnitId && (
+                  <div className="mt-2 space-y-2">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={handleRegenerateFactsForSelectedUnit}
+                      disabled={regeneratingFacts}
+                      className="gap-2"
+                    >
+                      {regeneratingFacts ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
+                      Generate Facts For This Unit (Replace Existing)
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={handlePreviewCleanupTitlesForSelectedUnit}
+                      disabled={cleaningTitles || !!selectedUnit?.hasCanonicalNodes}
+                      className="gap-2"
+                      title={
+                        selectedUnit?.hasCanonicalNodes
+                          ? `Locked: ${selectedUnit?.canonicalNodeCount ?? 0} canonical node(s) already exist for this unit`
+                          : "Preview cleaned titles without saving"
+                      }
+                    >
+                      {cleaningTitles ? <Loader2 className="w-4 h-4 animate-spin" /> : <HelpCircle className="w-4 h-4" />}
+                      Preview Clean Titles
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={handleCleanupTitlesForSelectedUnit}
+                      disabled={cleaningTitles || !!selectedUnit?.hasCanonicalNodes}
+                      className="gap-2"
+                      title={
+                        selectedUnit?.hasCanonicalNodes
+                          ? `Locked: ${selectedUnit?.canonicalNodeCount ?? 0} canonical node(s) already exist for this unit`
+                          : "Apply cleaned topic/subtopic titles"
+                      }
+                    >
+                      {cleaningTitles ? <Loader2 className="w-4 h-4 animate-spin" /> : <Pencil className="w-4 h-4" />}
+                      Clean Topic/Subtopic Titles
+                    </Button>
+                    {!!selectedUnit?.hasCanonicalNodes && (
+                      <p className="text-xs text-muted-foreground">
+                        Title cleanup is disabled for units that already have canonical nodes.
+                      </p>
+                    )}
+                  </div>
+                )}
                 </div>
               </AccordionContent>
             </AccordionItem>
@@ -1801,9 +2028,8 @@ export default function ConfigDetail() {
   const config = configs?.find((c) => c.id === configId);
   const { data: genStatus } = useGetGenerationStatus(configId);
   const { data: publishNodes } = useGetNodes({ configId });
-  const [generationMode, setGenerationMode] = useState<"expensive" | "cheap">("cheap");
 
-  const hasFiles = !!config?.syllabusFileUrl;
+  const hasFiles = Array.isArray(config?.paperFileUrls) && config.paperFileUrls.length > 0;
   const hasContent = genStatus?.status === "complete" || (publishNodes?.length ?? 0) > 0;
 
   if (configsLoading) {
@@ -1862,15 +2088,11 @@ export default function ConfigDetail() {
           </div>
           <div className="rounded-lg border border-border bg-background px-3 py-2">
             <p className="font-medium text-foreground">2. Add Inputs</p>
-            <p className="text-muted-foreground mt-0.5">{hasFiles ? "Content uploaded" : "Upload syllabus + optional replica."}</p>
+            <p className="text-muted-foreground mt-0.5">{hasFiles ? "Replica uploaded" : "Upload optional replica."}</p>
           </div>
           <div className="rounded-lg border border-border bg-background px-3 py-2">
             <p className="font-medium text-foreground">3. Generate</p>
-            <p className="text-muted-foreground mt-0.5">
-              {generationMode === "expensive"
-                ? (hasContent ? "Generated" : "Run AI generation.")
-                : "Lane A + Lane B import"}
-            </p>
+            <p className="text-muted-foreground mt-0.5">Lane A + Lane B import</p>
           </div>
           <div className="rounded-lg border border-border bg-background px-3 py-2">
             <p className="font-medium text-foreground">4. Publish</p>
@@ -1897,31 +2119,7 @@ export default function ConfigDetail() {
 
         <div>
           <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-2">Step 3</p>
-          <div className="mb-3 inline-flex rounded-xl border border-border bg-background p-1">
-            <button
-              type="button"
-              onClick={() => setGenerationMode("expensive")}
-              className={`px-3 py-1.5 text-xs rounded-lg transition-colors ${
-                generationMode === "expensive" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"
-              }`}
-            >
-              Expensive Mode
-            </button>
-            <button
-              type="button"
-              onClick={() => setGenerationMode("cheap")}
-              className={`px-3 py-1.5 text-xs rounded-lg transition-colors ${
-                generationMode === "cheap" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"
-              }`}
-            >
-              Cheap Mode
-            </button>
-          </div>
-          {generationMode === "expensive" ? (
-            <GenerationSection configId={configId} hasFiles={hasFiles} />
-          ) : (
-            <CheapGenerationSection configId={configId} />
-          )}
+          <CheapGenerationSection configId={configId} />
         </div>
 
         <div>

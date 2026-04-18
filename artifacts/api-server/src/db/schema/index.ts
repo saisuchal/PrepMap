@@ -7,4 +7,5 @@ export * from "./configUnitLinks";
 export * from "./configs";
 export * from "./nodes";
 export * from "./configQuestions";
+export * from "./configReplicaQuestions";
 export * from "./events";

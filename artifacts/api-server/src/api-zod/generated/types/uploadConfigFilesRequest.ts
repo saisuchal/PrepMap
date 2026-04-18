@@ -7,7 +7,7 @@
  */
 
 export interface UploadConfigFilesRequest {
-  syllabusFileUrl: string;
+  syllabusFileUrl?: string;
   paperFileUrls: string[];
 }
 

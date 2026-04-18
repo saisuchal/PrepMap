@@ -147,6 +147,8 @@ export interface LibraryUnit {
   normalizedUnitTitle: string;
   topics: LibraryUnitTopic[];
   sourceText: string | null;
+  canonicalNodeCount?: number;
+  hasCanonicalNodes?: boolean;
   factsSummary?: {
     factAtomsCount: number;
     itemsWithFacts: number;
@@ -172,11 +174,30 @@ export interface ExtractUnitsResponse {
   units: { id: string; unitTitle: string }[];
 }
 
+export interface RegenerateUnitFactsResponse {
+  success: boolean;
+  unitId: string;
+  factCount: number;
+  replaced: boolean;
+}
+
+export interface CleanupUnitTitlesResponse {
+  success: boolean;
+  unitId: string;
+  preview?: boolean;
+  updated: boolean;
+  topicCountBefore: number;
+  topicCountAfter: number;
+  subtopicCountBefore: number;
+  subtopicCountAfter: number;
+  topics: LibraryUnitTopic[];
+}
+
 export interface CheapLaneAResponse {
   success: boolean;
   configId: string;
   subject: string;
-  mode?: "explanations_only" | "explanations_and_questions" | "questions_only";
+  mode?: "explanations_only" | "questions_only";
   structure: Array<{
     title: string;
     topics: Array<{
@@ -197,13 +218,36 @@ export interface CheapLaneAResponse {
   replicaExtraction: {
     hasReplicaFile: boolean;
     extractedPaperTextLength: number;
-    extractionMethod: "model" | "heuristic" | "none";
+    extractionMethod: "model" | "none";
   };
   totalQuestionTarget: number;
   totalStarTarget: number;
   remainingQuestionsNeeded: number;
   remainingStarsNeeded: number;
   masterPrompt: string;
+}
+
+export interface SavedReplicaQuestion {
+  markType: "Foundational" | "Applied";
+  question: string;
+  answer: string;
+  unitTitle: string;
+  topicTitle: string;
+  subtopicTitle: string;
+  isStarred: boolean;
+}
+
+export interface SavedReplicaQuestionsResponse {
+  success: boolean;
+  configId: string;
+  questions: SavedReplicaQuestion[];
+}
+
+export interface SaveReplicaQuestionsResponse {
+  success: boolean;
+  configId: string;
+  savedCount: number;
+  replaced: boolean;
 }
 
 export interface CheapLaneBImportResponse {
@@ -239,7 +283,7 @@ export interface CheapLaneBImportStatusResponse {
 export interface CheapGapReportResponse {
   success: boolean;
   configId: string;
-  mode?: "explanations_only" | "explanations_and_questions" | "questions_only";
+  mode?: "explanations_only" | "questions_only";
   summary: {
     totalTopicTargets: number;
     totalSubtopicTargets: number;
@@ -289,7 +333,6 @@ export interface QuestionBankResponse {
 
 export type CheapGenerationMode =
   | "explanations_only"
-  | "explanations_and_questions"
   | "questions_only";
 
 export interface LatestInteractionStateResponse {
@@ -499,6 +542,28 @@ export const getQuestionBank = async (configId: string, options?: RequestInit) =
   });
 };
 
+export const regenerateUnitFacts = async (
+  unitId: string,
+  options?: RequestInit,
+) => {
+  return customFetch<RegenerateUnitFactsResponse>(`/api/admin/library/units/${encodeURIComponent(unitId)}/generate-facts`, {
+    ...options,
+    method: "POST",
+  });
+};
+
+export const cleanupUnitTitles = async (
+  unitId: string,
+  preview = false,
+  options?: RequestInit,
+) => {
+  const query = preview ? "?preview=true" : "";
+  return customFetch<CleanupUnitTitlesResponse>(`/api/admin/library/units/${encodeURIComponent(unitId)}/cleanup-titles${query}`, {
+    ...options,
+    method: "POST",
+  });
+};
+
 export const purgeConfig = async (id: string, options?: RequestInit) => {
   return customFetch<SuccessResponse>(`/api/configs/${id}/permanent`, {
     ...options,
@@ -572,16 +637,42 @@ export const resetPasswordWithSecurity = async (
 export const generateCheapLaneA = async (
   configId: string,
   mode: CheapGenerationMode,
-  options?: RequestInit,
+  payloadOptions?: {
+    ignoreSavedReplica?: boolean;
+  },
+  requestOptions?: RequestInit,
 ) => {
   return customFetch<CheapLaneAResponse>(`/api/configs/${configId}/cheap/lane-a`, {
+    ...requestOptions,
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      ...(requestOptions?.headers || {}),
+    },
+    body: JSON.stringify({ mode, ignoreSavedReplica: payloadOptions?.ignoreSavedReplica }),
+  });
+};
+
+export const getSavedReplicaQuestions = async (configId: string, options?: RequestInit) => {
+  return customFetch<SavedReplicaQuestionsResponse>(`/api/configs/${configId}/cheap/replica-questions`, {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const saveReplicaQuestions = async (
+  configId: string,
+  payload: { questions: SavedReplicaQuestion[] },
+  options?: RequestInit,
+) => {
+  return customFetch<SaveReplicaQuestionsResponse>(`/api/configs/${configId}/cheap/replica-questions`, {
     ...options,
     method: "POST",
     headers: {
       "content-type": "application/json",
       ...(options?.headers || {}),
     },
-    body: JSON.stringify({ mode }),
+    body: JSON.stringify(payload),
   });
 };
 
@@ -772,7 +863,7 @@ export const useGetCheapGapReport = <
   options?: Omit<UseQueryOptions<CheapGapReportResponse, TError, TData>, "queryKey" | "queryFn">,
 ) => {
   return useQuery<CheapGapReportResponse, TError, TData>({
-    queryKey: ["cheap-gap-report", configId, mode || "explanations_and_questions"],
+    queryKey: ["cheap-gap-report", configId, mode || "explanations_only"],
     queryFn: () => getCheapGapReport(configId, mode),
     ...options,
   });
@@ -998,6 +1089,52 @@ export const useGetQuestionBank = <
   });
 };
 
+export const useRegenerateUnitFacts = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(
+  options?: UseMutationOptions<
+    RegenerateUnitFactsResponse,
+    TError,
+    { unitId: string },
+    TContext
+  >,
+) => {
+  return useMutation<
+    RegenerateUnitFactsResponse,
+    TError,
+    { unitId: string },
+    TContext
+  >({
+    mutationKey: ["library-regenerate-unit-facts"],
+    mutationFn: ({ unitId }) => regenerateUnitFacts(unitId),
+    ...options,
+  });
+};
+
+export const useCleanupUnitTitles = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(
+  options?: UseMutationOptions<
+    CleanupUnitTitlesResponse,
+    TError,
+    { unitId: string; preview?: boolean },
+    TContext
+  >,
+) => {
+  return useMutation<
+    CleanupUnitTitlesResponse,
+    TError,
+    { unitId: string; preview?: boolean },
+    TContext
+  >({
+    mutationKey: ["library-cleanup-unit-titles"],
+    mutationFn: ({ unitId, preview }) => cleanupUnitTitles(unitId, !!preview),
+    ...options,
+  });
+};
+
 export const useGetLatestInteractionState = <
   TError = ErrorType<unknown>,
   TData = LatestInteractionStateResponse,
@@ -1079,18 +1216,65 @@ export const useGenerateCheapLaneA = <
   options?: UseMutationOptions<
     CheapLaneAResponse,
     TError,
-    { configId: string; mode: CheapGenerationMode },
+    { configId: string; mode: CheapGenerationMode; ignoreSavedReplica?: boolean },
     TContext
   >,
 ) => {
   return useMutation<
     CheapLaneAResponse,
     TError,
-    { configId: string; mode: CheapGenerationMode },
+    { configId: string; mode: CheapGenerationMode; ignoreSavedReplica?: boolean },
     TContext
   >({
     mutationKey: ["cheap-lane-a"],
-    mutationFn: ({ configId, mode }) => generateCheapLaneA(configId, mode),
+    mutationFn: ({ configId, mode, ignoreSavedReplica }) =>
+      generateCheapLaneA(configId, mode, { ignoreSavedReplica }),
+    ...options,
+  });
+};
+
+export const useGetSavedReplicaQuestions = <
+  TData = Awaited<ReturnType<typeof getSavedReplicaQuestions>>,
+  TError = ErrorType<unknown>,
+>(
+  configId: string | null,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getSavedReplicaQuestions>>,
+        TError,
+        TData
+      >
+    >;
+  },
+) => {
+  return useQuery<Awaited<ReturnType<typeof getSavedReplicaQuestions>>, TError, TData>({
+    queryKey: ["cheap-saved-replica-questions", configId],
+    queryFn: () => getSavedReplicaQuestions(configId as string),
+    enabled: Boolean(configId),
+    ...(options?.query || {}),
+  });
+};
+
+export const useSaveReplicaQuestions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(
+  options?: UseMutationOptions<
+    SaveReplicaQuestionsResponse,
+    TError,
+    { configId: string; questions: SavedReplicaQuestion[] },
+    TContext
+  >,
+) => {
+  return useMutation<
+    SaveReplicaQuestionsResponse,
+    TError,
+    { configId: string; questions: SavedReplicaQuestion[] },
+    TContext
+  >({
+    mutationKey: ["cheap-save-replica-questions"],
+    mutationFn: ({ configId, questions }) => saveReplicaQuestions(configId, { questions }),
     ...options,
   });
 };

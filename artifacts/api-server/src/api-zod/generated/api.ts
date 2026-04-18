@@ -103,14 +103,14 @@ export const CreateConfigBody = zod.object({
 });
 
 /**
- * @summary Upload syllabus and paper files for a config
+ * @summary Upload replica files for a config
  */
 export const UploadConfigFilesParams = zod.object({
   id: zod.coerce.string(),
 });
 
 export const UploadConfigFilesBody = zod.object({
-  syllabusFileUrl: zod.string(),
+  syllabusFileUrl: zod.string().optional(),
   paperFileUrls: zod.array(zod.string()),
 });
 

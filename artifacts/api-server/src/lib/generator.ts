@@ -162,7 +162,7 @@ export interface LaneAFactGroundingUnit {
 export interface LaneAReplicaExtractionInfo {
   hasReplicaFile: boolean;
   extractedPaperTextLength: number;
-  extractionMethod: "model" | "heuristic" | "none";
+  extractionMethod: "model" | "none";
 }
 
 function getEnvNumber(name: string, fallback: number): number {
@@ -708,6 +708,24 @@ function buildFallbackReplicaAnswer(questionText: string, markType: QuestionLeve
   ].join("\n");
 }
 
+function compactReadableExplanation(raw: string): string {
+  const cleaned = repairBrokenFormulaBullets(String(raw || "").trim())
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+  if (!cleaned) return "";
+
+  if (!cleaned.includes("\n")) {
+    const sentenceParts = cleaned.match(/[^.!?]+[.!?]?/g)?.map((s) => s.trim()).filter(Boolean) ?? [];
+    if (sentenceParts.length >= 2) {
+      const first = sentenceParts[0];
+      const rest = sentenceParts.slice(1).join(" ").trim();
+      if (first && rest) return `${first}\n\n${rest}`;
+    }
+  }
+  return cleaned;
+}
+
 async function generateReplicaAnswersFromQuestions(
   subject: string,
   questions: Array<{ question: string; markType: QuestionLevel }>,
@@ -1119,7 +1137,7 @@ Requirements:
     700
   );
 
-  return repairBrokenFormulaBullets(response.trim());
+  return compactReadableExplanation(response);
 }
 
 async function generateSubtopicExplanation(
@@ -1151,15 +1169,17 @@ Requirements:
     900
   );
 
-  return repairBrokenFormulaBullets(response.trim());
+  return compactReadableExplanation(response);
 }
 
 async function extractReplicaQuestions(
   paperText: string,
   catalog: SubtopicCatalogItem[],
-  subject: string
-): Promise<{ questions: GeneratedQuestion[]; method: "model" | "heuristic" | "none"; modelError?: string }> {
+  subject: string,
+  maxQuestions: number
+): Promise<{ questions: GeneratedQuestion[]; method: "model" | "none" }> {
   if (!paperText.trim()) return { questions: [], method: "none" };
+  const cappedMaxQuestions = Math.max(1, Math.min(200, Number.isFinite(maxQuestions) ? Math.floor(maxQuestions) : 50));
 
   const catalogShort = catalog.slice(0, 120).map((c) => `${c.unitTitle} > ${c.topicTitle} > ${c.subtopicTitle}`);
 
@@ -1182,6 +1202,9 @@ Return ONLY valid JSON:
 
 Rules:
 - Keep question text as close as possible to paper wording
+- Preserve subquestion structure exactly when present: (a), (b), (i), (ii), bullet subparts, and numbered mini-parts should remain in the extracted question text.
+- Do not flatten multi-part questions into unrelated standalone questions unless the paper clearly separates them as independent questions.
+- Preserve technical symbols/formulas/identifiers faithfully in extracted question text.
 - Extract only real question statements. Do NOT extract headings/instructions like Part A/Section B, Bloom levels (K1/K2...), Course Outcomes, marks tables, "Answer any...", or "Q.No".
 - Keep answers concise: Foundational 25-55 words, Applied 60-110 words
 - Format answers for readability:
@@ -1195,7 +1218,7 @@ Rules:
   - If the subject/question is non-technical, avoid code blocks and use short step-wise explanation with a tiny practical example.
 - Use only these syllabus paths for mapping when possible:
 ${catalogShort.join("\n")}
-- Maximum 25 questions.`;
+- Maximum ${cappedMaxQuestions} questions.`;
 
   const parsedReplica = parseReplicaQuestionsWithSections(paperText);
 
@@ -1210,7 +1233,7 @@ ${catalogShort.join("\n")}
 
     const mapped = questions
       .filter((q) => q.question && q.answer && isLikelyQuestionText(String(q.question)))
-      .slice(0, 25)
+      .slice(0, cappedMaxQuestions)
       .map((q) => ({
         markType: inferMarkTypeFromParsedReplica(
           String(q.question || ""),
@@ -1233,79 +1256,8 @@ ${catalogShort.join("\n")}
     };
   } catch (err) {
     const modelError = err instanceof Error ? err.message : "Unknown model error";
-    logger.warn({ err }, "Replica extraction via model failed; using heuristic fallback");
-    const heuristicDraft = (() => {
-      const dedup = new Set<string>();
-      const orderedCandidates = parsedReplica
-        .map((p, idx) => ({ question: p.text.trim(), qNo: p.qNo, lineIndex: idx }))
-        .filter(({ question }) => isLikelyQuestionText(question))
-        .filter(({ question }) => {
-          const key = normalizeText(question);
-          if (!key || dedup.has(key)) return false;
-          dedup.add(key);
-          return true;
-        });
-
-      const pickBestPath = (questionText: string): SubtopicCatalogItem | null => {
-        const q = normalizeText(questionText);
-        let best: SubtopicCatalogItem | null = null;
-        let bestScore = -1;
-        for (const item of catalog) {
-          let score = 0;
-          for (const token of item.normSubtopic.split(" ").filter((t) => t.length > 3).slice(0, 6)) {
-            if (q.includes(token)) score += 3;
-          }
-          for (const token of item.normTopic.split(" ").filter((t) => t.length > 3).slice(0, 5)) {
-            if (q.includes(token)) score += 2;
-          }
-          for (const token of item.normUnit.split(" ").filter((t) => t.length > 3).slice(0, 4)) {
-            if (q.includes(token)) score += 1;
-          }
-          if (score > bestScore) {
-            best = item;
-            bestScore = score;
-          }
-        }
-        return best;
-      };
-
-      const marksByQNo = new Map(parsedReplica.map((p) => [p.qNo, p.marks]));
-
-      return orderedCandidates.slice(0, 25).map(({ question, qNo }) => {
-        const path = pickBestPath(question);
-        const heuristicApplied = /\b(4m|5m|6m|8m|10m|15m|20m|4 marks|5 marks|6 marks|8 marks|10 marks|15 marks|20 marks|long answer|part[-\s]?b|section[-\s]?b)\b/i.test(question);
-        const markType = markTypeFromMarks(
-          qNo != null ? (marksByQNo.get(qNo) ?? null) : null,
-          heuristicApplied ? "Applied" : "Foundational"
-        );
-        return {
-          markType,
-          question,
-          answer: "",
-          unitTitle: path?.unitTitle ?? (catalog[0]?.unitTitle || ""),
-          topicTitle: path?.topicTitle ?? (catalog[0]?.topicTitle || ""),
-          subtopicTitle: path?.subtopicTitle ?? (catalog[0]?.subtopicTitle || ""),
-          isStarred: true,
-          starSource: "auto" as const,
-          origin: "replica" as const,
-        };
-      });
-    })();
-
-    const answerMap = await generateReplicaAnswersFromQuestions(
-      subject,
-      heuristicDraft.map((q) => ({
-        question: q.question,
-        markType: q.markType,
-      })),
-    );
-
-    const heuristic = heuristicDraft.map((q) => ({
-      ...q,
-      answer: answerMap.get(normalizeText(q.question)) || buildFallbackReplicaAnswer(q.question, q.markType),
-    }));
-
-    return { questions: heuristic, method: "heuristic", modelError };
+    logger.warn({ err }, "Replica extraction via model failed");
+    throw new Error(`Replica extraction failed: ${modelError}`);
   }
 }
 
@@ -1369,22 +1321,16 @@ export async function buildLaneAConfigPackage(configId: string): Promise<{
 
   let replicaQuestions: GeneratedQuestion[] = [];
   if (paperText.trim()) {
-    try {
-      const extracted = await extractReplicaQuestions(paperText, catalog, config.subject);
-      replicaQuestions = extracted.questions.filter((q) => isLikelyQuestionText(q.question));
-      extractionMethod = extracted.method;
-      if (extractionMethod === "heuristic") {
-        warnings.push("Replica extraction used fallback heuristic mode. Please review mandatory replica questions before Lane B import.");
-        if (extracted.modelError) {
-          warnings.push(`AI extraction failure: ${extracted.modelError}`);
-        }
-      }
-      if (replicaQuestions.length === 0) {
-        warnings.push("No mandatory replica questions could be extracted from the uploaded replica.");
-      }
-    } catch (err) {
-      logger.warn({ err, configId }, "Failed to extract replica questions for lane A package");
-      warnings.push("Replica question extraction failed. Lane A continued without mandatory replica questions.");
+    const extracted = await extractReplicaQuestions(
+      paperText,
+      catalog,
+      config.subject,
+      targets.totalQuestions
+    );
+    replicaQuestions = extracted.questions.filter((q) => isLikelyQuestionText(q.question));
+    extractionMethod = extracted.method;
+    if (replicaQuestions.length === 0) {
+      throw new Error("No mandatory replica questions could be extracted from the uploaded replica.");
     }
   } else if (config.paperFileUrls && config.paperFileUrls.length > 0) {
     warnings.push("Replica file is attached, but no readable text was detected.");
@@ -1634,7 +1580,7 @@ async function buildQuestionBank(
 
   let replica: GeneratedQuestion[] = [];
   try {
-    replica = (await extractReplicaQuestions(paperText, catalog, subject)).questions;
+    replica = (await extractReplicaQuestions(paperText, catalog, subject, TOTAL)).questions;
   } catch (err) {
     logger.warn({ err }, "Replica question extraction failed; continuing without replica questions");
   }

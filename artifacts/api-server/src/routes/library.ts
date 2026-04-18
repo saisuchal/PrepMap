@@ -58,6 +58,14 @@ function toSlug(value: string): string {
   return n ? n.replace(/\s+/g, "_") : "untitled";
 }
 
+function legacyUnitTopicId(unitLibraryId: string, topicTitle: string): string {
+  return `utp_${unitLibraryId}_${toSlug(topicTitle)}`;
+}
+
+function legacyUnitSubtopicId(unitTopicId: string, subtopicTitle: string): string {
+  return `ust_${unitTopicId}_${toSlug(subtopicTitle)}`;
+}
+
 function sanitizeTopics(input: unknown): UnitTopicInput[] {
   if (!Array.isArray(input)) return [];
   return input
@@ -73,6 +81,11 @@ function sanitizeTopics(input: unknown): UnitTopicInput[] {
     .filter((t) => t.title.length > 0);
 }
 
+function normalizeAndSanitizeTopics(input: unknown): UnitTopicInput[] {
+  const sanitized = sanitizeTopics(input);
+  return normalizeExtractedTopics(sanitized);
+}
+
 function cleanGeneratedHeading(raw: unknown): string {
   return String(raw || "")
     .replace(/^\s*\d+(\.\d+)*\s*[-.)]?\s*/g, "")
@@ -83,17 +96,128 @@ function cleanGeneratedHeading(raw: unknown): string {
 }
 
 function compactTopicTitle(raw: unknown): string {
-  const t = cleanGeneratedHeading(raw)
+  let t = cleanGeneratedHeading(raw)
     .replace(/^third\s+party\s+package\s*[-:]\s*/i, "")
     .replace(/^topic\s*[-:]\s*/i, "")
     .trim();
+  // If the model returns list-like titles, keep only the first glanceable segment.
+  t = t.split(/\s*[,;|]\s*/)[0] || t;
+  // Keep "A - B" or "A — B" only when RHS stays compact.
+  const dashMatch = t.match(/^(.*?)\s*[—-]\s*(.*)$/);
+  if (dashMatch) {
+    const lhs = dashMatch[1].trim();
+    const rhs = dashMatch[2].trim();
+    if (rhs.split(/\s+/).length > 4) t = lhs;
+  }
+  // Remove formula-heavy parenthetical parts from headings.
+  t = t.replace(/\([^)]*(?:>=|<=|==|!=|arr\[|mid|low|high|o\()[^)]*\)/gi, "").trim();
+  t = t.replace(/\s+/g, " ").trim();
   return t;
 }
 
 function compactSubtopicTitle(raw: unknown): string {
-  return cleanGeneratedHeading(raw)
+  let t = cleanGeneratedHeading(raw)
     .replace(/^subtopic\s*[-:]\s*/i, "")
+    .split(/\s*[,;|]\s*/)[0] || cleanGeneratedHeading(raw);
+
+  // Convert equation-style condition snippets into a readable label.
+  t = t
+    .replace(
+      /\b(?:condition|check|rule)\s+arr\s*\[[^\]]+\]\s*(?:>=|<=|==|!=|>|<)\s*[a-z0-9_]+/gi,
+      "Condition check",
+    )
+    .replace(
+      /\barr\s*\[[^\]]+\]\s*(?:>=|<=|==|!=|>|<)\s*[a-z0-9_]+/gi,
+      "Condition check",
+    );
+
+  // Remove formula-heavy parenthetical parts from headings.
+  t = t.replace(/\([^)]*(?:>=|<=|==|!=|arr\[|mid|low|high|o\()[^)]*\)/gi, "");
+  t = t.replace(/\s+/g, " ").trim();
+
+  // Keep subtopic labels compact for map readability.
+  const words = t.split(/\s+/).filter(Boolean);
+  if (words.length > 6) t = words.slice(0, 6).join(" ");
+  return t
     .trim();
+}
+
+function compactFactText(raw: unknown): string {
+  let t = String(raw || "")
+    .replace(/^\s*[-*•]\s*/gm, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!t) return "";
+
+  const sentenceParts = t.match(/[^.!?]+[.!?]?/g)?.map((s) => s.trim()).filter(Boolean) ?? [];
+  if (sentenceParts.length > 2) t = sentenceParts.slice(0, 2).join(" ");
+
+  if (t.length > 220) {
+    const cut = t.slice(0, 220);
+    const lastBoundary = Math.max(cut.lastIndexOf("."), cut.lastIndexOf(";"), cut.lastIndexOf(","));
+    t = `${(lastBoundary > 120 ? cut.slice(0, lastBoundary) : cut).trim()}.`;
+  }
+  return t.trim();
+}
+
+function splitInlineOutlineFromTopicTitle(rawTopicTitle: string): { topicTitle: string; inlineSubtopics: string[] } {
+  const cleaned = String(rawTopicTitle || "").trim();
+  const colonIndex = cleaned.indexOf(":");
+  if (colonIndex <= 0) return { topicTitle: cleaned, inlineSubtopics: [] };
+
+  const lhs = cleaned.slice(0, colonIndex).trim();
+  const rhs = cleaned.slice(colonIndex + 1).trim();
+  if (!lhs || !rhs) return { topicTitle: cleaned, inlineSubtopics: [] };
+
+  const parts = rhs
+    .split(/\s*,\s*/)
+    .map((p) => p.trim())
+    .filter(Boolean);
+
+  // Treat as outline dump only when we clearly have a list.
+  if (parts.length < 2) return { topicTitle: cleaned, inlineSubtopics: [] };
+
+  return { topicTitle: lhs, inlineSubtopics: parts };
+}
+
+function normalizeExtractedTopics(rawTopics: Array<{ title?: string; subtopics?: string[] }>): UnitTopicInput[] {
+  const mergedByTopic = new Map<string, UnitTopicInput>();
+
+  for (const raw of rawTopics ?? []) {
+    const originalTitle = String(raw?.title || "").trim();
+    const { topicTitle: splitTopicTitle, inlineSubtopics } = splitInlineOutlineFromTopicTitle(originalTitle);
+    const title = compactTopicTitle(splitTopicTitle);
+    if (!title) continue;
+
+    const allSubtopicsRaw = [...inlineSubtopics, ...(Array.isArray(raw?.subtopics) ? raw.subtopics : [])];
+    const seenSub = new Set<string>();
+    const subtopics = allSubtopicsRaw
+      .map((s) => compactSubtopicTitle(s))
+      .filter((s) => {
+        if (!s) return false;
+        const k = normalizeText(s);
+        if (!k || seenSub.has(k)) return false;
+        seenSub.add(k);
+        return true;
+      });
+
+    const topicKey = normalizeText(title);
+    const existing = mergedByTopic.get(topicKey);
+    if (!existing) {
+      mergedByTopic.set(topicKey, { title, subtopics });
+      continue;
+    }
+
+    const existingSet = new Set(existing.subtopics.map((s) => normalizeText(s)));
+    for (const sub of subtopics) {
+      const k = normalizeText(sub);
+      if (!k || existingSet.has(k)) continue;
+      existingSet.add(k);
+      existing.subtopics.push(sub);
+    }
+  }
+
+  return Array.from(mergedByTopic.values());
 }
 
 async function materializeConfigNodesFromSelectedUnits(
@@ -452,9 +576,13 @@ async function saveFactsToUnitFacts(
   const unitCol = ["unit_library_id", "unit_id", "library_unit_id"].find((c) => colSet.has(c));
   const topicCol = ["topic_title", "topic", "topic_name"].find((c) => colSet.has(c));
   const subtopicCol = ["subtopic_title", "subtopic", "subtopic_name"].find((c) => colSet.has(c));
+  const topicIdCol = ["unit_topic_id", "topic_id"].find((c) => colSet.has(c));
+  const subtopicIdCol = ["unit_subtopic_id", "subtopic_id"].find((c) => colSet.has(c));
   const factTextCol = ["fact_text", "text", "fact", "content"].find((c) => colSet.has(c));
   const factTypeCol = ["fact_type", "type"].find((c) => colSet.has(c));
   const factIdCol = ["fact_id", "id"].find((c) => colSet.has(c));
+  const levelCol = colSet.has("level") ? "level" : null;
+  const sortOrderCol = colSet.has("sort_order") ? "sort_order" : null;
   const sourceCol = ["source_span", "source", "source_text", "source_ref"].find((c) => colSet.has(c));
   const createdAtCol = colSet.has("created_at") ? "created_at" : null;
   const updatedAtCol = colSet.has("updated_at") ? "updated_at" : null;
@@ -466,6 +594,8 @@ async function saveFactsToUnitFacts(
   const rows: Array<{
     topicTitle: string;
     subtopicTitle: string;
+    unitTopicId: string;
+    unitSubtopicId: string;
     factText: string;
     factType: string;
     factId: string;
@@ -475,12 +605,15 @@ async function saveFactsToUnitFacts(
     const topicTitle = String(topic.title || "").trim();
     if (!topicTitle) continue;
     const topicKey = normalizeText(topicTitle);
+    const unitTopicId = legacyUnitTopicId(unitLibraryId, topicTitle);
     for (const fact of topicFacts.get(topicKey) ?? []) {
       const text = String(fact?.text || "").trim();
       if (!text) continue;
       rows.push({
         topicTitle,
         subtopicTitle: "",
+        unitTopicId,
+        unitSubtopicId: "",
         factText: text,
         factType: String(fact?.type || "note"),
         factId: String(fact?.factId || "").trim(),
@@ -491,6 +624,7 @@ async function saveFactsToUnitFacts(
     for (const subtopicRaw of topic.subtopics ?? []) {
       const subtopicTitle = String(subtopicRaw || "").trim();
       if (!subtopicTitle) continue;
+      const unitSubtopicId = legacyUnitSubtopicId(unitTopicId, subtopicTitle);
       const factsKey = `${topicKey}|${normalizeText(subtopicTitle)}`;
       for (const fact of subtopicFacts.get(factsKey) ?? []) {
         const text = String(fact?.text || "").trim();
@@ -498,6 +632,8 @@ async function saveFactsToUnitFacts(
         rows.push({
           topicTitle,
           subtopicTitle,
+          unitTopicId,
+          unitSubtopicId,
           factText: text,
           factType: String(fact?.type || "note"),
           factId: String(fact?.factId || "").trim(),
@@ -509,7 +645,8 @@ async function saveFactsToUnitFacts(
 
   if (rows.length === 0) return;
 
-  for (const row of rows) {
+  for (let rowIndex = 0; rowIndex < rows.length; rowIndex++) {
+    const row = rows[rowIndex];
     const columnsSql: string[] = [unitCol];
     const valuesSql: string[] = ["$1"];
     const values: unknown[] = [unitLibraryId];
@@ -525,6 +662,16 @@ async function saveFactsToUnitFacts(
       valuesSql.push(`$${index++}`);
       values.push(row.subtopicTitle || null);
     }
+    if (topicIdCol) {
+      columnsSql.push(topicIdCol);
+      valuesSql.push(`$${index++}`);
+      values.push(row.unitTopicId || null);
+    }
+    if (subtopicIdCol) {
+      columnsSql.push(subtopicIdCol);
+      valuesSql.push(`$${index++}`);
+      values.push(row.unitSubtopicId || null);
+    }
     columnsSql.push(factTextCol);
     valuesSql.push(`$${index++}`);
     values.push(row.factText);
@@ -533,10 +680,24 @@ async function saveFactsToUnitFacts(
       valuesSql.push(`$${index++}`);
       values.push(row.factType);
     }
+    if (levelCol) {
+      columnsSql.push(levelCol);
+      valuesSql.push(`$${index++}`);
+      values.push(row.subtopicTitle ? "subtopic" : "topic");
+    }
     if (factIdCol) {
       columnsSql.push(factIdCol);
       valuesSql.push(`$${index++}`);
-      values.push(row.factId || randomUUID());
+      if (factIdCol === "id") {
+        values.push(randomUUID());
+      } else {
+        values.push(row.factId || `uf_${randomUUID().slice(0, 8)}`);
+      }
+    }
+    if (sortOrderCol) {
+      columnsSql.push(sortOrderCol);
+      valuesSql.push(`$${index++}`);
+      values.push(rowIndex + 1);
     }
     if (sourceCol) {
       columnsSql.push(sourceCol);
@@ -582,10 +743,74 @@ async function extractFactsForMaterial(
   topicFacts: Map<string, ExtractedFact[]>;
   subtopicFacts: Map<string, ExtractedFact[]>;
 }> {
-  const trimmedText = String(readingText || "").trim().slice(0, 18000);
+  const trimmedText = String(readingText || "").trim().slice(0, 9000);
   if (!trimmedText) return { topicFacts: new Map(), subtopicFacts: new Map() };
+  const allow = new Set(["definition", "rule", "note", "pitfall", "insight", "example_candidate"]);
+  const topicFacts = new Map<string, ExtractedFact[]>();
+  const subtopicFacts = new Map<string, ExtractedFact[]>();
 
-  const prompt = `You are extracting factual grounding atoms for exam-prep generation.
+  const pushUniqueFact = (target: Map<string, ExtractedFact[]>, key: string, facts: ExtractedFact[]) => {
+    const existing = target.get(key) ?? [];
+    const seen = new Set(existing.map((f) => `${f.type}|${normalizeText(f.text)}`));
+    for (const fact of facts) {
+      const factKey = `${fact.type}|${normalizeText(fact.text)}`;
+      if (!fact.text || seen.has(factKey)) continue;
+      seen.add(factKey);
+      existing.push(fact);
+    }
+    target.set(key, existing);
+  };
+
+  const parseFactsRows = (
+    parsed: {
+      topicFacts?: Array<{ topicTitle?: string; facts?: ExtractedFact[] }>;
+      subtopicFacts?: Array<{ topicTitle?: string; subtopicTitle?: string; facts?: ExtractedFact[] }>;
+    },
+    chunkTopics: UnitTopicInput[],
+  ) => {
+    const normTopicSet = new Set(chunkTopics.map((t) => normalizeText(t.title)));
+    const normSubtopicSet = new Set(
+      chunkTopics.flatMap((t) => t.subtopics.map((s) => `${normalizeText(t.title)}|${normalizeText(s)}`))
+    );
+
+    for (const row of parsed.topicFacts ?? []) {
+      const topicTitle = String(row?.topicTitle || "").trim();
+      const normTopic = normalizeText(topicTitle);
+      if (!normTopic || !normTopicSet.has(normTopic)) continue;
+      const facts = (Array.isArray(row?.facts) ? row.facts : [])
+        .map((f) => ({
+          factId: String(f?.factId || `uf_${randomUUID().slice(0, 8)}`).trim(),
+          type: allow.has(String(f?.type || "").trim())
+            ? (String(f?.type || "").trim() as ExtractedFact["type"])
+            : "note",
+          text: compactFactText(f?.text),
+          sourceSpan: String(f?.sourceSpan || "").trim(),
+        }))
+        .filter((f) => f.text);
+      pushUniqueFact(topicFacts, normTopic, facts);
+    }
+
+    for (const row of parsed.subtopicFacts ?? []) {
+      const topicTitle = String(row?.topicTitle || "").trim();
+      const subtopicTitle = String(row?.subtopicTitle || "").trim();
+      const key = `${normalizeText(topicTitle)}|${normalizeText(subtopicTitle)}`;
+      if (!normSubtopicSet.has(key)) continue;
+      const facts = (Array.isArray(row?.facts) ? row.facts : [])
+        .map((f) => ({
+          factId: String(f?.factId || `uf_${randomUUID().slice(0, 8)}`).trim(),
+          type: allow.has(String(f?.type || "").trim())
+            ? (String(f?.type || "").trim() as ExtractedFact["type"])
+            : "note",
+          text: compactFactText(f?.text),
+          sourceSpan: String(f?.sourceSpan || "").trim(),
+        }))
+        .filter((f) => f.text);
+      pushUniqueFact(subtopicFacts, key, facts);
+    }
+  };
+
+  const extractChunk = async (chunkTopics: UnitTopicInput[]) => {
+    const basePrompt = `You are extracting factual grounding atoms for exam-prep generation.
 
 Subject: ${subjectName}
 Unit: ${unitTitle}
@@ -612,68 +837,79 @@ Return ONLY valid JSON:
 }
 
 Rules:
+- The first character of your response must be { and the last must be }.
+- No markdown fences, no prose, no explanation outside JSON.
 - Use only topic/subtopic titles provided below (exact match).
-- 1 to 6 short facts per topic/subtopic.
-- Keep text concise, factual, non-duplicated.
+- 1 to 3 short, high-signal facts per topic/subtopic whenever source supports it.
+- Keep each fact readable in one short sentence (or at most two short sentences).
+- Keep text concise, factual, actionable, and non-duplicated.
 - Do not invent facts not inferable from source text.
-- Prefer beginner-useful facts.
+- Prefer beginner-useful facts (definition, rule, pitfall, insight, example_candidate).
+- Avoid generic statements without concrete content.
 - If no reliable fact exists for an item, return empty facts for that item.`;
 
-  const response = await askAI(
-    "You extract strict JSON fact grounding atoms from reading material.",
-    `${prompt}
+    const response = await askAI(
+      "Return one strict JSON object only. No markdown. No commentary.",
+      `${basePrompt}
 
-TOPIC/SUBTOPIC LIST:
-${JSON.stringify(topics, null, 2)}
+TOPIC/SUBTOPIC LIST (CHUNK):
+${JSON.stringify(chunkTopics, null, 2)}
 
 SOURCE READING MATERIAL:
 ${trimmedText}`,
-    6500,
-    { requireJson: true },
+      12000,
+      { requireJson: true },
+    );
+
+    const responseText = String(response || "").trim();
+    if (!responseText) {
+      throw new Error("Facts extraction failed: model returned empty response");
+    }
+
+    let parsed: {
+      topicFacts?: Array<{ topicTitle?: string; facts?: ExtractedFact[] }>;
+      subtopicFacts?: Array<{ topicTitle?: string; subtopicTitle?: string; facts?: ExtractedFact[] }>;
+    };
+    try {
+      parsed = parseFirstModelJsonObject<{
+        topicFacts?: Array<{ topicTitle?: string; facts?: ExtractedFact[] }>;
+        subtopicFacts?: Array<{ topicTitle?: string; subtopicTitle?: string; facts?: ExtractedFact[] }>;
+      }>(responseText);
+    } catch (parseErr) {
+      const snippet = responseText.slice(0, 400).replace(/\s+/g, " ");
+      const reason = parseErr instanceof Error ? parseErr.message : "unknown parse error";
+      throw new Error(`Facts extraction JSON parse failed: ${reason}. Model snippet: ${snippet}`);
+    }
+    parseFactsRows(parsed, chunkTopics);
+  };
+
+  // Hard-cap calls to <= 3 per unit to respect low-RPM model quotas.
+  const maxCallsPerUnit = 3;
+  const totalItems = topics.reduce(
+    (acc, topic) => acc + 1 + (Array.isArray(topic.subtopics) ? topic.subtopics.length : 0),
+    0,
   );
-
-  const parsed = parseFirstModelJsonObject<{
-    topicFacts?: Array<{ topicTitle?: string; facts?: ExtractedFact[] }>;
-    subtopicFacts?: Array<{ topicTitle?: string; subtopicTitle?: string; facts?: ExtractedFact[] }>;
-  }>(response);
-
-  const allow = new Set(["definition", "rule", "note", "pitfall", "insight", "example_candidate"]);
-  const normTopicSet = new Set(topics.map((t) => normalizeText(t.title)));
-  const normSubtopicSet = new Set(
-    topics.flatMap((t) => t.subtopics.map((s) => `${normalizeText(t.title)}|${normalizeText(s)}`))
-  );
-
-  const topicFacts = new Map<string, ExtractedFact[]>();
-  for (const row of parsed.topicFacts ?? []) {
-    const topicTitle = String(row?.topicTitle || "").trim();
-    const normTopic = normalizeText(topicTitle);
-    if (!normTopic || !normTopicSet.has(normTopic)) continue;
-    const facts = (Array.isArray(row?.facts) ? row.facts : [])
-      .map((f) => ({
-        factId: String(f?.factId || `uf_${randomUUID().slice(0, 8)}`).trim(),
-        type: allow.has(String(f?.type || "").trim()) ? (String(f?.type || "").trim() as ExtractedFact["type"]) : "note",
-        text: String(f?.text || "").trim(),
-        sourceSpan: String(f?.sourceSpan || "").trim(),
-      }))
-      .filter((f) => f.text);
-    topicFacts.set(normTopic, facts);
+  const desiredChunks = Math.min(maxCallsPerUnit, Math.max(1, topics.length));
+  const maxItemsPerChunk = Math.max(1, Math.ceil(totalItems / desiredChunks));
+  const chunks: UnitTopicInput[][] = [];
+  let current: UnitTopicInput[] = [];
+  let currentItems = 0;
+  for (const topic of topics) {
+    const topicItems = 1 + (Array.isArray(topic.subtopics) ? topic.subtopics.length : 0);
+    if (current.length > 0 && currentItems + topicItems > maxItemsPerChunk && chunks.length < desiredChunks - 1) {
+      chunks.push(current);
+      current = [];
+      currentItems = 0;
+    }
+    current.push(topic);
+    currentItems += topicItems;
   }
+  if (current.length > 0) chunks.push(current);
 
-  const subtopicFacts = new Map<string, ExtractedFact[]>();
-  for (const row of parsed.subtopicFacts ?? []) {
-    const topicTitle = String(row?.topicTitle || "").trim();
-    const subtopicTitle = String(row?.subtopicTitle || "").trim();
-    const key = `${normalizeText(topicTitle)}|${normalizeText(subtopicTitle)}`;
-    if (!normSubtopicSet.has(key)) continue;
-    const facts = (Array.isArray(row?.facts) ? row.facts : [])
-      .map((f) => ({
-        factId: String(f?.factId || `uf_${randomUUID().slice(0, 8)}`).trim(),
-        type: allow.has(String(f?.type || "").trim()) ? (String(f?.type || "").trim() as ExtractedFact["type"]) : "note",
-        text: String(f?.text || "").trim(),
-        sourceSpan: String(f?.sourceSpan || "").trim(),
-      }))
-      .filter((f) => f.text);
-    subtopicFacts.set(key, facts);
+  // Ensure non-empty and capped.
+  const finalChunks = chunks.length > 0 ? chunks : [topics.slice(0, 1)];
+  for (const chunkTopics of finalChunks) {
+    await extractChunk(chunkTopics);
   }
 
   return { topicFacts, subtopicFacts };
@@ -735,13 +971,17 @@ STRICT RULES:
 - Use concise exam-relevant wording.
 - Topic titles must be specific and informative.
 - Subtopics must be concrete enough to generate exam questions directly.
+- Never output a flattened outline inside a topic title. Do not return patterns like "Topic: item1, item2, item3".
+- If source has section-style bullets under a heading, keep heading as topic and move bullets into subtopics.
 - Topic title style:
   - Keep compact, map-friendly names (prefer 1-4 words).
   - Avoid long sentence-style titles.
+  - Never include formulas, code conditions, or complexity expressions in titles (for example avoid "arr[i] >= x", "O(log n)", "mid = ..."). Put those in explanations instead.
   - Avoid generic titles like "Overview", "Concepts", "Introduction", "Theory", "Methods" unless truly present as a heading.
 - Subtopic title style:
   - Keep compact, map-friendly labels (prefer 1-5 words).
   - Prefer actionable short labels (for example: "Login request", "Handle login response", "Store JWT").
+  - Never include formula text or code-like expressions in titles.
   - Avoid redundant prefixes/suffixes like "Subtopic -", "Concept of", "Basics of".
 - Remove heading numbering from output titles (e.g., "3.3.1 Cookies.set()" -> "Cookies.set()").
 - Preserve source order.
@@ -773,22 +1013,7 @@ ${JSON.stringify(capped, null, 2)}`,
     const materialId = String(row?.materialId || "").trim();
     if (!materialId) continue;
     const unitTitle = cleanGeneratedHeading(row?.unitTitle);
-    const topics = (row.topics ?? [])
-      .map((t) => {
-        const title = compactTopicTitle(t?.title);
-        const seenSub = new Set<string>();
-        const subtopics = (Array.isArray(t?.subtopics) ? t.subtopics : [])
-          .map((s) => compactSubtopicTitle(s))
-          .filter((s) => {
-            if (!s) return false;
-            const k = normalizeText(s);
-            if (!k || seenSub.has(k)) return false;
-            seenSub.add(k);
-            return true;
-          });
-        return { title, subtopics };
-      })
-      .filter((t) => t.title.length > 0);
+    const topics = normalizeExtractedTopics(row.topics ?? []);
     out.set(materialId, {
       unitTitle,
       topics,
@@ -924,6 +1149,21 @@ router.get("/admin/library/units", requireAdmin, async (req, res) => {
     }
 
     const unitFactsCounts = await loadUnitFactCountsFromUnitFacts(unitIds);
+    const canonicalRows = unitIds.length > 0
+      ? await db
+          .select({
+            unitLibraryId: canonicalNodesTable.unitLibraryId,
+          })
+          .from(canonicalNodesTable)
+          .where(inArray(canonicalNodesTable.unitLibraryId, unitIds))
+      : [];
+    const canonicalCountByUnitId = new Map<string, number>();
+    for (const row of canonicalRows) {
+      const key = String(row.unitLibraryId || "").trim();
+      if (!key) continue;
+      canonicalCountByUnitId.set(key, (canonicalCountByUnitId.get(key) ?? 0) + 1);
+    }
+
     if (unitFactsCounts) {
       for (const unit of units) {
         const current = summaryByUnitId.get(unit.id) ?? {
@@ -950,6 +1190,8 @@ router.get("/admin/library/units", requireAdmin, async (req, res) => {
           subtopicItems: summaryByUnitId.get(u.id)?.subtopicItems ?? 0,
           hasFacts: (summaryByUnitId.get(u.id)?.factAtomsCount ?? 0) > 0,
         },
+        canonicalNodeCount: canonicalCountByUnitId.get(u.id) ?? 0,
+        hasCanonicalNodes: (canonicalCountByUnitId.get(u.id) ?? 0) > 0,
         createdAt: u.createdAt?.toISOString() ?? null,
         updatedAt: u.updatedAt?.toISOString() ?? null,
       })),
@@ -1050,7 +1292,7 @@ router.post("/admin/library/units/extract-from-text", requireAdmin, async (req, 
         const existingTopics = Array.isArray(existing.topics) ? existing.topics : [];
         const hasExistingTopics = existingTopics.length > 0;
         const hasExistingSource = Boolean((existing.sourceText ?? "").trim());
-        effectiveTopics = hasExistingTopics ? sanitizeTopics(existingTopics) : normalizedTopics;
+        effectiveTopics = hasExistingTopics ? normalizeAndSanitizeTopics(existingTopics) : normalizedTopics;
         const patch: {
           unitTitle?: string;
           topics?: UnitTopicInput[];
@@ -1105,23 +1347,14 @@ router.post("/admin/library/units/extract-from-text", requireAdmin, async (req, 
 
       if (!unitLibraryId || effectiveTopics.length === 0) continue;
 
-      let topicFacts = new Map<string, ExtractedFact[]>();
-      let subtopicFacts = new Map<string, ExtractedFact[]>();
-      try {
-        const extractedFacts = await extractFactsForMaterial(
-          subject.name,
-          effectiveUnitTitle,
-          effectiveTopics,
-          material.readingText,
-        );
-        topicFacts = extractedFacts.topicFacts;
-        subtopicFacts = extractedFacts.subtopicFacts;
-      } catch (factErr) {
-        req.log.warn(
-          { err: factErr, subjectId, unitTitle: effectiveUnitTitle },
-          "Facts extraction failed for unit; continuing with structure-only save",
-        );
-      }
+      const extractedFacts = await extractFactsForMaterial(
+        subject.name,
+        effectiveUnitTitle,
+        effectiveTopics,
+        material.readingText,
+      );
+      const topicFacts = extractedFacts.topicFacts;
+      const subtopicFacts = extractedFacts.subtopicFacts;
 
       await saveFactsToUnitFacts(unitLibraryId, effectiveTopics, topicFacts, subtopicFacts);
     }
@@ -1143,7 +1376,7 @@ router.post("/admin/library/units/upsert", requireAdmin, async (req, res) => {
     const subjectId = String(req.body?.subjectId || "").trim();
     const unitTitle = String(req.body?.unitTitle || "").trim();
     const sourceText = req.body?.sourceText ? String(req.body.sourceText) : null;
-    const topics = sanitizeTopics(req.body?.topics);
+    const topics = normalizeAndSanitizeTopics(req.body?.topics);
 
     if (!subjectId || !unitTitle) {
       res.status(400).json({ error: "subjectId and unitTitle are required" });
@@ -1283,7 +1516,7 @@ router.put("/admin/library/units/:id", requireAdmin, async (req, res) => {
     }
 
     if (nextTopicsRaw !== undefined) {
-      patch.topics = sanitizeTopics(nextTopicsRaw);
+      patch.topics = normalizeAndSanitizeTopics(nextTopicsRaw);
     }
 
     if (nextSourceRaw !== undefined) {
@@ -1308,6 +1541,76 @@ router.put("/admin/library/units/:id", requireAdmin, async (req, res) => {
     });
   } catch (error) {
     req.log.error({ err: error }, "Failed to update library unit");
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+router.post("/admin/library/units/:id/cleanup-titles", requireAdmin, async (req, res) => {
+  try {
+    const id = String(req.params.id || "").trim();
+    const preview = String(req.query.preview || "").trim().toLowerCase() === "true";
+    if (!id) {
+      res.status(400).json({ error: "id is required" });
+      return;
+    }
+
+    const [existing] = await db
+      .select({
+        id: unitLibraryTable.id,
+        topics: unitLibraryTable.topics,
+      })
+      .from(unitLibraryTable)
+      .where(eq(unitLibraryTable.id, id))
+      .limit(1);
+    if (!existing) {
+      res.status(404).json({ error: "Unit not found" });
+      return;
+    }
+
+    const canonicalForUnit = await db
+      .select({ id: canonicalNodesTable.id })
+      .from(canonicalNodesTable)
+      .where(eq(canonicalNodesTable.unitLibraryId, id))
+      .limit(1);
+    if (canonicalForUnit.length > 0) {
+      res.status(409).json({
+        error: "Cleanup is disabled because canonical nodes already exist for this unit.",
+      });
+      return;
+    }
+
+    const beforeTopics = sanitizeTopics(existing.topics);
+    const cleanedTopics = normalizeAndSanitizeTopics(existing.topics);
+    const updated = JSON.stringify(beforeTopics) !== JSON.stringify(cleanedTopics);
+
+    if (updated && !preview) {
+      await db
+        .update(unitLibraryTable)
+        .set({
+          topics: cleanedTopics,
+          updatedAt: new Date(),
+        })
+        .where(eq(unitLibraryTable.id, id));
+    }
+
+    const topicCountBefore = beforeTopics.length;
+    const topicCountAfter = cleanedTopics.length;
+    const subtopicCountBefore = beforeTopics.reduce((acc, topic) => acc + topic.subtopics.length, 0);
+    const subtopicCountAfter = cleanedTopics.reduce((acc, topic) => acc + topic.subtopics.length, 0);
+
+    res.json({
+      success: true,
+      unitId: id,
+      preview,
+      updated,
+      topicCountBefore,
+      topicCountAfter,
+      subtopicCountBefore,
+      subtopicCountAfter,
+      topics: cleanedTopics,
+    });
+  } catch (error) {
+    req.log.error({ err: error }, "Failed to cleanup unit titles");
     res.status(500).json({ error: "Internal server error" });
   }
 });
@@ -1432,6 +1735,71 @@ router.put("/admin/library/config-units/:configId", requireAdmin, async (req, re
     });
   } catch (error) {
     req.log.error({ err: error }, "Failed to update config unit links");
+    res.status(500).json({ error: error instanceof Error ? error.message : "Internal server error" });
+  }
+});
+
+router.post("/admin/library/units/:id/generate-facts", requireAdmin, async (req, res) => {
+  try {
+    const unitId = String(req.params.id || "").trim();
+    if (!unitId) {
+      res.status(400).json({ error: "unit id is required" });
+      return;
+    }
+
+    const [unit] = await db
+      .select({
+        id: unitLibraryTable.id,
+        subjectId: unitLibraryTable.subjectId,
+        unitTitle: unitLibraryTable.unitTitle,
+        topics: unitLibraryTable.topics,
+        sourceText: unitLibraryTable.sourceText,
+      })
+      .from(unitLibraryTable)
+      .where(eq(unitLibraryTable.id, unitId))
+      .limit(1);
+
+    if (!unit) {
+      res.status(404).json({ error: "Unit not found" });
+      return;
+    }
+
+    const [subject] = await db
+      .select({ id: subjectsTable.id, name: subjectsTable.name })
+      .from(subjectsTable)
+      .where(eq(subjectsTable.id, unit.subjectId))
+      .limit(1);
+    if (!subject) {
+      res.status(404).json({ error: "Subject not found for unit" });
+      return;
+    }
+
+    const topics = sanitizeTopics(unit.topics);
+    if (topics.length === 0) {
+      res.status(400).json({ error: "Unit has no topics/subtopics to generate facts for" });
+      return;
+    }
+
+    const sourceText = String(unit.sourceText || "").trim();
+    if (!sourceText) {
+      res.status(400).json({ error: "Reading material (sourceText) is empty for this unit. Update unit source text first." });
+      return;
+    }
+
+    const extracted = await extractFactsForMaterial(subject.name, unit.unitTitle, topics, sourceText);
+    await saveFactsToUnitFacts(unit.id, topics, extracted.topicFacts, extracted.subtopicFacts);
+
+    const countMap = await loadUnitFactCountsFromUnitFacts([unit.id]);
+    const factCount = countMap?.get(unit.id) ?? 0;
+
+    res.json({
+      success: true,
+      unitId: unit.id,
+      factCount,
+      replaced: true,
+    });
+  } catch (error) {
+    req.log.error({ err: error }, "Failed to regenerate facts for unit");
     res.status(500).json({ error: error instanceof Error ? error.message : "Internal server error" });
   }
 });

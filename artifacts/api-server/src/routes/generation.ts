@@ -13,6 +13,7 @@ import {
   configsTable,
   nodesTable,
   configQuestionsTable,
+  configReplicaQuestionsTable,
   configUnitLinksTable,
   subjectsTable,
   unitLibraryTable,
@@ -25,10 +26,11 @@ import { runGeneration, getProgress, buildLaneAConfigPackage, isLikelyQuestionTe
 import { requireAdmin } from "../middleware/adminAuth";
 import { askAI } from "../lib/ai";
 import { repairBrokenFormulaBullets } from "../lib/textFormatting";
+import { z } from "zod/v4";
 
 const router: IRouter = Router();
 
-type CheapGenerationMode = "explanations_only" | "explanations_and_questions" | "questions_only";
+type CheapGenerationMode = "explanations_only" | "questions_only";
 
 type CheapImportProgress = {
   configId: string;
@@ -101,7 +103,36 @@ function parseCheapGenerationMode(value: unknown): CheapGenerationMode {
   const raw = String(value || "").trim().toLowerCase();
   if (raw === "explanations_only") return "explanations_only";
   if (raw === "questions_only") return "questions_only";
-  return "explanations_and_questions";
+  return "explanations_only";
+}
+
+const SaveReplicaQuestionsBody = z.object({
+  questions: z.array(z.object({
+    markType: z.enum(["Foundational", "Applied"]),
+    question: z.string().min(1),
+    answer: z.string().default(""),
+    unitTitle: z.string().min(1),
+    topicTitle: z.string().min(1),
+    subtopicTitle: z.string().min(1),
+    isStarred: z.boolean().optional(),
+  })),
+});
+
+async function loadSavedReplicaQuestions(configId: string) {
+  const rows = await db
+    .select()
+    .from(configReplicaQuestionsTable)
+    .where(eq(configReplicaQuestionsTable.configId, configId));
+  rows.sort((a, b) => Number(a.sortOrder || 0) - Number(b.sortOrder || 0) || Number(a.id || 0) - Number(b.id || 0));
+  return rows.map((r) => ({
+    markType: r.markType === "Applied" ? "Applied" as const : "Foundational" as const,
+    question: String(r.question || "").trim(),
+    answer: String(r.answer || "").trim(),
+    unitTitle: String(r.unitTitle || "").trim(),
+    topicTitle: String(r.topicTitle || "").trim(),
+    subtopicTitle: String(r.subtopicTitle || "").trim(),
+    isStarred: Boolean(r.isStarred),
+  })).filter((q) => q.question && q.unitTitle && q.topicTitle && q.subtopicTitle);
 }
 
 function isInstructionalAnswerPlaceholder(answer: string): boolean {
@@ -141,6 +172,44 @@ function buildExamReadyFallbackAnswer(
     "State the core definition or formula briefly.",
     "Apply it directly and present the final answer clearly.",
   ].join("\n");
+}
+
+function inferMarkTypeFromQuestionText(questionText: string): "Foundational" | "Applied" {
+  const text = String(questionText || "").toLowerCase();
+  if (!text) return "Foundational";
+  if (/\b(compare|differentiate|analy[sz]e|evaluate|justify|derive|design|implement|solve|case study|with steps|algorithm)\b/.test(text)) {
+    return "Applied";
+  }
+  return "Foundational";
+}
+
+function resolveMarkType(raw: unknown, rawMarks: unknown, questionText: string): "Foundational" | "Applied" {
+  const markType = String(raw || "").trim();
+  if (markType === "Applied" || markType === "Foundational") return markType;
+  const marksNum = Number(rawMarks);
+  if (Number.isFinite(marksNum) && marksNum > 0) {
+    return marksNum <= 3 ? "Foundational" : "Applied";
+  }
+  return inferMarkTypeFromQuestionText(questionText);
+}
+
+function compactReadableExplanation(raw: string): string {
+  const cleaned = repairBrokenFormulaBullets(String(raw || "").trim())
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+  if (!cleaned) return "";
+
+  // If model returns one dense paragraph, split after first sentence for readability.
+  if (!cleaned.includes("\n")) {
+    const sentenceParts = cleaned.match(/[^.!?]+[.!?]?/g)?.map((s) => s.trim()).filter(Boolean) ?? [];
+    if (sentenceParts.length >= 2) {
+      const first = sentenceParts[0];
+      const rest = sentenceParts.slice(1).join(" ").trim();
+      if (first && rest) return `${first}\n\n${rest}`;
+    }
+  }
+  return cleaned;
 }
 
 function explanationKey(unitTitle: string, topicTitle: string, subtopicTitle: string): string {
@@ -209,7 +278,7 @@ Requirements:
     900,
   );
 
-  return repairBrokenFormulaBullets(response.trim());
+  return compactReadableExplanation(response);
 }
 
 async function generateTopicExplanation(
@@ -238,7 +307,7 @@ Requirements:
     700,
   );
 
-  return repairBrokenFormulaBullets(response.trim());
+  return compactReadableExplanation(response);
 }
 
 async function loadReusableExplanationMap(
@@ -414,7 +483,7 @@ function parseImportBody(body: unknown): {
 
   const questions: ImportQuestion[] = questionsRaw
     .map((q: any) => ({
-      markType: q?.markType === "Applied" ? "Applied" : "Foundational",
+      markType: resolveMarkType(q?.markType, q?.marks, q?.question),
       question: String(q?.question || "").trim(),
       answer: "",
       unitTitle: String(q?.unitTitle || "").trim(),
@@ -622,14 +691,16 @@ router.post("/configs/:id/upload", requireAdmin, async (req, res) => {
   try {
     const { id } = UploadConfigFilesParams.parse(req.params);
     const body = UploadConfigFilesBody.parse(req.body);
-    const syllabusFileUrl = normalizeUploadedObjectPath(body.syllabusFileUrl);
+    const syllabusFileUrl = typeof body.syllabusFileUrl === "string" && body.syllabusFileUrl.trim().length > 0
+      ? normalizeUploadedObjectPath(body.syllabusFileUrl)
+      : null;
     const paperFileUrls = body.paperFileUrls.map((url) => normalizeUploadedObjectPath(url));
     if (paperFileUrls.length > 1) {
       res.status(400).json({ error: "Only one replica paper is allowed per config. Uploading again will replace it." });
       return;
     }
 
-    if (!isSupportedStoragePath(syllabusFileUrl)) {
+    if (syllabusFileUrl && !isSupportedStoragePath(syllabusFileUrl)) {
       res.status(400).json({ error: "syllabusFileUrl must start with /objects/ or /supabase/" });
       return;
     }
@@ -654,7 +725,7 @@ router.post("/configs/:id/upload", requireAdmin, async (req, res) => {
     await db
       .update(configsTable)
       .set({
-        syllabusFileUrl,
+        ...(syllabusFileUrl ? { syllabusFileUrl } : {}),
         paperFileUrls,
         updatedAt: new Date(),
       })
@@ -757,20 +828,52 @@ router.post("/configs/:id/cheap/lane-a", requireAdmin, async (req, res) => {
     const { id } = TriggerGenerationParams.parse(req.params);
     const pkg = await buildLaneAConfigPackage(id);
     const mode = parseCheapGenerationMode((req.body as any)?.mode);
+    const ignoreSavedReplica = Boolean((req.body as any)?.ignoreSavedReplica);
+    const savedReplicaQuestions = ignoreSavedReplica ? [] : await loadSavedReplicaQuestions(id);
+    if (savedReplicaQuestions.length > 0) {
+      pkg.replicaQuestions = savedReplicaQuestions;
+      pkg.warnings = [
+        ...pkg.warnings,
+        `Using ${savedReplicaQuestions.length} saved replica question(s) from config. Extraction output is ignored until saved questions are cleared/replaced.`,
+      ];
+      pkg.replicaExtraction = {
+        hasReplicaFile: pkg.replicaExtraction.hasReplicaFile,
+        extractedPaperTextLength: pkg.replicaExtraction.extractedPaperTextLength,
+        extractionMethod: "model",
+      };
+    }
 
     const isQuestionsOnly = mode === "questions_only";
     const isExplanationsOnly = mode === "explanations_only";
 
-    const effectiveStarTarget =
-      isExplanationsOnly ? 0 : pkg.replicaQuestions.length > 0 ? pkg.totalStarTarget : 0;
-    const starredReplica = pkg.replicaQuestions.filter((q) => q.isStarred).length;
     const totalQuestionTarget = isExplanationsOnly ? 0 : pkg.totalQuestionTarget;
+    const mandatoryReplicaQuestions = isExplanationsOnly
+      ? []
+      : pkg.replicaQuestions.slice(0, totalQuestionTarget);
+    const droppedReplicaCount = isExplanationsOnly
+      ? 0
+      : Math.max(0, pkg.replicaQuestions.length - mandatoryReplicaQuestions.length);
+    const starredReplica = mandatoryReplicaQuestions.filter((q) => q.isStarred).length;
+    const effectiveStarTarget = isExplanationsOnly
+      ? 0
+      : mandatoryReplicaQuestions.length >= totalQuestionTarget
+        ? starredReplica
+        : mandatoryReplicaQuestions.length > 0
+          ? pkg.totalStarTarget
+          : 0;
     const remainingStarsNeeded = Math.max(0, effectiveStarTarget - starredReplica);
     const remainingQuestionsNeeded = Math.max(
       0,
-      totalQuestionTarget - pkg.replicaQuestions.length,
+      totalQuestionTarget - mandatoryReplicaQuestions.length,
     );
     const structureWithFacts = buildStructureWithFacts(pkg.structure, pkg.factGrounding);
+    const structureForPrompt = isQuestionsOnly ? pkg.structure : structureWithFacts;
+    const laneAWarnings = [...pkg.warnings];
+    if (droppedReplicaCount > 0) {
+      laneAWarnings.push(
+        `Replica-first cap applied: kept ${mandatoryReplicaQuestions.length} mandatory replica questions and dropped ${droppedReplicaCount} extras to match total question target ${totalQuestionTarget}.`
+      );
+    }
 
     const masterPrompt = `You are an exam prep content generator. Your only job is to write a single valid JSON object directly into a downloadable file artifact named "exam_prep_output.json".
 
@@ -837,11 +940,10 @@ router.post("/configs/:id/cheap/lane-a", requireAdmin, async (req, res) => {
     - If subject context is technical, use conventions and syntax appropriate to this subject context only.
     - explanations_only: populate units fully, set "questions": [].
     - questions_only: write unit/topic/subtopic titles plus all required fields (explanation, example_block, support_note, learning_goal, prerequisite_titles, next_recommended_titles) as short single-sentence placeholders — do not skip any field. Populate questions fully.
-    - explanations_and_questions: populate both units and questions fully.
     - Include all mandatory replica questions exactly as given below (skip this only for explanations_only mode).
     - Total questions required: ${totalQuestionTarget}
     - Total starred required: ${effectiveStarTarget}
-    - Replica questions already included: ${pkg.replicaQuestions.length}
+    - Replica questions already included: ${mandatoryReplicaQuestions.length}
     - Remaining questions to generate: ${remainingQuestionsNeeded}
     - Remaining starred to allocate across non-replica questions: ${remainingStarsNeeded}
     - Distribute starred questions evenly — no more than 2 consecutive non-starred questions before a starred one.
@@ -863,6 +965,7 @@ router.post("/configs/:id/cheap/lane-a", requireAdmin, async (req, res) => {
     - unitTitle/topicTitle/subtopicTitle in each question must exactly match titles from STRUCTURE.
     - markType must be only "Foundational" or "Applied".
     - Map marks to labels as: 1-3 marks => Foundational, 4+ marks => Applied.
+    - If marks are not provided, classify by demand: definition/list/short-explain => Foundational, analyze/compare/justify/design/solve-with-steps => Applied.
     - Keep mandatory replica questions verbatim for question text.
     - Topic/subtopic explanations must be beginner-friendly and written in simple English.
     - Each topic/subtopic explanation must be concept-only — no examples inside explanation fields.
@@ -880,11 +983,17 @@ router.post("/configs/:id/cheap/lane-a", requireAdmin, async (req, res) => {
         - Serialize any newlines as \\n.
     - Add "example_block", "support_note", and "learning_goal" for every topic and subtopic regardless of mode.
     - Add prerequisite_titles and next_recommended_titles for every topic/subtopic regardless of mode (at most one title each, or []).
-    - Use facts included inside STRUCTURE (topicFacts and subtopics[].facts) to keep explanations and answers faithful to source material in all modes.
+    ${isQuestionsOnly
+      ? "- For questions_only mode: do not use fact grounding; generate questions from structure + saved/extracted replica set only."
+      : "- Use facts included inside STRUCTURE (topicFacts and subtopics[].facts) to keep explanations faithful to source material."}
     - Explanations must use 2 short paragraphs (not one dense block). No examples in explanation.
     - Tone requirement (strict): beginner-friendly simple English only.
-    - Foundational answers: target 80-100 words (acceptable range 75-110), easy to revise. (Applies only when mode includes questions.)
-    - Applied answers: target 150-200 words (acceptable range 140-220), with clearer depth than foundational. (Applies only when mode includes questions.)
+    - Foundational answers: target 60-80 words (acceptable range 55-90), easy to revise. (Applies only when mode includes questions.)
+    - Applied answers: target 120-150 words (acceptable range 110-170), with clearer depth than foundational. (Applies only when mode includes questions.)
+    - Word-count policy for answers (strict, applies only when mode includes questions):
+      - Count only narrative explanation words in the answer body.
+      - Do NOT count fenced code blocks, inline code tokens, labels like "Example:"/"Code:", or bullet markers.
+      - If narrative text exceeds the target range, shorten narrative text first and keep examples/code intact.
     - Foundational answer format: (Applies only when mode includes questions.)
       - 2 short paragraphs OR 3-5 flat bullets.
       - Keep one tiny example in the final line/paragraph.
@@ -896,6 +1005,10 @@ router.post("/configs/:id/cheap/lane-a", requireAdmin, async (req, res) => {
       - Do not produce one-line answers unless the question is definition-only and still exam-ready.
       - Every answer must be scan-friendly with short paragraphs or flat bullets.
       - Never use meta-writing phrases like "In exam, write..." or "You can mention...".
+      - Write each answer exactly in a way a student can write in an exam booklet: direct, simple, and complete.
+    - Answer structure policy:
+      - Default flow is concept -> mechanism -> tiny example.
+      - If a different structure explains better for that specific question, you may adapt it, but keep exam-ready clarity and simple English.
     - Answer flow (mandatory, applies only when mode includes questions):
       1) direct concept statement,
       2) short working/mechanism explanation,
@@ -907,6 +1020,9 @@ router.post("/configs/:id/cheap/lane-a", requireAdmin, async (req, res) => {
       - For standalone code blocks, use triple-backtick fenced blocks with a language tag. Serialize as \\n inside the JSON string — same rule as example_block.
       - Place one short explanation line before or after the code block to connect it to the answer.
       - If the subject/question is non-technical, avoid code blocks and use short step-wise explanation with a tiny practical example.
+    - Subquestion handling:
+      - If a question contains subparts like (a), (b), (i), (ii), bullets, or numbered mini-parts, preserve that structure in the answer using matching labels.
+      - Keep each subpart answer concise and exam-ready.
     - Explanation writing quality:
       - Topic explanations: 2 short paragraphs (what+why, then how). No examples. Simple words.
       - Subtopic explanations: 2 short paragraphs. No examples. Simple words.
@@ -930,7 +1046,7 @@ router.post("/configs/:id/cheap/lane-a", requireAdmin, async (req, res) => {
     Step A) Open the artifact named "exam_prep_output.json" and begin streaming "units" — copy STRUCTURE titles and write all explanation/example_block/support_note/learning_goal/prerequisite_titles/next_recommended_titles fields inline as you go.
     Step B) explanations_only: write full unit content, then write "questions": [] and close the JSON with }.
     Step C) questions_only: write all unit fields as short single-sentence placeholders (no field may be omitted), then stream all questions into the artifact.
-    Step D) explanations_and_questions: write full units, then stream all questions into the artifact.
+    Step D) If mode includes questions, generate questions internally in 5 batches of 10 (or equivalent small batches), then merge into one final questions array before final validation. Do not output partial batches.
     Step E) In questions array: insert all MANDATORY_REPLICA_QUESTIONS first, then generate remaining questions.
     Step F) Assign isStarred flags as you write each question — do not defer starring to a second pass.
     Step G) Close the JSON with } and close the artifact.
@@ -940,10 +1056,10 @@ router.post("/configs/:id/cheap/lane-a", requireAdmin, async (req, res) => {
              - Close the artifact and write exactly one line: "Done. Download exam_prep_output.json above."
 
     STRUCTURE:
-    ${JSON.stringify(structureWithFacts, null, 2)}
+    ${JSON.stringify(structureForPrompt, null, 2)}
 
     MANDATORY_REPLICA_QUESTIONS:
-    ${JSON.stringify(pkg.replicaQuestions, null, 2)}
+    ${JSON.stringify(mandatoryReplicaQuestions, null, 2)}
     `;
 
 
@@ -1426,8 +1542,8 @@ router.post("/configs/:id/cheap/lane-a", requireAdmin, async (req, res) => {
       subject: pkg.subject,
       structure: pkg.structure,
       factGrounding: pkg.factGrounding,
-      replicaQuestions: pkg.replicaQuestions,
-      warnings: pkg.warnings,
+      replicaQuestions: mandatoryReplicaQuestions,
+      warnings: laneAWarnings,
       replicaExtraction: pkg.replicaExtraction,
       totalQuestionTarget,
       mode,
@@ -2197,6 +2313,7 @@ router.delete("/configs/:id/permanent", requireAdmin, async (req, res) => {
 
     await db.transaction(async (tx) => {
       await tx.delete(configQuestionsTable).where(eq(configQuestionsTable.configId, id));
+      await tx.delete(configReplicaQuestionsTable).where(eq(configReplicaQuestionsTable.configId, id));
       await tx.delete(nodesTable).where(eq(nodesTable.configId, id));
       await tx.delete(configUnitLinksTable).where(eq(configUnitLinksTable.configId, id));
       await tx.delete(eventsTable).where(eq(eventsTable.configId, id));
@@ -2216,6 +2333,68 @@ router.delete("/configs/:id/permanent", requireAdmin, async (req, res) => {
   } catch (error) {
     req.log.error({ err: error }, "Failed to permanently delete config");
     res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+router.get("/configs/:id/cheap/replica-questions", requireAdmin, async (req, res) => {
+  try {
+    const { id } = TriggerGenerationParams.parse(req.params);
+    const questions = await loadSavedReplicaQuestions(id);
+    res.json({
+      success: true,
+      configId: id,
+      questions,
+    });
+  } catch (error) {
+    req.log.error({ err: error }, "Failed to get saved replica questions");
+    res.status(500).json({ error: error instanceof Error ? error.message : "Internal server error" });
+  }
+});
+
+router.post("/configs/:id/cheap/replica-questions", requireAdmin, async (req, res) => {
+  try {
+    const { id } = TriggerGenerationParams.parse(req.params);
+    const body = SaveReplicaQuestionsBody.parse(req.body);
+    const cleanQuestions = body.questions
+      .map((q) => ({
+        markType: q.markType,
+        question: String(q.question || "").trim(),
+        answer: String(q.answer || "").trim(),
+        unitTitle: String(q.unitTitle || "").trim(),
+        topicTitle: String(q.topicTitle || "").trim(),
+        subtopicTitle: String(q.subtopicTitle || "").trim(),
+        isStarred: q.isStarred ?? true,
+      }))
+      .filter((q) => isLikelyQuestionText(q.question) && q.unitTitle && q.topicTitle && q.subtopicTitle);
+
+    await db.transaction(async (tx) => {
+      await tx.delete(configReplicaQuestionsTable).where(eq(configReplicaQuestionsTable.configId, id));
+      if (cleanQuestions.length > 0) {
+        await tx.insert(configReplicaQuestionsTable).values(
+          cleanQuestions.map((q, index) => ({
+            configId: id,
+            markType: q.markType,
+            question: q.question,
+            answer: q.answer,
+            unitTitle: q.unitTitle,
+            topicTitle: q.topicTitle,
+            subtopicTitle: q.subtopicTitle,
+            isStarred: q.isStarred,
+            sortOrder: index,
+          })),
+        );
+      }
+    });
+
+    res.json({
+      success: true,
+      configId: id,
+      savedCount: cleanQuestions.length,
+      replaced: true,
+    });
+  } catch (error) {
+    req.log.error({ err: error }, "Failed to save replica questions");
+    res.status(500).json({ error: error instanceof Error ? error.message : "Internal server error" });
   }
 });
 
