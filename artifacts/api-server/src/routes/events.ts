@@ -1,10 +1,40 @@
 import { Router, type IRouter } from "express";
-import { TrackEventBody } from "../api-zod";
 import { db, eventsTable, usersTable } from "../db";
 import { and, desc, eq } from "drizzle-orm";
+import { z } from "zod/v4";
 
 const router: IRouter = Router();
 const TOPIC_INTERACTION_PREFIX = "__topic__:";
+const QUESTION_BANK_EVENT_PREFIX = "__qb__:";
+
+const TrackEventBody = z
+  .object({
+    userId: z.string().trim().min(1),
+    universityId: z.string().trim().min(1),
+    year: z.string().trim().min(1),
+    branch: z.string().trim().min(1),
+    exam: z.string().trim().min(1),
+    configId: z.string().trim().min(1),
+    topicId: z.string().trim().optional().nullable(),
+    subtopicId: z.string().trim().optional().nullable(),
+    questionId: z.string().trim().optional().nullable(),
+  })
+  .superRefine((value, ctx) => {
+    const questionId = String(value.questionId || "").trim();
+    const topicId = String(value.topicId || "").trim();
+    const subtopicId = String(value.subtopicId || "").trim();
+
+    if (questionId) {
+      return;
+    }
+
+    if (!topicId || !subtopicId) {
+      ctx.addIssue({
+        code: "custom",
+        message: "topicId and subtopicId are required when questionId is not provided.",
+      });
+    }
+  });
 
 router.get("/configs/:configId/latest-interaction-state", async (req, res) => {
   try {
@@ -24,6 +54,7 @@ router.get("/configs/:configId/latest-interaction-state", async (req, res) => {
       .select({
         topicId: eventsTable.topicId,
         subtopicId: eventsTable.subtopicId,
+        questionId: eventsTable.questionId,
         timestamp: eventsTable.timestamp,
       })
       .from(eventsTable)
@@ -32,8 +63,11 @@ router.get("/configs/:configId/latest-interaction-state", async (req, res) => {
       .limit(25);
 
     const row = latestEvents[0];
-    const latest = latestEvents.find((e) => String(e.subtopicId || "").trim()) || null;
+    const latest = latestEvents.find((e) => (
+      !!String(e.questionId || "").trim() || !!String(e.subtopicId || "").trim()
+    )) || null;
     const rawSubtopicId = String(latest?.subtopicId || "").trim();
+    const rawQuestionId = String(latest?.questionId || "").trim();
     const isTopicInteraction = rawSubtopicId.startsWith(TOPIC_INTERACTION_PREFIX);
     const derivedTopicFromPrefix = isTopicInteraction
       ? rawSubtopicId.slice(TOPIC_INTERACTION_PREFIX.length).trim()
@@ -42,13 +76,17 @@ router.get("/configs/:configId/latest-interaction-state", async (req, res) => {
       ? (derivedTopicFromPrefix || String(latest?.topicId || "").trim() || null)
       : null;
     const qbSubtopicId = isTopicInteraction ? null : (rawSubtopicId || null);
+    const qbQuestionIdFromTopic = String(latest?.topicId || "").trim().startsWith(QUESTION_BANK_EVENT_PREFIX)
+      ? Number(String(latest?.topicId || "").trim().slice(QUESTION_BANK_EVENT_PREFIX.length))
+      : null;
+    const qbQuestionId = rawQuestionId ? Number(rawQuestionId) : qbQuestionIdFromTopic;
 
     res.status(200).json({
       configId,
       userId: authUserId,
       mapNodeId,
       qbSubtopicId,
-      qbQuestionId: null,
+      qbQuestionId: Number.isFinite(qbQuestionId) ? qbQuestionId : null,
       eventAt: latest?.timestamp ? new Date(latest.timestamp).toISOString() : null,
     });
   } catch (error) {
@@ -74,6 +112,7 @@ router.get("/configs/:configId/completion-state", async (req, res) => {
     const rows = await db
       .select({
         subtopicId: eventsTable.subtopicId,
+        topicId: eventsTable.topicId,
       })
       .from(eventsTable)
       .where(and(eq(eventsTable.userId, authUserId), eq(eventsTable.configId, configId)));
@@ -81,8 +120,19 @@ router.get("/configs/:configId/completion-state", async (req, res) => {
     const doneSubtopicIds = Array.from(
       new Set(
         rows
-          .map((r) => String(r.subtopicId || "").trim())
-          .filter((id) => !!id && !id.startsWith(TOPIC_INTERACTION_PREFIX)),
+          .map((r) => ({
+            subtopicId: String(r.subtopicId || "").trim(),
+            topicId: String(r.topicId || "").trim(),
+          }))
+          .filter((r) => {
+            const id = r.subtopicId;
+            const topicId = r.topicId;
+            if (!id) return false;
+            if (id.startsWith(TOPIC_INTERACTION_PREFIX)) return false;
+            if (topicId.startsWith(QUESTION_BANK_EVENT_PREFIX)) return false;
+            return true;
+          })
+          .map((r) => r.subtopicId),
       ),
     );
 
@@ -129,6 +179,13 @@ router.post("/events", async (req, res) => {
     }
 
     const body = TrackEventBody.parse(req.body);
+    const topicId = String(body.topicId || "").trim();
+    const subtopicId = String(body.subtopicId || "").trim();
+    const questionId = String(body.questionId || "").trim();
+
+    const isQuestionEvent = !!questionId;
+    const persistedTopicId = isQuestionEvent ? (topicId || `${QUESTION_BANK_EVENT_PREFIX}${questionId}`) : topicId;
+    const persistedSubtopicId = isQuestionEvent ? (subtopicId || null) : subtopicId;
 
     await db.insert(eventsTable).values({
       userId: authUser.id,
@@ -137,8 +194,9 @@ router.post("/events", async (req, res) => {
       branch: authUser.branch,
       exam: body.exam,
       configId: body.configId,
-      topicId: body.topicId,
-      subtopicId: body.subtopicId,
+      topicId: persistedTopicId || null,
+      subtopicId: persistedSubtopicId || null,
+      questionId: questionId || null,
     });
 
     res.status(201).json({ success: true });

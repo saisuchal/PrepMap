@@ -277,6 +277,22 @@ export async function initializeDatabase(): Promise<void> {
     ADD COLUMN IF NOT EXISTS updated_at timestamp without time zone NOT NULL DEFAULT now();
   `);
 
+  await pool.query(`
+    ALTER TABLE IF EXISTS public.events
+    ADD COLUMN IF NOT EXISTS question_id text;
+  `);
+
+  await pool.query(`
+    ALTER TABLE IF EXISTS public.events
+    ALTER COLUMN topic_id DROP NOT NULL,
+    ALTER COLUMN subtopic_id DROP NOT NULL;
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS events_question_idx
+    ON public.events (question_id);
+  `);
+
   // Legacy tables (subtopic_contents, subtopic_questions) are intentionally
   // not created/managed here. The app uses canonical/config-scoped tables.
 

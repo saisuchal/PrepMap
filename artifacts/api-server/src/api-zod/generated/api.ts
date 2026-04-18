@@ -242,8 +242,9 @@ export const TrackEventBody = zod.object({
   branch: zod.string(),
   exam: zod.string(),
   configId: zod.string(),
-  topicId: zod.string(),
-  subtopicId: zod.string(),
+  topicId: zod.string().nullish(),
+  subtopicId: zod.string().nullish(),
+  questionId: zod.string().nullish(),
 });
 
 /**

@@ -208,8 +208,9 @@ export interface EventPayload {
   branch: string;
   exam: string;
   configId: string;
-  topicId: string;
-  subtopicId: string;
+  topicId?: string | null;
+  subtopicId?: string | null;
+  questionId?: string | null;
 }
 
 export interface SubtopicStat {
