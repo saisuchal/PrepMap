@@ -19,6 +19,7 @@ import {
   unitLibraryTable,
   canonicalNodesTable,
   eventsTable,
+  withRequestDbContext,
 } from "../db";
 import { and, eq, inArray } from "drizzle-orm";
 import { createHash, randomUUID } from "crypto";
@@ -118,11 +119,13 @@ const SaveReplicaQuestionsBody = z.object({
   })),
 });
 
-async function loadSavedReplicaQuestions(configId: string) {
-  const rows = await db
-    .select()
-    .from(configReplicaQuestionsTable)
-    .where(eq(configReplicaQuestionsTable.configId, configId));
+async function loadSavedReplicaQuestions(configId: string, authClaims?: import("../lib/jwt").AccessTokenPayload | null) {
+  const rows = await withRequestDbContext(authClaims ?? null, async (tx) =>
+    tx
+      .select()
+      .from(configReplicaQuestionsTable)
+      .where(eq(configReplicaQuestionsTable.configId, configId))
+  );
   rows.sort((a, b) => Number(a.sortOrder || 0) - Number(b.sortOrder || 0) || Number(a.id || 0) - Number(b.id || 0));
   return rows.map((r) => ({
     markType: r.markType === "Applied" ? "Applied" as const : "Foundational" as const,
@@ -575,6 +578,52 @@ function isSupportedStoragePath(path: string): boolean {
   return path.startsWith("/objects/") || path.startsWith("/supabase/");
 }
 
+function remapNodeIdListField(raw: string | null | undefined, nodeIdMap: Map<string, string>): string | null {
+  const text = String(raw || "").trim();
+  if (!text) return null;
+  try {
+    const parsed = JSON.parse(text);
+    if (!Array.isArray(parsed)) return raw ?? null;
+    const remapped = parsed.map((id) => {
+      const key = String(id || "").trim();
+      return nodeIdMap.get(key) ?? key;
+    });
+    return JSON.stringify(remapped);
+  } catch {
+    return raw ?? null;
+  }
+}
+
+function normalizeJsonTextField(value: unknown): string | null {
+  if (value == null) return null;
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (!trimmed) return null;
+    // Keep existing JSON/text as-is when already a string payload.
+    return trimmed;
+  }
+  // Arrays/objects/numbers/booleans should be serialized explicitly for json/jsonb columns.
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return null;
+  }
+}
+
+async function insertValuesInChunks<T extends Record<string, any>>(
+  tx: any,
+  table: any,
+  rows: T[],
+  chunkSize = 50,
+): Promise<void> {
+  if (!rows.length) return;
+  const safeChunkSize = Math.max(1, chunkSize);
+  for (let i = 0; i < rows.length; i += safeChunkSize) {
+    const chunk = rows.slice(i, i + safeChunkSize);
+    await tx.insert(table).values(chunk);
+  }
+}
+
 router.post("/configs", requireAdmin, async (req, res) => {
   try {
     const body = CreateConfigBody.parse(req.body);
@@ -696,6 +745,233 @@ router.post("/configs", requireAdmin, async (req, res) => {
   } catch (error) {
     req.log.error({ err: error }, "Failed to create config");
     res.status(500).json({ error: error instanceof Error ? error.message : "Internal server error" });
+  }
+});
+
+router.post("/configs/:id/clone", requireAdmin, async (req, res) => {
+  try {
+    const sourceConfigId = String(req.params.id || "").trim();
+    const targetUniversityId = String(req.body?.targetUniversityId || "").trim();
+    const includeQuestions = req.body?.includeQuestions !== false;
+    const includeSyllabus = req.body?.includeSyllabus !== false;
+    const includeReplicaQuestions = req.body?.includeReplicaQuestions !== false;
+
+    if (!sourceConfigId) {
+      res.status(400).json({ error: "Source config id is required" });
+      return;
+    }
+    if (!targetUniversityId) {
+      res.status(400).json({ error: "targetUniversityId is required" });
+      return;
+    }
+
+    const [source] = await db
+      .select()
+      .from(configsTable)
+      .where(eq(configsTable.id, sourceConfigId))
+      .limit(1);
+    if (!source) {
+      res.status(404).json({ error: "Source config not found" });
+      return;
+    }
+
+    const conflicting = await db
+      .select({ id: configsTable.id, status: configsTable.status })
+      .from(configsTable)
+      .where(and(
+        eq(configsTable.universityId, targetUniversityId),
+        eq(configsTable.year, source.year),
+        eq(configsTable.branch, source.branch),
+        eq(configsTable.subject, source.subject),
+        eq(configsTable.exam, source.exam),
+      ));
+    const hasNonDeletedConflict = conflicting.some((c) => c.status !== "deleted");
+    if (hasNonDeletedConflict) {
+      res.status(409).json({
+        error:
+          "A config with same subject, semester, branch, and exam already exists in target university.",
+      });
+      return;
+    }
+
+    const clonedConfigId = randomUUID().substring(0, 8);
+    const userId = String((req as any).userId || "admin");
+    const authClaims = ((req as any).authClaims ?? null) as import("../lib/jwt").AccessTokenPayload | null;
+
+    await withRequestDbContext(authClaims, async (tx) => {
+      await tx.insert(configsTable).values({
+        id: clonedConfigId,
+        universityId: targetUniversityId,
+        year: source.year,
+        branch: source.branch,
+        subject: source.subject,
+        exam: source.exam,
+        status: "draft",
+        createdBy: userId,
+        syllabusFileUrl: includeSyllabus ? (source.syllabusFileUrl ?? null) : null,
+        paperFileUrls: includeReplicaQuestions ? (source.paperFileUrls ?? null) : null,
+      });
+
+      const sourceLinks = await tx
+        .select()
+        .from(configUnitLinksTable)
+        .where(eq(configUnitLinksTable.configId, sourceConfigId));
+      if (sourceLinks.length > 0) {
+        const linkRows = sourceLinks.map((link, idx) => ({
+          id: `cul_${randomUUID().substring(0, 10)}`,
+          configId: clonedConfigId,
+          unitLibraryId: link.unitLibraryId,
+          sortOrder: Number(link.sortOrder || idx + 1),
+          updatedAt: new Date(),
+        }));
+        await insertValuesInChunks(tx, configUnitLinksTable, linkRows, 100);
+      }
+
+      const sourceNodes = await tx
+        .select()
+        .from(nodesTable)
+        .where(eq(nodesTable.configId, sourceConfigId));
+      if (sourceNodes.length > 0) {
+        const nodeIdMap = new Map<string, string>();
+        for (const n of sourceNodes) {
+          const original = String(n.id || "");
+          const next = original.startsWith(`${sourceConfigId}_`)
+            ? `${clonedConfigId}_${original.slice(sourceConfigId.length + 1)}`
+            : `${clonedConfigId}_${randomUUID().substring(0, 10)}`;
+          nodeIdMap.set(original, next);
+        }
+
+        const nodeRows = sourceNodes.map((n) => ({
+          id: nodeIdMap.get(String(n.id || "")) || `${clonedConfigId}_${randomUUID().substring(0, 10)}`,
+          configId: clonedConfigId,
+          title: n.title,
+          normalizedTitle: n.normalizedTitle,
+          type: n.type,
+          parentId: n.parentId ? (nodeIdMap.get(String(n.parentId)) ?? null) : null,
+          explanation: n.explanation,
+          learningGoal: n.learningGoal,
+          exampleBlock: n.exampleBlock,
+          supportNote: n.supportNote,
+          prerequisiteTitles: normalizeJsonTextField(n.prerequisiteTitles),
+          prerequisiteNodeIds: normalizeJsonTextField(
+            remapNodeIdListField(normalizeJsonTextField(n.prerequisiteNodeIds), nodeIdMap),
+          ),
+          nextRecommendedTitles: normalizeJsonTextField(n.nextRecommendedTitles),
+          nextRecommendedNodeIds: normalizeJsonTextField(
+            remapNodeIdListField(normalizeJsonTextField(n.nextRecommendedNodeIds), nodeIdMap),
+          ),
+          canonicalNodeId: n.canonicalNodeId,
+          subjectId: n.subjectId,
+          unitLibraryId: n.unitLibraryId,
+          unitTopicId: n.unitTopicId,
+          unitSubtopicId: n.unitSubtopicId,
+          sortOrder: n.sortOrder,
+          updatedAt: new Date(),
+        }));
+        // Nodes can carry very large text payloads (explanations/example blocks),
+        // so keep insert batches small to avoid oversized SQL statements.
+        await insertValuesInChunks(tx, nodesTable, nodeRows, 5);
+      }
+
+      if (includeQuestions) {
+        const sourceQuestions = await tx
+          .select()
+          .from(configQuestionsTable)
+          .where(eq(configQuestionsTable.configId, sourceConfigId));
+        if (sourceQuestions.length > 0) {
+          const requestedCanonicalIds = Array.from(
+            new Set(
+              sourceQuestions
+                .map((q) => String(q.unitSubtopicId || "").trim())
+                .filter(Boolean),
+            ),
+          );
+          let validCanonicalIds = new Set<string>();
+          if (requestedCanonicalIds.length > 0) {
+            const existingCanonicalRows = await tx
+              .select({ id: canonicalNodesTable.id })
+              .from(canonicalNodesTable)
+              .where(inArray(canonicalNodesTable.id, requestedCanonicalIds));
+            validCanonicalIds = new Set(
+              existingCanonicalRows.map((r) => String(r.id || "").trim()).filter(Boolean),
+            );
+          }
+
+          const questionRows = sourceQuestions.map((q) => ({
+            configId: clonedConfigId,
+            unitSubtopicId:
+              q.unitSubtopicId && validCanonicalIds.has(String(q.unitSubtopicId))
+                ? q.unitSubtopicId
+                : null,
+            markType: q.markType,
+            question: q.question,
+            answer: q.answer,
+            isStarred: q.isStarred,
+            starSource: q.starSource,
+            updatedAt: new Date(),
+          }));
+          await insertValuesInChunks(tx, configQuestionsTable, questionRows, 50);
+        }
+      }
+
+      if (includeReplicaQuestions) {
+        const sourceReplicaQuestions = await tx
+          .select()
+          .from(configReplicaQuestionsTable)
+          .where(eq(configReplicaQuestionsTable.configId, sourceConfigId));
+        if (sourceReplicaQuestions.length > 0) {
+          const replicaRows = sourceReplicaQuestions.map((q) => ({
+            configId: clonedConfigId,
+            markType: q.markType,
+            question: q.question,
+            answer: q.answer,
+            unitTitle: q.unitTitle ?? null,
+            topicTitle: q.topicTitle ?? null,
+            subtopicTitle: q.subtopicTitle ?? null,
+            isStarred: q.isStarred,
+            sortOrder: q.sortOrder,
+            updatedAt: new Date(),
+          }));
+          await insertValuesInChunks(tx, configReplicaQuestionsTable, replicaRows, 50);
+        }
+      }
+    });
+
+    const [cloned] = await db
+      .select()
+      .from(configsTable)
+      .where(eq(configsTable.id, clonedConfigId))
+      .limit(1);
+
+    res.status(201).json({
+      id: cloned.id,
+      universityId: cloned.universityId,
+      year: cloned.year,
+      branch: cloned.branch,
+      subject: cloned.subject,
+      exam: cloned.exam,
+      status: cloned.status,
+      createdBy: cloned.createdBy,
+      createdAt: cloned.createdAt?.toISOString(),
+      syllabusFileUrl: cloned.syllabusFileUrl ?? null,
+      paperFileUrls: cloned.paperFileUrls ?? null,
+      clonedFromConfigId: sourceConfigId,
+      cloneOptions: {
+        includeQuestions,
+        includeSyllabus,
+        includeReplicaQuestions,
+      },
+    });
+  } catch (error) {
+    req.log.error(
+      {
+        err: error,
+        dbCause: (error as any)?.cause?.message || null,
+        dbCode: (error as any)?.cause?.code || (error as any)?.code || null,
+      },
+      "Failed to clone config",
+    );
+    res.status(500).json({ error: "Failed to clone config" });
   }
 });
 
@@ -841,6 +1117,7 @@ router.post("/configs/:id/cheap/lane-a", requireAdmin, async (req, res) => {
     const pkg = await buildLaneAConfigPackage(id);
     const mode = parseCheapGenerationMode((req.body as any)?.mode);
     const ignoreSavedReplica = Boolean((req.body as any)?.ignoreSavedReplica);
+    const includeFactsInMasterPrompt = Boolean((req.body as any)?.includeFactsInMasterPrompt);
     const savedReplicaQuestions = ignoreSavedReplica ? [] : await loadSavedReplicaQuestions(id);
     if (savedReplicaQuestions.length > 0) {
       pkg.replicaQuestions = savedReplicaQuestions;
@@ -876,7 +1153,9 @@ router.post("/configs/:id/cheap/lane-a", requireAdmin, async (req, res) => {
       0,
       totalQuestionTarget - mandatoryReplicaQuestions.length,
     );
-    const structureForPrompt = pkg.structure;
+    const structureForPrompt = includeFactsInMasterPrompt
+      ? buildStructureWithFacts(pkg.structure, pkg.factGrounding)
+      : pkg.structure;
     const laneAWarnings = [...pkg.warnings];
     if (droppedReplicaCount > 0) {
       laneAWarnings.push(
@@ -893,6 +1172,9 @@ router.post("/configs/:id/cheap/lane-a", requireAdmin, async (req, res) => {
     const structureValidationLine = isQuestionsOnly
       ? '2) "units" is exactly [] in questions_only mode.'
       : "2) units preserve the same hierarchy from STRUCTURE.";
+    const factsGroundingLine = includeFactsInMasterPrompt
+      ? "- Use facts included inside STRUCTURE (topicFacts and subtopics[].facts) to keep explanations faithful to source material."
+      : "- Do not use fact grounding in this Lane A prompt.";
     const stepAInstruction = isQuestionsOnly
       ? 'Step A) Open the artifact named "exam_prep_output.json" and write "units": [] first.'
       : 'Step A) Open the artifact named "exam_prep_output.json" and begin streaming "units" — copy STRUCTURE titles and write all explanation/example_block/support_note/learning_goal/prerequisite_titles/next_recommended_titles fields inline as you go.';
@@ -1007,7 +1289,7 @@ router.post("/configs/:id/cheap/lane-a", requireAdmin, async (req, res) => {
         - Serialize any newlines as \\n.
     - Add "example_block", "support_note", and "learning_goal" for every topic and subtopic when units are generated (non-questions_only modes).
     - Add prerequisite_titles and next_recommended_titles for every topic/subtopic when units are generated (non-questions_only modes).
-    - Do not use fact grounding in this Lane A prompt.
+    ${factsGroundingLine}
     - Explanations must use 2 short paragraphs (not one dense block). No examples in explanation.
     - Tone requirement (strict): beginner-friendly simple English only.
     - Foundational answers: target 60-80 words (acceptable range 55-90), easy to revise. (Applies only when mode includes questions.)
@@ -1721,6 +2003,7 @@ async function performCheapImport(
     const pathMap = new Map<string, { nodeId: string; unitSubtopicId: string }>();
     let processedQuestions = 0;
     let unmappedQuestions = 0;
+    const authClaims = ((req as any).authClaims ?? null) as import("../lib/jwt").AccessTokenPayload | null;
 
     const persistQuestions = async (tx: any) => {
       for (let i = 0; i < questions.length; i++) {
@@ -1754,7 +2037,7 @@ async function performCheapImport(
     };
 
     if (isQuestionsOnlyImport) {
-      await db.transaction(async (tx) => {
+      await withRequestDbContext(authClaims, async (tx) => {
         const existingNodes = await tx
           .select({
             id: nodesTable.id,
@@ -1788,7 +2071,7 @@ async function performCheapImport(
         await persistQuestions(tx);
       });
     } else {
-      await db.transaction(async (tx) => {
+      await withRequestDbContext(authClaims, async (tx) => {
         const existingNodes = await tx
           .select({ id: nodesTable.id })
           .from(nodesTable)
@@ -2278,6 +2561,7 @@ router.delete("/configs/:id/permanent", requireAdmin, async (req, res) => {
   try {
     const { id } = PublishConfigParams.parse(req.params);
     const actorUserId = String((req as any).userId || "").trim() || "unknown";
+    const authClaims = ((req as any).authClaims ?? null) as import("../lib/jwt").AccessTokenPayload | null;
 
     const [config] = await db
       .select({
@@ -2303,12 +2587,15 @@ router.delete("/configs/:id/permanent", requireAdmin, async (req, res) => {
       return;
     }
 
-    const [nodeRows, questionRows, eventRows, unitLinkRows] = await Promise.all([
-      db.select({ id: nodesTable.id }).from(nodesTable).where(eq(nodesTable.configId, id)),
-      db.select({ id: configQuestionsTable.id }).from(configQuestionsTable).where(eq(configQuestionsTable.configId, id)),
-      db.select({ id: eventsTable.id }).from(eventsTable).where(eq(eventsTable.configId, id)),
-      db.select({ configId: configUnitLinksTable.configId }).from(configUnitLinksTable).where(eq(configUnitLinksTable.configId, id)),
-    ]);
+    const { nodeRows, questionRows, eventRows, unitLinkRows } = await withRequestDbContext(authClaims, async (tx) => {
+      const [nodeRows, questionRows, eventRows, unitLinkRows] = await Promise.all([
+        tx.select({ id: nodesTable.id }).from(nodesTable).where(eq(nodesTable.configId, id)),
+        tx.select({ id: configQuestionsTable.id }).from(configQuestionsTable).where(eq(configQuestionsTable.configId, id)),
+        tx.select({ id: eventsTable.id }).from(eventsTable).where(eq(eventsTable.configId, id)),
+        tx.select({ configId: configUnitLinksTable.configId }).from(configUnitLinksTable).where(eq(configUnitLinksTable.configId, id)),
+      ]);
+      return { nodeRows, questionRows, eventRows, unitLinkRows };
+    });
 
     req.log.info(
       {
@@ -2333,7 +2620,7 @@ router.delete("/configs/:id/permanent", requireAdmin, async (req, res) => {
       "Permanent delete requested for disabled config",
     );
 
-    await db.transaction(async (tx) => {
+    await withRequestDbContext(authClaims, async (tx) => {
       await tx.delete(configQuestionsTable).where(eq(configQuestionsTable.configId, id));
       await tx.delete(configReplicaQuestionsTable).where(eq(configReplicaQuestionsTable.configId, id));
       await tx.delete(nodesTable).where(eq(nodesTable.configId, id));
@@ -2361,7 +2648,8 @@ router.delete("/configs/:id/permanent", requireAdmin, async (req, res) => {
 router.get("/configs/:id/cheap/replica-questions", requireAdmin, async (req, res) => {
   try {
     const { id } = TriggerGenerationParams.parse(req.params);
-    const questions = await loadSavedReplicaQuestions(id);
+    const authClaims = ((req as any).authClaims ?? null) as import("../lib/jwt").AccessTokenPayload | null;
+    const questions = await loadSavedReplicaQuestions(id, authClaims);
     res.json({
       success: true,
       configId: id,
@@ -2376,6 +2664,7 @@ router.get("/configs/:id/cheap/replica-questions", requireAdmin, async (req, res
 router.post("/configs/:id/cheap/replica-questions", requireAdmin, async (req, res) => {
   try {
     const { id } = TriggerGenerationParams.parse(req.params);
+    const authClaims = ((req as any).authClaims ?? null) as import("../lib/jwt").AccessTokenPayload | null;
     const body = SaveReplicaQuestionsBody.parse(req.body);
     const cleanQuestions = body.questions
       .map((q) => ({
@@ -2389,7 +2678,7 @@ router.post("/configs/:id/cheap/replica-questions", requireAdmin, async (req, re
       }))
       .filter((q) => q.question.length > 0);
 
-    await db.transaction(async (tx) => {
+    await withRequestDbContext(authClaims, async (tx) => {
       await tx.delete(configReplicaQuestionsTable).where(eq(configReplicaQuestionsTable.configId, id));
       if (cleanQuestions.length > 0) {
         await tx.insert(configReplicaQuestionsTable).values(
@@ -2424,6 +2713,7 @@ router.get("/configs/:id/cheap/gap-report", requireAdmin, async (req, res) => {
   try {
     const { id } = TriggerGenerationParams.parse(req.params);
     const mode = parseCheapGenerationMode(req.query.mode);
+    const authClaims = ((req as any).authClaims ?? null) as import("../lib/jwt").AccessTokenPayload | null;
     const includeExplanationGaps = mode !== "questions_only";
     const includeQuestionGaps = mode !== "explanations_only";
 
@@ -2439,10 +2729,12 @@ router.get("/configs/:id/cheap/gap-report", requireAdmin, async (req, res) => {
 
     const expectedQuestionCount = config.exam === "endsem" ? 75 : 50;
     const existingQuestionCount = includeQuestionGaps
-      ? (await db
-          .select({ id: configQuestionsTable.id })
-          .from(configQuestionsTable)
-          .where(eq(configQuestionsTable.configId, id))).length
+      ? (await withRequestDbContext(authClaims, async (tx) =>
+          tx
+            .select({ id: configQuestionsTable.id })
+            .from(configQuestionsTable)
+            .where(eq(configQuestionsTable.configId, id))
+        )).length
       : 0;
     const questionGapCount = includeQuestionGaps
       ? Math.max(0, expectedQuestionCount - existingQuestionCount)

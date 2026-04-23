@@ -1,0 +1,82 @@
+Maximum Duration:	1 Hour	Maximum Marks: 30
+Part – A
+Answer all the questions 							                  5 Q X 3 M = 15
+
+Q. No.
+Questions
+   CO
+RBTL
+MARKS
+
+1.
+Mention the features of Google Colab.
+1
+K1
+3
+2.
+Explain the concept of rate limits in API usage.
+1
+K2
+3
+3.
+Describe the role of the gr.Interface class in Gradio.
+1
+K2
+3
+4.
+Explain the principle of next-word prediction in LLMs.
+1
+K1
+3
+5.
+List two benefits of using Gemini Guided Learning.
+1
+K2
+3
+
+
+PART-B
+Answer all the questions 							                  3 Q X 5 M =15
+Q. No.
+ Questions
+CO
+RBTL
+MARKS
+6.
+Explain the difference between a module and a package.
+1
+K2
+5
+
+7.
+List and define the three essential components of an LLM application with examples.
+
+
+1
+K1
+5
+8.
+Explain the difference between system, user, and assistant roles in chat models.
+1
+K2
+5
+
+
+9.
+Describe the process of next-word prediction in LLMs with an example.
+
+
+1
+K2
+5
+10.
+Explain the two functions performed by the Add & Norm layer in the Transformer Encoder and their purposes.
+2
+K3
+5
+
+11.
+Explain the steps to create a Python function to fetch weather data for an LLM application.
+2
+K2
+5

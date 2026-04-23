@@ -1,11 +1,13 @@
 import dotenv from "dotenv";
 import { drizzle } from "drizzle-orm/node-postgres";
+import { sql } from "drizzle-orm";
 import pg from "pg";
 import * as schema from "./schema";
 import { DEFAULT_UNIVERSITIES } from "../lib/appMetadata";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import type { AccessTokenPayload } from "../lib/jwt";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const envCandidates = [
@@ -21,6 +23,9 @@ if (envPath) {
 }
 
 const { Pool } = pg;
+const poolMax = Number(process.env.PGPOOL_MAX ?? "3");
+const poolIdleTimeoutMs = Number(process.env.PGPOOL_IDLE_TIMEOUT_MS ?? "10000");
+const poolConnectionTimeoutMs = Number(process.env.PGPOOL_CONNECTION_TIMEOUT_MS ?? "5000");
 
 if (!process.env.DATABASE_URL) {
   throw new Error(
@@ -28,12 +33,208 @@ if (!process.env.DATABASE_URL) {
   );
 }
 
-export const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+export const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  max: Number.isFinite(poolMax) && poolMax > 0 ? poolMax : 3,
+  idleTimeoutMillis:
+    Number.isFinite(poolIdleTimeoutMs) && poolIdleTimeoutMs >= 0 ? poolIdleTimeoutMs : 10000,
+  connectionTimeoutMillis:
+    Number.isFinite(poolConnectionTimeoutMs) && poolConnectionTimeoutMs >= 0
+      ? poolConnectionTimeoutMs
+      : 5000,
+});
 export const db = drizzle(pool, { schema });
 
 export * from "./schema";
 
+export async function withRequestDbContext<T>(
+  claims: AccessTokenPayload | null,
+  callback: (tx: any) => Promise<T>,
+): Promise<T> {
+  return db.transaction(async (tx) => {
+    await tx.execute(sql`
+      select
+        set_config('app.user_id', ${String(claims?.sub || "")}, true),
+        set_config('app.role', ${String(claims?.role || "")}, true),
+        set_config('app.university_id', ${String(claims?.universityId || "")}, true),
+        set_config('app.branch', ${String(claims?.branch || "")}, true),
+        set_config('app.year', ${String(claims?.year || "")}, true)
+    `);
+    return callback(tx);
+  });
+}
+
 export async function initializeDatabase(): Promise<void> {
+  await pool.query(`CREATE SCHEMA IF NOT EXISTS app;`);
+
+  await pool.query(`
+    CREATE OR REPLACE FUNCTION public.app_user_id()
+    RETURNS text
+    LANGUAGE sql
+    STABLE
+    AS $$
+      SELECT nullif(current_setting('app.user_id', true), '')
+    $$;
+  `);
+
+  await pool.query(`
+    CREATE OR REPLACE FUNCTION public.app_role()
+    RETURNS text
+    LANGUAGE sql
+    STABLE
+    AS $$
+      SELECT nullif(current_setting('app.role', true), '')
+    $$;
+  `);
+
+  await pool.query(`
+    CREATE OR REPLACE FUNCTION public.app_university_id()
+    RETURNS text
+    LANGUAGE sql
+    STABLE
+    AS $$
+      SELECT nullif(current_setting('app.university_id', true), '')
+    $$;
+  `);
+
+  await pool.query(`
+    CREATE OR REPLACE FUNCTION public.app_branch()
+    RETURNS text
+    LANGUAGE sql
+    STABLE
+    AS $$
+      SELECT nullif(current_setting('app.branch', true), '')
+    $$;
+  `);
+
+  await pool.query(`
+    CREATE OR REPLACE FUNCTION public.app_year()
+    RETURNS text
+    LANGUAGE sql
+    STABLE
+    AS $$
+      SELECT nullif(current_setting('app.year', true), '')
+    $$;
+  `);
+
+  await pool.query(`
+    CREATE OR REPLACE FUNCTION public.app_normalize_token(value text)
+    RETURNS text
+    LANGUAGE sql
+    IMMUTABLE
+    AS $$
+      SELECT regexp_replace(lower(coalesce(value, '')), '\\s+', '', 'g')
+    $$;
+  `);
+
+  await pool.query(`
+    CREATE OR REPLACE FUNCTION public.app_parse_year_number(value text)
+    RETURNS integer
+    LANGUAGE plpgsql
+    IMMUTABLE
+    AS $$
+    DECLARE
+      token text := public.app_normalize_token(value);
+      matches text[];
+    BEGIN
+      matches := regexp_match(token, 'year[^0-9]*([1-4])');
+      IF matches IS NOT NULL THEN
+        RETURN matches[1]::integer;
+      END IF;
+
+      matches := regexp_match(token, '^([1-4])$');
+      IF matches IS NOT NULL THEN
+        RETURN matches[1]::integer;
+      END IF;
+
+      RETURN NULL;
+    END;
+    $$;
+  `);
+
+  await pool.query(`
+    CREATE OR REPLACE FUNCTION public.app_parse_semester_number(value text)
+    RETURNS integer
+    LANGUAGE plpgsql
+    IMMUTABLE
+    AS $$
+    DECLARE
+      token text := public.app_normalize_token(value);
+      matches text[];
+    BEGIN
+      matches := regexp_match(token, 'sem(?:ester)?[^0-9]*([1-8])');
+      IF matches IS NOT NULL THEN
+        RETURN matches[1]::integer;
+      END IF;
+
+      matches := regexp_match(token, '^s([1-8])$');
+      IF matches IS NOT NULL THEN
+        RETURN matches[1]::integer;
+      END IF;
+
+      matches := regexp_match(token, '^([1-8])$');
+      IF matches IS NOT NULL THEN
+        RETURN matches[1]::integer;
+      END IF;
+
+      RETURN NULL;
+    END;
+    $$;
+  `);
+
+  await pool.query(`
+    CREATE OR REPLACE FUNCTION public.app_student_year_matches_config_year(user_year text, config_year text)
+    RETURNS boolean
+    LANGUAGE plpgsql
+    IMMUTABLE
+    AS $$
+    DECLARE
+      config_token text := public.app_normalize_token(config_year);
+      user_token text := public.app_normalize_token(user_year);
+      year_num integer;
+      sem_num integer;
+      mapped_year integer;
+    BEGIN
+      IF config_token = '' OR user_token = '' THEN
+        RETURN false;
+      END IF;
+
+      IF config_token = user_token THEN
+        RETURN true;
+      END IF;
+
+      year_num := public.app_parse_year_number(user_year);
+      IF year_num IS NOT NULL THEN
+        IF config_token IN (
+          year_num::text,
+          'year' || year_num::text,
+          'sem' || (year_num * 2 - 1)::text,
+          'sem' || (year_num * 2)::text,
+          'semester' || (year_num * 2 - 1)::text,
+          'semester' || (year_num * 2)::text
+        ) THEN
+          RETURN true;
+        END IF;
+      END IF;
+
+      sem_num := public.app_parse_semester_number(user_year);
+      IF sem_num IS NOT NULL THEN
+        mapped_year := ceil(sem_num / 2.0);
+        IF config_token IN (
+          'sem' || sem_num::text,
+          'semester' || sem_num::text,
+          mapped_year::text,
+          'year' || mapped_year::text
+        ) THEN
+          RETURN true;
+        END IF;
+      END IF;
+
+      RETURN false;
+    END;
+    $$;
+  `);
+
   await pool.query(`
     CREATE TABLE IF NOT EXISTS public.universities (
       id text PRIMARY KEY,
@@ -288,9 +489,228 @@ export async function initializeDatabase(): Promise<void> {
     ALTER COLUMN subtopic_id DROP NOT NULL;
   `);
 
+  // Repair legacy events.id definitions where NOT NULL exists but default/identity is missing.
+  // This prevents inserts from failing with "null value in column id" when using DEFAULT.
+  await pool.query(`
+    DO $$
+    DECLARE
+      id_data_type text;
+      id_default text;
+      seq_name text;
+    BEGIN
+      SELECT c.data_type, c.column_default
+      INTO id_data_type, id_default
+      FROM information_schema.columns c
+      WHERE c.table_schema = 'public'
+        AND c.table_name = 'events'
+        AND c.column_name = 'id';
+
+      IF id_data_type IS NULL THEN
+        RETURN;
+      END IF;
+
+      -- Skip non-numeric legacy IDs (if any).
+      IF id_data_type NOT IN ('integer', 'bigint') THEN
+        RETURN;
+      END IF;
+
+      IF id_default IS NULL OR position('nextval(' in id_default) = 0 THEN
+        seq_name := 'events_id_seq';
+
+        EXECUTE format('CREATE SEQUENCE IF NOT EXISTS public.%I', seq_name);
+        EXECUTE format(
+          'SELECT setval(''public.%I'', COALESCE((SELECT MAX(id) FROM public.events), 0) + 1, false)',
+          seq_name
+        );
+        EXECUTE format(
+          'ALTER TABLE public.events ALTER COLUMN id SET DEFAULT nextval(''public.%I''::regclass)',
+          seq_name
+        );
+        EXECUTE format('ALTER SEQUENCE public.%I OWNED BY public.events.id', seq_name);
+      END IF;
+    END $$;
+  `);
+
   await pool.query(`
     CREATE INDEX IF NOT EXISTS events_question_idx
     ON public.events (question_id);
+  `);
+
+  await pool.query(`
+    ALTER TABLE public.events ENABLE ROW LEVEL SECURITY;
+  `);
+
+  await pool.query(`
+    ALTER TABLE public.events FORCE ROW LEVEL SECURITY;
+  `);
+
+  await pool.query(`
+    DROP POLICY IF EXISTS events_select_own_or_admin ON public.events;
+  `);
+
+  await pool.query(`
+    CREATE POLICY events_select_own_or_admin
+    ON public.events
+    FOR SELECT
+    USING (
+      public.app_role() = 'admin'
+      OR user_id = public.app_user_id()
+    );
+  `);
+
+  await pool.query(`
+    DROP POLICY IF EXISTS events_insert_own_learner ON public.events;
+  `);
+
+  await pool.query(`
+    CREATE POLICY events_insert_own_learner
+    ON public.events
+    FOR INSERT
+    WITH CHECK (
+      user_id = public.app_user_id()
+      AND public.app_role() IN ('student', 'super_student')
+    );
+  `);
+
+  await pool.query(`
+    ALTER TABLE public.configs ENABLE ROW LEVEL SECURITY;
+  `);
+
+  await pool.query(`
+    DROP POLICY IF EXISTS configs_select_policy ON public.configs;
+  `);
+
+  await pool.query(`
+    CREATE POLICY configs_select_policy
+    ON public.configs
+    FOR SELECT
+    USING (
+      public.app_role() = 'admin'
+      OR (
+        public.app_role() = 'super_student'
+        AND status = 'live'
+        AND university_id = public.app_university_id()
+      )
+      OR (
+        public.app_role() = 'student'
+        AND status = 'live'
+        AND university_id = public.app_university_id()
+        AND public.app_normalize_token(branch) = public.app_normalize_token(public.app_branch())
+        AND public.app_student_year_matches_config_year(public.app_year(), year)
+      )
+    );
+  `);
+
+  await pool.query(`
+    ALTER TABLE public.nodes ENABLE ROW LEVEL SECURITY;
+  `);
+
+  await pool.query(`
+    DROP POLICY IF EXISTS nodes_select_policy ON public.nodes;
+  `);
+
+  await pool.query(`
+    CREATE POLICY nodes_select_policy
+    ON public.nodes
+    FOR SELECT
+    USING (
+      public.app_role() = 'admin'
+      OR EXISTS (
+        SELECT 1
+        FROM public.configs c
+        WHERE c.id = nodes.config_id
+          AND (
+            (
+              public.app_role() = 'super_student'
+              AND c.status = 'live'
+              AND c.university_id = public.app_university_id()
+            )
+            OR (
+              public.app_role() = 'student'
+              AND c.status = 'live'
+              AND c.university_id = public.app_university_id()
+              AND public.app_normalize_token(c.branch) = public.app_normalize_token(public.app_branch())
+              AND public.app_student_year_matches_config_year(public.app_year(), c.year)
+            )
+          )
+      )
+    );
+  `);
+
+  await pool.query(`
+    DROP POLICY IF EXISTS nodes_admin_all_policy ON public.nodes;
+  `);
+
+  await pool.query(`
+    CREATE POLICY nodes_admin_all_policy
+    ON public.nodes
+    FOR ALL
+    USING (public.app_role() = 'admin')
+    WITH CHECK (public.app_role() = 'admin');
+  `);
+
+  await pool.query(`
+    ALTER TABLE public.config_questions ENABLE ROW LEVEL SECURITY;
+  `);
+
+  await pool.query(`
+    DROP POLICY IF EXISTS config_questions_select_policy ON public.config_questions;
+  `);
+
+  await pool.query(`
+    CREATE POLICY config_questions_select_policy
+    ON public.config_questions
+    FOR SELECT
+    USING (
+      public.app_role() = 'admin'
+      OR EXISTS (
+        SELECT 1
+        FROM public.configs c
+        WHERE c.id = config_questions.config_id
+          AND (
+            (
+              public.app_role() = 'super_student'
+              AND c.status = 'live'
+              AND c.university_id = public.app_university_id()
+            )
+            OR (
+              public.app_role() = 'student'
+              AND c.status = 'live'
+              AND c.university_id = public.app_university_id()
+              AND public.app_normalize_token(c.branch) = public.app_normalize_token(public.app_branch())
+              AND public.app_student_year_matches_config_year(public.app_year(), c.year)
+            )
+          )
+      )
+    );
+  `);
+
+  await pool.query(`
+    DROP POLICY IF EXISTS config_questions_admin_all_policy ON public.config_questions;
+  `);
+
+  await pool.query(`
+    CREATE POLICY config_questions_admin_all_policy
+    ON public.config_questions
+    FOR ALL
+    USING (public.app_role() = 'admin')
+    WITH CHECK (public.app_role() = 'admin');
+  `);
+
+  await pool.query(`
+    ALTER TABLE public.config_replica_questions ENABLE ROW LEVEL SECURITY;
+  `);
+
+  await pool.query(`
+    DROP POLICY IF EXISTS config_replica_questions_admin_all_policy ON public.config_replica_questions;
+  `);
+
+  await pool.query(`
+    CREATE POLICY config_replica_questions_admin_all_policy
+    ON public.config_replica_questions
+    FOR ALL
+    USING (public.app_role() = 'admin')
+    WITH CHECK (public.app_role() = 'admin');
   `);
 
   // Legacy tables (subtopic_contents, subtopic_questions) are intentionally

@@ -1,0 +1,42 @@
+Here is the complete paper extracted from the images:
+
+---
+
+# Building LLM Applications
+**Chaitanya (Deemed to be University) | II Internal Examinations – April 2026**
+**B.Tech (CSE) - II Semester**
+
+---
+
+## PART – A (5 × 2 = 10 Marks) — Answer Any Five Questions
+
+1. What are the three essential components required to build an LLM application?
+2. Name the two main components of the Transformer architecture.
+3. List two benefits of using Gemini Guided Learning.
+4. What is the limitation of LLMs without tool calling?
+5. List two limitations of building LLM applications without a framework.
+6. What is an AI agent?
+7. What is the purpose of the start-interview API endpoint?
+8. What is the latency of Murf.AI Falcon?
+
+---
+
+## PART – B (2 × 10 = 20 Marks) — Answer Any Two Questions
+
+9. Describe the key parameters used in the gr.Interface() class. Explain the purpose of the parameters fn, inputs, outputs, title, and description.
+
+10. Evaluate the importance of multiple attention heads in Multi-Head Attention for understanding word relationships in sentences. Use the example 'She saw a bat' to justify whether multiple heads are necessary for effective language processing.
+
+11. Explain the difference between JSON and TOON formats in structured prompting, highlighting why TOON is more efficient.
+
+12. Explain in detail the architecture of a RAG Agent, comparing it with a traditional RAG system. Include the step-by-step implementation of adding agent capabilities to a DocuChat application.
+
+---
+
+## PART – C (1 × 10 = 10 Marks) — Answer All the Questions
+
+13. Describe the complete flow of a function calling request in LLMs, using a weather application as an example.
+
+**OR**
+
+14. Explain context overflow in short-term memory agents and strategies to handle it.

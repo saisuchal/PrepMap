@@ -1,0 +1,114 @@
+Maximum Duration: 1 Hour	       Maximum Marks: 30
+Part – A
+Answer all the questions 							                  5 Q X 3 M = 15
+
+Q. No.
+Questions
+   CO
+RBTL
+MARKS
+
+
+A can complete a work in 10 days. After working for 4 days, he leaves. B alone completes the remaining work in 12 days. In how many days can B alone complete the whole work?
+
+
+1
+K2
+3
+2.
+A pipe can fill a tank in 12 hours and another pipe can empty it in 18 hours. If both are opened together, in how many hours will the tank be filled?
+
+
+1
+K2
+3
+3.
+10 men can complete 3/5 of the work  in 12 days. How many more men are needed to finish the remaining work in 5 days?
+
+
+1
+K2
+3
+4.
+What is meant by combination and permutation? Explain combination as selection and permutation as arrangement, with one example each.
+
+
+2
+K1
+3
+5.
+A bag contains 6 red and 5 blue balls. Two balls are drawn without replacement. Find the probability that the balls drawn are blue.
+2
+K2
+3
+
+
+PART-B
+Answer all the questions 							                  3 Q X 5 M =15
+Q. No.
+ Questions
+CO
+RBTL
+MARKS
+6.
+Two inlet pipes A and B can fill a tank in 30 minutes and 45 minutes respectively. A leak can empty the full tank in 90 minutes. All are opened together.  
+(a) Find the net filling rate per minute.  
+(b) Find the time required to fill the empty tank.
+1
+K2
+5
+
+
+OR
+7.
+15 workers can complete a work in 24 days working 6 hours per day. After 8 days, 5 workers leave the work and the remaining workers work 8 hours per day.  
+(a) Find the fraction of work completed in the first 8 days.  
+(b) Find how many more days are required to complete the remaining work. 
+
+
+1
+K3
+5
+8.
+From a group of 12 boys and 9 girls, 7 students are to be selected.
+(a) How many selections are possible with exactly 4 boys?  
+(b) How many selections are possible with exactly 5 girls? 
+
+
+2
+K3
+5
+
+
+OR
+9.
+The letters of the word RESEARCH are to be arranged.
+(a) How many distinct arrangements are possible such that no two vowels are adjacent?
+(b) Among these arrangements (where no two vowels are adjacent), how many start with the letter R?
+ 
+
+
+2
+K3
+5
+10.
+Rahul can complete a packaging task in 18 days, while Arjun can complete the same task in 24 days. They begin working together and continue for 6 days, after which Arjun leaves the work and Rahul continues alone until completion.
+(a) What fraction of the total work remains after the first 6 days?
+(b) What is the total time taken to complete the entire work?
+ .
+1
+K2
+5
+
+
+OR
+11.
+Two fair dice are rolled simultaneously. 
+(a) Find the probability that the sum of the numbers obtained is 8.
+(b) Find the probability that at least one die shows a number greater than 4.
+(c) Find the probability that both dice show the same number.
+
+
+2
+K3
+5

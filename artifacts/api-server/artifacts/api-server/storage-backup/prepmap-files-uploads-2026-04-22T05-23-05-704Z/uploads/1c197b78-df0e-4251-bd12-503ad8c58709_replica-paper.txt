@@ -1,0 +1,77 @@
+Got it! Here is the complete Set A extracted from the screenshots:
+
+---
+
+# SET A — Numerical Ability
+**Chaitanya (Deemed to be University) | II Internal Examinations – April 2026**
+**B.Tech (CSE) - II Semester | Time: 1½ Hrs. | Max. Marks: 20**
+
+---
+
+## Section A — Answer any six Questions (6 × 2 = 12)
+
+1. Answer the following:
+   - a. How many odd days are there in 123 days?
+   - b. How many odd days are there in 366 days?
+
+2. If 1st January 2020 was a Wednesday, what will be the day of the week on 1st January 2021?
+
+3. A small cafe recorded the number of orders over 3 days:
+   - Monday: 120 orders
+   - Tuesday: 150 orders
+   - Wednesday: 130 orders
+
+   Out of total orders, 40% were online orders. What is the total number of online orders over the 3 days?
+
+4. In a queue of 50 people, A is 16th from the left and B is 19th from the right. How many people are there between A and B?
+
+5. Number of students enrolled in a course over years:
+   - 2018: 200
+   - 2019: 240
+   - 2020: 300
+   - 2021: 360
+
+   What is the percentage increase in students from 2018 to 2020?
+
+6. Find the missing term in the series: 6, 18, 36, 60, ?, 126
+
+7. Ravi starts from his house and walks 10 m towards North. He then turns right and walks 5 m, and finally turns right again and walks 10 m. In which direction is Ravi now from his starting point?
+
+8. In a marathon event, Arjun finished 12th from the start, and there were 35 runners in total. What was Arjun's position from the end?
+
+9. If "STAR" is written as "RSZQ" in a certain code, then how will "MOON" be written in that code?
+
+10. Priya starts from her home and walks 12 m towards East. She then turns left and walks 5 m. After that, she turns left again and walks 12 m. How far is Priya from her starting point?
+
+---
+
+## Section B — Answer the following Questions (2 × 4 = 8)
+
+11. Find the day of the week for 11th September 2002 using the odd days concept.
+
+**OR**
+
+12. Starting from point P, Rohit walks 12 km towards the south. He then takes a right turn and walks 8 km, followed by another right turn where he walks 15 km. After that, he turns left and walks 6 km.
+    - a. Calculate the total distance travelled by Rohit.
+    - b. Find the shortest distance between point P and Rohit's final position, and also determine the direction of Rohit's final position with respect to point P.
+
+13. The table below shows the number of mobile phones sold by five stores (A, B, C, D, and E) in two different months:
+
+| Store | January Sales | February Sales |
+|-------|--------------|----------------|
+| A | 120 | 150 |
+| B | 200 | 180 |
+| C | 160 | 220 |
+| D | 140 | 170 |
+| E | 180 | 210 |
+
+   - a. Which store recorded the highest total sales across both months?
+   - b. What is the difference in total sales between Store C and Store B?
+   - c. What is the average sales per store in February?
+   - d. What is the percentage increase in sales of Store A from January to February?
+
+**OR**
+
+14. Answer the following number series questions: 18, 41, 78, 129, ?, 273
+    - a. Identify the missing term.
+    - b. Find the next term after 273 using the same pattern.

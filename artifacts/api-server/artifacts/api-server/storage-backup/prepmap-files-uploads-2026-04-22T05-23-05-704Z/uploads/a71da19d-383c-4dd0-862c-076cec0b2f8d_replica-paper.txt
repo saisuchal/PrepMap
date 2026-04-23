@@ -1,0 +1,42 @@
+Here is the complete paper extracted from the images:
+
+---
+
+# Building LLM Applications
+**Chaitanya (Deemed to be University) | II Internal Examinations – April 2026**
+**B.Tech (CSE) - II Semester**
+
+---
+
+## PART – A (5 × 2 = 10 Marks) — Answer Any Five Questions
+
+1. Which role in chat-based prompting defines the AI's overall behavior?
+2. Demonstrate the correct import statement for Gradio.
+3. Explain the principle of next-word prediction in LLMs.
+4. List two benefits of using Gemini Guided Learning.
+5. Define Tool/Function Calling in LLMs.
+6. What is Retrieval-Augmented Generation (RAG)?
+7. Name two built-in tools in LangChain used for AI agents.
+8. What is the role of thread_id in the interview assistant?
+
+---
+
+## PART – B (2 × 10 = 20 Marks) — Answer Any Two Questions
+
+9. Evaluate the role of environment variables in securing API keys during deployment.
+
+10. Explain the evolution of Claude's capabilities from General Instructions to Claude Skills, analyzing the improvements at each stage.
+
+11. Describe the complete flow of creating a DocuChat RAG-powered chatbot using LangChain.
+
+12. Explain the complete architecture and implementation of the Conversational Interview Assistant. Cover all modules: Start Interview, Submit Answer, and End Interview with the supporting technologies.
+
+---
+
+## PART – C (1 × 10 = 10 Marks) — Answer All the Questions
+
+13. Analyze how the Transformer architecture solves the memory fading problem compared to RNNs and LSTMs.
+
+**OR**
+
+14. Illustrate the steps to create a SkillMap Agent using LangChain.

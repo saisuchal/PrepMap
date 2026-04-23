@@ -1,0 +1,38 @@
+Here is the complete Set C — Database Management Systems:
+
+---
+
+# SET C — Database Management Systems
+**Chaitanya (Deemed to be University) | II Internal Examinations – April 2026**
+**B.Tech (CSE) - II Semester | Time: 1½ Hrs. | Max. Marks: 20**
+
+---
+
+## Section A — Answer any six Questions (6 × 2 = 12)
+
+1. How would you filter player scores for the year 2020 before aggregation?
+2. What is a drawback of denormalization?
+3. What function is used to insert a single document in MongoDB?
+4. What is the syntax to update a document in MongoDB?
+5. Name the four ACID properties of transactions.
+6. Differentiate between creating a database and a collection in MongoDB.
+7. Justify the use of denormalization for high-frequency trading applications.
+8. What is a Composite Key? Illustrate with an example.
+9. Evaluate the importance of Foreign Keys in relational databases.
+10. What is the problem associated with partial dependencies in 2NF?
+
+---
+
+## Section B — Answer the following Questions (2 × 4 = 8)
+
+11. Illustrate how denormalization influences data retrieval speed with a practical example. Discuss the differences in operation.
+
+**OR**
+
+12. Provide a step-by-step explanation of how to convert a database table into Third Normal Form (3NF).
+
+13. Discuss timestamp-based protocols in concurrency control. How do they function?
+
+**OR**
+
+14. What is the role of projections in MongoDB? Compare including and excluding fields with examples.

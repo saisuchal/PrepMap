@@ -81,6 +81,7 @@ const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 
 try {
   let imported = 0;
+  let skippedExisting = 0;
   for (const parts of dataRows) {
     let studentId = "";
     let studentName = null;
@@ -117,30 +118,25 @@ try {
 
     const hashed = await bcrypt.hash(studentId, 10);
 
-    await pool.query(
+    const result = await pool.query(
       `
       INSERT INTO public.users
       (id, name, university_id, branch, year, role, password, must_reset_password, security_question, security_answer_hash, last_password_reset_at)
       VALUES
       ($1, $2, $3, $4, $5, $6, $7, true, NULL, NULL, NULL)
-      ON CONFLICT (id) DO UPDATE SET
-        name = EXCLUDED.name,
-        university_id = EXCLUDED.university_id,
-        branch = EXCLUDED.branch,
-        year = EXCLUDED.year,
-        role = EXCLUDED.role,
-        password = EXCLUDED.password,
-        must_reset_password = true,
-        security_question = NULL,
-        security_answer_hash = NULL,
-        last_password_reset_at = NULL
+      ON CONFLICT (id) DO NOTHING
       `,
       [studentId, studentName, universityId, branch, year, role, hashed],
     );
-    imported += 1;
+    if ((result.rowCount ?? 0) > 0) {
+      imported += 1;
+    } else {
+      skippedExisting += 1;
+    }
   }
 
   console.log(`Imported ${imported} students.`);
+  console.log(`Skipped ${skippedExisting} existing students.`);
   console.log("Initial password = student ID. First login setup will be required.");
 } finally {
   await pool.end();

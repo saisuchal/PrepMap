@@ -1,0 +1,42 @@
+Part A (3 Marks Each)
+
+1.
+A can complete a work in 8 days and B in 12 days. They work together for 3 days, then A leaves. In how many days will B finish the remaining work?
+
+2.
+A pipe fills a tank in 10 hours and another empties it in 15 hours. If both are opened together, how long will it take to fill the tank?
+
+3.
+12 workers can complete a work in 15 days. After 5 days, 4 workers leave. How many more days will the remaining workers take to complete the work?
+
+4.
+Define permutation and combination. Give one real-life example for each.
+
+5. A box contains 4 red, 3 green, and 5 blue balls. Two balls are drawn at random without replacement. Find the probability that both are red.
+
+Part B (5 Marks Each)
+6. Two pipes A and B can fill a tank in 20 minutes and 30 minutes respectively. A third pipe can empty it in 60 minutes.
+(a) Find the net rate of filling.
+(b) Find the time to fill the tank.
+
+
+7. 20 workers can complete a work in 18 days working 7 hours/day. After 6 days, 5 workers leave and remaining work 9 hours/day.
+(a) Work done in first 6 days
+(b) Remaining time to complete work
+
+8. From 10 boys and 8 girls, a team of 6 is to be selected:
+(a) How many ways to select exactly 3 boys?
+(b) How many ways to select at least 2 girls?
+
+9. Arrange letters of the word BALLOON:
+(a) Total distinct arrangements
+(b) Arrangements where vowels are together
+
+10. A can complete a work in 15 days and B in 20 days. They work together for 4 days, then B leaves.
+(a) Remaining work
+(b) Total time to finish
+
+11. Two dice are rolled:
+(a) Probability that sum is 10
+(b) Probability that at least one die shows 6
+(c) Probability that numbers are different

@@ -355,7 +355,7 @@ export async function customFetch<T = unknown>(
     }
   }
 
-  if (typeof window !== "undefined" && !headers.has("x-user-id")) {
+  if (typeof window !== "undefined" && !headers.has("x-user-id") && !headers.has("authorization")) {
     try {
       const stored =
         window.localStorage.getItem("prepmap_user") ??

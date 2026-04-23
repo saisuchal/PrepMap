@@ -1,0 +1,42 @@
+Here is the complete paper extracted from the images:
+
+---
+
+# Data Structures and Algorithms
+**Chaitanya (Deemed to be University) | II Internal Examinations – April 2026**
+**B.Tech (CSE) - II Semester**
+
+---
+
+## PART – A (5 × 2 = 10 Marks) — Answer Any Five Questions
+
+1. What is an array? State two key characteristics.
+2. What should be returned if no second largest distinct element exists in the array? When does this situation occur?
+3. What is the 'return address' stored in a stack frame? Why is it needed in recursion?
+4. For the recursive function printing N to 1, what is the base case and what value of i triggers it?
+5. What is backtracking in the context of printing numbers using recursion?
+6. Differentiate between a brute force approach and an optimal solution in one key aspect each.
+7. Why is secondLargest initialized to -1 in both the Better and Optimal approaches?
+8. Why does the loop in the isSorted algorithm run only up to index n-2 and not n-1?
+
+---
+
+## PART – B (2 × 10 = 20 Marks) — Answer Any Two Questions
+
+9. What is the brute force approach to finding the largest element in an array?
+
+10. In C++, how would you update the value of the second element in an integer array named 'arr[]' to 10?
+
+11. Given a string input ' this is a test message ', explain how to handle leading and trailing spaces while reversing the words.
+
+12. In the context of the pseudocode for removing duplicates, why is a set used to store unique elements, and what is its impact on time complexity?
+
+---
+
+## PART – C (1 × 10 = 10 Marks) — Answer All the Questions
+
+13. Describe the role of the pointer in the optimal approach for moving zeros to the end.
+
+**OR**
+
+14. How does the optimal approach ensure the correct identification of the second largest element in a single traversal?

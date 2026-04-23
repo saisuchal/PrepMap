@@ -1,0 +1,84 @@
+Maximum Duration:	1 Hour	Maximum Marks: 30
+Part – A
+Answer all the questions 							                  5 Q X 3 M = 15
+
+Q. No.
+Questions
+   CO
+RBTL
+MARKS
+
+
+What is the spread operator in JavaScript?
+1
+K1
+3
+2.
+What is a Factory function in JavaScript? 
+1
+K1
+3
+3.
+List the two main components of a JavaScript Engine.
+1
+K1
+3
+4.
+List the two ways to run JavaScript using Node JS.
+2
+K1
+3
+5.
+Explain the difference between core modules and third-party packages in Node.js.
+2
+K2
+3
+
+
+PART-B
+Answer all the questions 							                  3 Q X 5 M =15
+Q. No.
+ Questions
+CO
+RBTL
+MARKS
+6.
+Explain how the spread operator works differently with arrays versus objects.
+1
+K2
+5
+
+
+7.
+List the key differences between Factory functions and Constructor functions in JavaScript.
+1
+K1
+5
+
+8.
+Define inheritance in JavaScript classes and list the two keywords used to implement it.
+1
+K1
+5
+
+
+9.
+Explain the difference between synchronous and asynchronous execution in JavaScript. 
+
+
+1
+K2
+5
+
+10.
+Explain how each JavaScript file is treated as a module in Node JS. 
+2
+K2
+5
+
+
+11.
+Explain what date-fns is and how to install it.
+2
+K2
+5

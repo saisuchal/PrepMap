@@ -25,6 +25,12 @@ export function setStoredUser(user: StoredUser) {
   localStorage.setItem(AUTH_KEY, JSON.stringify(user));
 }
 
+export function getStoredAccessToken(): string | null {
+  const user = getStoredUser();
+  const token = String(user?.accessToken || "").trim();
+  return token || null;
+}
+
 export function removeStoredUser() {
   localStorage.removeItem(AUTH_KEY);
   localStorage.removeItem(LEGACY_AUTH_KEY);

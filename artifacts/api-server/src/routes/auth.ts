@@ -9,6 +9,7 @@ import {
 import { db, usersTable } from "../db";
 import { eq } from "drizzle-orm";
 import bcrypt from "bcrypt";
+import { issueAccessToken } from "../lib/jwt";
 
 const router: IRouter = Router();
 const normalizeSecurityAnswer = (value: string) => value.trim().toLowerCase();
@@ -39,12 +40,21 @@ router.post("/auth/login", async (req, res) => {
       .set({ lastSuccessfulLoginAt: new Date(), updatedAt: new Date() })
       .where(eq(usersTable.id, user.id));
 
+    const { token } = issueAccessToken({
+      userId: user.id,
+      role: user.role,
+      universityId: user.universityId,
+      branch: user.branch,
+      year: user.year,
+    });
+
     const response = LoginResponse.parse({
       id: user.id,
       universityId: user.universityId,
       branch: user.branch,
       year: user.year,
       role: user.role,
+      accessToken: token,
       mustResetPassword: !!(user as any).mustResetPassword,
       securityQuestionSet: !!(user as any).securityQuestion,
       onboardingRequired:

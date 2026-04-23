@@ -1,0 +1,38 @@
+Here is the complete Set B — Database Management Systems:
+
+---
+
+# SET B — Database Management Systems
+**Chaitanya (Deemed to be University) | II Internal Examinations – April 2026**
+**B.Tech (CSE) - II Semester | Time: 1½ Hrs. | Max. Marks: 20**
+
+---
+
+## Section A — Answer any six Questions (6 × 2 = 12)
+
+1. Define the syntax for using conditional operators in MongoDB.
+2. Explain the significance of data integrity in Schema Refinement.
+3. What challenge does sharding address in NoSQL databases?
+4. Define denormalization in the context of database management.
+5. What is the MongoDB command to calculate the average score of all players?
+6. Describe the process for connecting to MongoDB using the Shell.
+7. Define a Super Key in DBMS.
+8. Analyze the impact of poor schema design on database operations.
+9. Explain the benefit of using the MongoDB Shell.
+10. What would the command be to calculate the total number of sixes scored by each player?
+
+---
+
+## Section B — Answer the following Questions (2 × 4 = 8)
+
+11. Explain Denormalization in the context of Database Management Systems (DBMS). What are its characteristics?
+
+**OR**
+
+12. Explain the Common Mistake of mixing inclusion and exclusion in projections in MongoDB. Provide an example to illustrate this mistake.
+
+13. Define what is meant by the term 'query' in MongoDB and explain how it differs from typical SQL queries.
+
+**OR**
+
+14. Describe the purpose and function of a Foreign Key.

@@ -1,0 +1,106 @@
+Here is the complete paper extracted from the images:
+
+---
+
+# Numerical Ability
+**Chaitanya (Deemed to be University) | II Internal Examinations – April 2026**
+**B.Tech (CSE) - II Semester**
+
+---
+
+## PART – A (5 × 2 = 10 Marks) — Answer Any Five Questions
+
+1. If a watch shows 2:30 in a mirror, what is the actual time?
+
+2. Answer the following Questions:
+   - How many odd days are there in a leap year?
+   - How many odd days are there in a Non Leap year?
+
+3. A company's revenue across 4 years is as follows:
+   - Year 1: ₹2,50,000
+   - Year 2: ₹3,00,000
+   - Year 3: ₹3,75,000
+   - Year 4: ₹4,50,000
+
+   What is the percentage increase in revenue from Year 1 to Year 4?
+
+4. If today is Thursday, what day of the week will it be after 551 days?
+
+5. Table: Monthly Revenue of Companies A, B & C (in ₹ thousand)
+
+| Company | Revenue |
+|---------|---------|
+| A | 125 |
+| B | 150 |
+| C | 175 |
+| D | 200 |
+
+   If Company B increases its revenue by 20%, what will be the new revenue?
+
+6. In a row, Riya is at the 15th position from the front, and Arjun is at the 11th position from the back. There are 5 students standing between Riya and Arjun. Riya is standing to the left of Arjun. What is the total number of students in the row?
+
+7. Find the next four leap years after 2099, and justify your answer.
+
+8. In a class of 60 students, the number of girls is twice the number of boys. Aarav is ranked 10th from the top. If 7 girls are ahead of Aarav, how many boys are ranked after him?
+
+---
+
+## PART – B (2 × 10 = 20 Marks) — Answer Any Two Questions
+
+9. During a time-activity test, the following is asked.
+   - a. Find the time between 1 and 2 o'clock when the hands are together.
+   - b. Find the time between 4 and 5 o'clock when the hands are opposite to each other.
+   - c. Find the time between 6 and 7 o'clock when the hands are at right angles.
+
+10. Answer the following questions with proper stepwise explanations.
+    - a. What day of the week was 15th August 1948?
+    - b. How many odd days are there from 1st January 2000 to 31st December 2020?
+    - c. If 1st January 2022 was a Saturday, what day of the week was 1st January 2023?
+
+11. Table: Monthly Production (in Units)
+
+| Factory | Jan | Feb | Mar | Apr |
+|---------|-----|-----|-----|-----|
+| A | 180 | 200 | 220 | 210 |
+| B | 160 | 190 | 210 | 230 |
+| C | 200 | 210 | 190 | 200 |
+| D | 170 | 180 | 200 | 220 |
+
+   - a. Find the total production of all factories in March.
+   - b. Which factory shows the highest percentage increase from January to April?
+   - c. What is the difference between the highest and lowest production in February across all factories?
+   - d. Find the average monthly production of Factory C.
+
+12. If A is seated 23rd from the left end. B is seated 18th from the right end. There are exactly 12 students sitting between A and B. Based on this information, answer the following:
+    - a. Find the total number of students in the row.
+    - b. Find B's position from the left end.
+    - c. Find A's position from the right end.
+    - d. What is the position of the student who is exactly in the middle of the entire row?
+
+---
+
+## PART – C (1 × 10 = 10 Marks) — Answer All the Questions
+
+13. Pie chart: Fruit Sales by Type
+    - Apples: 30%
+    - Bananas: 25%
+    - Grapes: 15%
+    - Oranges: 20%
+    - Others: 10%
+
+    - a. Which type of fruit has the highest sales percentage according to the chart?
+    - b. How many times more apples were sold compared to the fruits in the "others" category?
+    - c. If the total weight of all fruits sold is 500 kilograms, what is the specific weight of bananas sold?
+
+**OR**
+
+14. At a College, all classroom clocks are set to 9:00 AM on Monday. Due to faults:
+    - Clock A gains 6 minutes every hour
+    - Clock B loses 4 minutes every hour
+    - Clock C gains 5 minutes every 2 hours
+    - Clock D loses 3 minutes every hour
+
+    Answer the following Questions:
+    - a. What time does Clock A show on Monday at 6:00 PM?
+    - b. What time does Clock B show on Monday at 8:00 PM?
+    - c. What time does Clock C show on Monday at 7:30 PM?

@@ -1,7 +1,8 @@
 import { Router, type IRouter } from "express";
-import { db, eventsTable, usersTable } from "../db";
+import { configsTable, eventsTable, usersTable, withRequestDbContext } from "../db";
 import { and, desc, eq } from "drizzle-orm";
 import { z } from "zod/v4";
+import { getJwtRequestAuth } from "../lib/requestAuth";
 
 const router: IRouter = Router();
 const TOPIC_INTERACTION_PREFIX = "__topic__:";
@@ -9,11 +10,12 @@ const QUESTION_BANK_EVENT_PREFIX = "__qb__:";
 
 const TrackEventBody = z
   .object({
-    userId: z.string().trim().min(1),
-    universityId: z.string().trim().min(1),
-    year: z.string().trim().min(1),
-    branch: z.string().trim().min(1),
-    exam: z.string().trim().min(1),
+    // Legacy fields are accepted for backwards compatibility; identity comes from JWT.
+    userId: z.string().trim().optional().nullable(),
+    universityId: z.string().trim().optional().nullable(),
+    year: z.string().trim().optional().nullable(),
+    branch: z.string().trim().optional().nullable(),
+    exam: z.string().trim().optional().nullable(),
     configId: z.string().trim().min(1),
     topicId: z.string().trim().optional().nullable(),
     subtopicId: z.string().trim().optional().nullable(),
@@ -38,9 +40,10 @@ const TrackEventBody = z
 
 router.get("/configs/:configId/latest-interaction-state", async (req, res) => {
   try {
-    const authUserId = String(req.headers["x-user-id"] || "").trim();
+    const auth = getJwtRequestAuth(req);
+    const authUserId = auth?.userId || "";
     if (!authUserId) {
-      res.status(401).json({ error: "Authentication required. Provide x-user-id header." });
+      res.status(401).json({ error: "Authentication required. Provide a valid bearer token." });
       return;
     }
 
@@ -50,17 +53,19 @@ router.get("/configs/:configId/latest-interaction-state", async (req, res) => {
       return;
     }
 
-    const latestEvents = await db
-      .select({
-        topicId: eventsTable.topicId,
-        subtopicId: eventsTable.subtopicId,
-        questionId: eventsTable.questionId,
-        timestamp: eventsTable.timestamp,
-      })
-      .from(eventsTable)
-      .where(and(eq(eventsTable.userId, authUserId), eq(eventsTable.configId, configId)))
-      .orderBy(desc(eventsTable.timestamp))
-      .limit(25);
+    const latestEvents = await withRequestDbContext(auth.claims, async (tx) =>
+      tx
+        .select({
+          topicId: eventsTable.topicId,
+          subtopicId: eventsTable.subtopicId,
+          questionId: eventsTable.questionId,
+          timestamp: eventsTable.timestamp,
+        })
+        .from(eventsTable)
+        .where(and(eq(eventsTable.userId, authUserId), eq(eventsTable.configId, configId)))
+        .orderBy(desc(eventsTable.timestamp))
+        .limit(25)
+    );
 
     const row = latestEvents[0];
     const latest = latestEvents.find((e) => (
@@ -97,9 +102,10 @@ router.get("/configs/:configId/latest-interaction-state", async (req, res) => {
 
 router.get("/configs/:configId/completion-state", async (req, res) => {
   try {
-    const authUserId = String(req.headers["x-user-id"] || "").trim();
+    const auth = getJwtRequestAuth(req);
+    const authUserId = auth?.userId || "";
     if (!authUserId) {
-      res.status(401).json({ error: "Authentication required. Provide x-user-id header." });
+      res.status(401).json({ error: "Authentication required. Provide a valid bearer token." });
       return;
     }
 
@@ -109,13 +115,15 @@ router.get("/configs/:configId/completion-state", async (req, res) => {
       return;
     }
 
-    const rows = await db
-      .select({
-        subtopicId: eventsTable.subtopicId,
-        topicId: eventsTable.topicId,
-      })
-      .from(eventsTable)
-      .where(and(eq(eventsTable.userId, authUserId), eq(eventsTable.configId, configId)));
+    const rows = await withRequestDbContext(auth.claims, async (tx) =>
+      tx
+        .select({
+          subtopicId: eventsTable.subtopicId,
+          topicId: eventsTable.topicId,
+        })
+        .from(eventsTable)
+        .where(and(eq(eventsTable.userId, authUserId), eq(eventsTable.configId, configId)))
+    );
 
     const doneSubtopicIds = Array.from(
       new Set(
@@ -149,32 +157,10 @@ router.get("/configs/:configId/completion-state", async (req, res) => {
 
 router.post("/events", async (req, res) => {
   try {
-    const authUserId = String(req.headers["x-user-id"] || "").trim();
+    const auth = getJwtRequestAuth(req);
+    const authUserId = auth?.userId || "";
     if (!authUserId) {
-      res.status(401).json({ error: "Authentication required. Provide x-user-id header." });
-      return;
-    }
-
-    const [authUser] = await db
-      .select({
-        id: usersTable.id,
-        universityId: usersTable.universityId,
-        year: usersTable.year,
-        branch: usersTable.branch,
-        role: usersTable.role,
-      })
-      .from(usersTable)
-      .where(eq(usersTable.id, authUserId))
-      .limit(1);
-
-    if (!authUser) {
-      res.status(401).json({ error: "Invalid user." });
-      return;
-    }
-
-    // Admins can preview student flow, but must not pollute progress analytics.
-    if (authUser.role === "admin") {
-      res.status(200).json({ success: true, skipped: true });
+      res.status(401).json({ error: "Authentication required. Provide a valid bearer token." });
       return;
     }
 
@@ -185,22 +171,80 @@ router.post("/events", async (req, res) => {
 
     const isQuestionEvent = !!questionId;
     const persistedTopicId = isQuestionEvent ? (topicId || `${QUESTION_BANK_EVENT_PREFIX}${questionId}`) : topicId;
-    const persistedSubtopicId = isQuestionEvent ? (subtopicId || null) : subtopicId;
+    const persistedSubtopicId = isQuestionEvent ? (subtopicId || "") : subtopicId;
 
-    await db.insert(eventsTable).values({
-      userId: authUser.id,
-      universityId: authUser.universityId,
-      year: authUser.year,
-      branch: authUser.branch,
-      exam: body.exam,
-      configId: body.configId,
-      topicId: persistedTopicId || null,
-      subtopicId: persistedSubtopicId || null,
-      questionId: questionId || null,
+    const result = await withRequestDbContext(auth.claims, async (tx) => {
+      const [authUser] = await tx
+        .select({
+          id: usersTable.id,
+          universityId: usersTable.universityId,
+          year: usersTable.year,
+          branch: usersTable.branch,
+          role: usersTable.role,
+        })
+        .from(usersTable)
+        .where(eq(usersTable.id, authUserId))
+        .limit(1);
+
+      if (!authUser) {
+        return { status: "invalid_user" as const };
+      }
+
+      // Admins can preview student flow, but must not pollute progress analytics.
+      if (authUser.role === "admin") {
+        return { status: "skipped" as const };
+      }
+
+      let resolvedExam = String(body.exam || "").trim();
+      if (!resolvedExam) {
+        const [config] = await tx
+          .select({ exam: configsTable.exam })
+          .from(configsTable)
+          .where(eq(configsTable.id, body.configId))
+          .limit(1);
+        resolvedExam = String(config?.exam || "").trim();
+      }
+      if (!resolvedExam) {
+        return { status: "invalid_event_payload" as const };
+      }
+
+      await tx.insert(eventsTable).values({
+        userId: authUser.id,
+        universityId: authUser.universityId,
+        year: authUser.year,
+        branch: authUser.branch,
+        exam: resolvedExam,
+        configId: body.configId,
+        topicId: persistedTopicId || null,
+        subtopicId: persistedSubtopicId,
+        questionId: questionId || null,
+      });
+
+      return { status: "inserted" as const };
     });
+
+    if (result.status === "invalid_user") {
+      res.status(401).json({ error: "Invalid user." });
+      return;
+    }
+    if (result.status === "skipped") {
+      res.status(200).json({ success: true, skipped: true });
+      return;
+    }
+    if (result.status === "invalid_event_payload") {
+      res.status(400).json({ error: "Invalid event payload." });
+      return;
+    }
 
     res.status(201).json({ success: true });
   } catch (error) {
+    if (error instanceof z.ZodError) {
+      res.status(400).json({
+        error: "Invalid event payload.",
+        issues: error.issues.map((issue) => issue.message),
+      });
+      return;
+    }
     req.log.error({ err: error }, "Failed to track event");
     res.status(500).json({ error: "Internal server error" });
   }

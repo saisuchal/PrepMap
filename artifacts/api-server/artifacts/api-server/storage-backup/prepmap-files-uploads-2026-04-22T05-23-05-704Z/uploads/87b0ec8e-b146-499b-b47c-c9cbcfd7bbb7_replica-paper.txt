@@ -1,0 +1,42 @@
+Here is the complete paper extracted from the images:
+
+---
+
+# Web Application Development 2
+**Chaitanya (Deemed to be University) | II Internal Examinations – April 2026**
+**B.Tech (CSE) - II Semester**
+
+---
+
+## PART – A (5 × 2 = 10 Marks) — Answer Any Five Questions
+
+1. What is the purpose of the .then() method in promise handling?
+2. What is Node REPL and how is it different from Node CLI?
+3. List the two main types of asynchronous code styles in JavaScript.
+4. What is a React Component?
+5. What are props in React?
+6. List the two ways to run JavaScript using Node JS.
+7. State one difference between HTML and JSX.
+8. Use the filter() method to get numbers greater than 5 from [2, 8, 3, 9, 1, 6].
+
+---
+
+## PART – B (2 × 10 = 20 Marks) — Answer Any Two Questions
+
+9. Explain the complete flow of execution when response.json() is used in a promise chain.
+
+10. Evaluate the advantages and disadvantages of using async/await versus traditional Promise chains, and recommend when each should be used.
+
+11. Discuss the importance of passing correct prop names between components.
+
+12. Explain how React improves performance compared to traditional JavaScript DOM manipulation.
+
+---
+
+## PART – C (1 × 10 = 10 Marks) — Answer All the Questions
+
+13. Explain JavaScript Promises. Describe the three states of a Promise with examples.
+
+**OR**
+
+14. Compare the working of document.createElement() in JavaScript with React.createElement() in React.
