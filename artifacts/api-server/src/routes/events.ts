@@ -1,5 +1,5 @@
 import { Router, type IRouter } from "express";
-import { eventsTable, usersTable, withRequestDbContext } from "../db";
+import { configsTable, eventsTable, usersTable, withRequestDbContext } from "../db";
 import { and, desc, eq } from "drizzle-orm";
 import { z } from "zod/v4";
 import { getJwtRequestAuth } from "../lib/requestAuth";
@@ -10,11 +10,12 @@ const QUESTION_BANK_EVENT_PREFIX = "__qb__:";
 
 const TrackEventBody = z
   .object({
-    userId: z.string().trim().min(1),
-    universityId: z.string().trim().min(1),
-    year: z.string().trim().min(1),
-    branch: z.string().trim().min(1),
-    exam: z.string().trim().min(1),
+    // Legacy fields are accepted for backwards compatibility; identity comes from JWT.
+    userId: z.string().trim().optional().nullable(),
+    universityId: z.string().trim().optional().nullable(),
+    year: z.string().trim().optional().nullable(),
+    branch: z.string().trim().optional().nullable(),
+    exam: z.string().trim().optional().nullable(),
     configId: z.string().trim().min(1),
     topicId: z.string().trim().optional().nullable(),
     subtopicId: z.string().trim().optional().nullable(),
@@ -170,7 +171,7 @@ router.post("/events", async (req, res) => {
 
     const isQuestionEvent = !!questionId;
     const persistedTopicId = isQuestionEvent ? (topicId || `${QUESTION_BANK_EVENT_PREFIX}${questionId}`) : topicId;
-    const persistedSubtopicId = isQuestionEvent ? (subtopicId || null) : subtopicId;
+    const persistedSubtopicId = isQuestionEvent ? (subtopicId || "") : subtopicId;
 
     const result = await withRequestDbContext(auth.claims, async (tx) => {
       const [authUser] = await tx
@@ -194,15 +195,28 @@ router.post("/events", async (req, res) => {
         return { status: "skipped" as const };
       }
 
+      let resolvedExam = String(body.exam || "").trim();
+      if (!resolvedExam) {
+        const [config] = await tx
+          .select({ exam: configsTable.exam })
+          .from(configsTable)
+          .where(eq(configsTable.id, body.configId))
+          .limit(1);
+        resolvedExam = String(config?.exam || "").trim();
+      }
+      if (!resolvedExam) {
+        return { status: "invalid_event_payload" as const };
+      }
+
       await tx.insert(eventsTable).values({
         userId: authUser.id,
         universityId: authUser.universityId,
         year: authUser.year,
         branch: authUser.branch,
-        exam: body.exam,
+        exam: resolvedExam,
         configId: body.configId,
         topicId: persistedTopicId || null,
-        subtopicId: persistedSubtopicId || null,
+        subtopicId: persistedSubtopicId,
         questionId: questionId || null,
       });
 
@@ -217,9 +231,20 @@ router.post("/events", async (req, res) => {
       res.status(200).json({ success: true, skipped: true });
       return;
     }
+    if (result.status === "invalid_event_payload") {
+      res.status(400).json({ error: "Invalid event payload." });
+      return;
+    }
 
     res.status(201).json({ success: true });
   } catch (error) {
+    if (error instanceof z.ZodError) {
+      res.status(400).json({
+        error: "Invalid event payload.",
+        issues: error.issues.map((issue) => issue.message),
+      });
+      return;
+    }
     req.log.error({ err: error }, "Failed to track event");
     res.status(500).json({ error: "Internal server error" });
   }

@@ -489,6 +489,48 @@ export async function initializeDatabase(): Promise<void> {
     ALTER COLUMN subtopic_id DROP NOT NULL;
   `);
 
+  // Repair legacy events.id definitions where NOT NULL exists but default/identity is missing.
+  // This prevents inserts from failing with "null value in column id" when using DEFAULT.
+  await pool.query(`
+    DO $$
+    DECLARE
+      id_data_type text;
+      id_default text;
+      seq_name text;
+    BEGIN
+      SELECT c.data_type, c.column_default
+      INTO id_data_type, id_default
+      FROM information_schema.columns c
+      WHERE c.table_schema = 'public'
+        AND c.table_name = 'events'
+        AND c.column_name = 'id';
+
+      IF id_data_type IS NULL THEN
+        RETURN;
+      END IF;
+
+      -- Skip non-numeric legacy IDs (if any).
+      IF id_data_type NOT IN ('integer', 'bigint') THEN
+        RETURN;
+      END IF;
+
+      IF id_default IS NULL OR position('nextval(' in id_default) = 0 THEN
+        seq_name := 'events_id_seq';
+
+        EXECUTE format('CREATE SEQUENCE IF NOT EXISTS public.%I', seq_name);
+        EXECUTE format(
+          'SELECT setval(''public.%I'', COALESCE((SELECT MAX(id) FROM public.events), 0) + 1, false)',
+          seq_name
+        );
+        EXECUTE format(
+          'ALTER TABLE public.events ALTER COLUMN id SET DEFAULT nextval(''public.%I''::regclass)',
+          seq_name
+        );
+        EXECUTE format('ALTER SEQUENCE public.%I OWNED BY public.events.id', seq_name);
+      END IF;
+    END $$;
+  `);
+
   await pool.query(`
     CREATE INDEX IF NOT EXISTS events_question_idx
     ON public.events (question_id);
