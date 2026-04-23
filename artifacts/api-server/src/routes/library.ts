@@ -86,6 +86,94 @@ function normalizeAndSanitizeTopics(input: unknown): UnitTopicInput[] {
   return normalizeExtractedTopics(sanitized);
 }
 
+function finalizeGlanceableTitle(value: string): string {
+  let t = String(value || "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/[,:;.\-_/]+$/g, "")
+    .trim();
+
+  // Remove trailing connector words that indicate an incomplete fragment.
+  const trailingConnector = /\b(and|or|for|to|with|of|in|on|by|from|the|a|an)\b$/i;
+  while (trailingConnector.test(t)) {
+    t = t.replace(trailingConnector, "").trim();
+  }
+
+  return t;
+}
+
+function enforceMapLabelStyle(value: string, options?: { maxWords?: number }): string {
+  const maxWords = Math.max(2, Number(options?.maxWords ?? 6));
+  let t = finalizeGlanceableTitle(value);
+  if (!t) return "";
+
+  // Remove instruction-like prefixes; keep label noun-centric.
+  t = t.replace(
+    /^(using|use|implementing|implement|handling|handle|designing|design|tracking|track|enabling|enable|storing|store|sending|send|reading|read|returning|return|creating|create|initializing|initialize|setting up|setup)\s+/i,
+    "",
+  );
+
+  // Prefer first compact segment when a sentence-like label leaks in.
+  const segmentParts = t
+    .split(/\s*[:;|]\s*|\s+[â€”-]\s+/)
+    .map((p) => p.trim())
+    .filter(Boolean);
+  if (segmentParts.length > 1 && segmentParts[0].split(/\s+/).length >= 2) {
+    t = segmentParts[0];
+  }
+
+  // If commas indicate explanation, keep the strongest first phrase.
+  const commaParts = t.split(/\s*,\s*/).map((p) => p.trim()).filter(Boolean);
+  if (commaParts.length > 1 && commaParts[0].split(/\s+/).length >= 2) {
+    t = commaParts[0];
+  }
+
+  t = finalizeGlanceableTitle(t);
+  if (!t) return "";
+
+  const words = t.split(/\s+/).filter(Boolean);
+  if (words.length > maxWords) {
+    // Soft cap only after semantic cleanup.
+    t = words.slice(0, maxWords).join(" ");
+  }
+
+  t = finalizeGlanceableTitle(t);
+  return t;
+}
+
+function makeCleanupGlanceableTopics(input: unknown): UnitTopicInput[] {
+  const normalized = normalizeAndSanitizeTopics(input);
+  const seenTopicKeys = new Set<string>();
+  const output: UnitTopicInput[] = [];
+
+  for (const topic of normalized) {
+    const compactTopic = enforceMapLabelStyle(compactTopicTitle(topic.title), { maxWords: 6 });
+    if (!compactTopic) continue;
+    const topicKey = normalizeText(compactTopic);
+    if (!topicKey || seenTopicKeys.has(topicKey)) continue;
+    seenTopicKeys.add(topicKey);
+
+    const seenSubtopicKeys = new Set<string>();
+    const compactSubtopics = (topic.subtopics ?? [])
+      .map((subtopic) => enforceMapLabelStyle(compactSubtopicTitle(subtopic), { maxWords: 5 }))
+      .filter((subtopic) => {
+        if (!subtopic) return false;
+        const key = normalizeText(subtopic);
+        if (!key || seenSubtopicKeys.has(key)) return false;
+        seenSubtopicKeys.add(key);
+        return true;
+      });
+
+    if (compactSubtopics.length === 0) continue;
+    output.push({
+      title: compactTopic,
+      subtopics: compactSubtopics,
+    });
+  }
+
+  return output;
+}
+
 function cleanGeneratedHeading(raw: unknown): string {
   return String(raw || "")
     .replace(/^\s*\d+(\.\d+)*\s*[-.)]?\s*/g, "")
@@ -144,20 +232,69 @@ function compactSubtopicTitle(raw: unknown): string {
 
 function compactFactText(raw: unknown): string {
   let t = String(raw || "")
-    .replace(/^\s*[-*•]\s*/gm, "")
+    .replace(/^\s*[-*?]\s*/gm, "")
+    .replace(/\brequest\.\s*json\b/gi, "request.json")
+    .replace(/\.\s*env\b/gi, ".env")
+    .replace(/\bos\.\s*getenv\b/gi, "os.getenv")
     .replace(/\s+/g, " ")
     .trim();
   if (!t) return "";
-
   const sentenceParts = t.match(/[^.!?]+[.!?]?/g)?.map((s) => s.trim()).filter(Boolean) ?? [];
   if (sentenceParts.length > 2) t = sentenceParts.slice(0, 2).join(" ");
-
   if (t.length > 220) {
     const cut = t.slice(0, 220);
     const lastBoundary = Math.max(cut.lastIndexOf("."), cut.lastIndexOf(";"), cut.lastIndexOf(","));
     t = `${(lastBoundary > 120 ? cut.slice(0, lastBoundary) : cut).trim()}.`;
   }
   return t.trim();
+}
+function canonicalizeFactText(raw: string): string {
+  return String(raw || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+function tokenJaccard(a: string, b: string): number {
+  const aSet = new Set(canonicalizeFactText(a).split(" ").filter(Boolean));
+  const bSet = new Set(canonicalizeFactText(b).split(" ").filter(Boolean));
+  if (aSet.size === 0 || bSet.size === 0) return 0;
+  let inter = 0;
+  for (const token of aSet) {
+    if (bSet.has(token)) inter += 1;
+  }
+  const union = aSet.size + bSet.size - inter;
+  return union > 0 ? inter / union : 0;
+}
+function isNearDuplicateFactText(a: string, b: string): boolean {
+  const ca = canonicalizeFactText(a);
+  const cb = canonicalizeFactText(b);
+  if (!ca || !cb) return false;
+  if (ca === cb) return true;
+  if (ca.length >= 40 && cb.length >= 40 && (ca.includes(cb) || cb.includes(ca))) return true;
+  return tokenJaccard(ca, cb) >= 0.88;
+}
+const FACT_FAITHFULNESS_STOPWORDS = new Set([
+  "the", "a", "an", "and", "or", "to", "of", "in", "on", "for", "with", "from", "by",
+  "is", "are", "was", "were", "be", "as", "it", "that", "this", "these", "those",
+  "you", "your", "we", "our", "they", "their", "at", "into", "over", "under", "via",
+  "can", "should", "must", "will", "would", "may", "might", "not",
+]);
+function passesFaithfulnessCheck(factText: string, sourceSpan: string, sourceText: string): boolean {
+  const src = canonicalizeFactText(sourceText);
+  if (!src) return false;
+  const span = canonicalizeFactText(sourceSpan);
+  if (span && src.includes(span)) return true;
+  const keywords = canonicalizeFactText(factText)
+    .split(" ")
+    .filter((token) => token.length >= 4 && !FACT_FAITHFULNESS_STOPWORDS.has(token));
+  if (keywords.length === 0) return false;
+  let hits = 0;
+  for (const kw of keywords) {
+    if (src.includes(kw)) hits += 1;
+    if (hits >= 2) return true;
+  }
+  return false;
 }
 
 function splitInlineOutlineFromTopicTitle(rawTopicTitle: string): { topicTitle: string; inlineSubtopics: string[] } {
@@ -751,11 +888,12 @@ async function extractFactsForMaterial(
 
   const pushUniqueFact = (target: Map<string, ExtractedFact[]>, key: string, facts: ExtractedFact[]) => {
     const existing = target.get(key) ?? [];
-    const seen = new Set(existing.map((f) => `${f.type}|${normalizeText(f.text)}`));
     for (const fact of facts) {
-      const factKey = `${fact.type}|${normalizeText(fact.text)}`;
-      if (!fact.text || seen.has(factKey)) continue;
-      seen.add(factKey);
+      if (!fact.text) continue;
+      if (!String(fact.sourceSpan || "").trim()) continue;
+      if (!passesFaithfulnessCheck(fact.text, fact.sourceSpan, trimmedText)) continue;
+      const duplicate = existing.some((f) => f.type === fact.type && isNearDuplicateFactText(f.text, fact.text));
+      if (duplicate) continue;
       existing.push(fact);
     }
     target.set(key, existing);
@@ -844,6 +982,7 @@ Rules:
 - Keep each fact readable in one short sentence (or at most two short sentences).
 - Keep text concise, factual, actionable, and non-duplicated.
 - Do not invent facts not inferable from source text.
+- Every fact must include a non-empty sourceSpan pointing to where it comes from in the reading material.
 - Prefer beginner-useful facts (definition, rule, pitfall, insight, example_candidate).
 - Avoid generic statements without concrete content.
 - If no reliable fact exists for an item, return empty facts for that item.`;
@@ -974,15 +1113,23 @@ STRICT RULES:
 - Never output a flattened outline inside a topic title. Do not return patterns like "Topic: item1, item2, item3".
 - If source has section-style bullets under a heading, keep heading as topic and move bullets into subtopics.
 - Topic title style:
-  - Keep compact, map-friendly names (prefer 1-4 words).
+  - Keep compact, map-friendly names (usually 3-7 words).
+  - Titles must be meaningful standalone phrases, not clipped fragments.
+  - MAP LABEL MODE: output should read like roadmap node labels (short noun phrases), not sentence fragments.
+  - Keep one core concept per topic title.
   - Avoid long sentence-style titles.
   - Never include formulas, code conditions, or complexity expressions in titles (for example avoid "arr[i] >= x", "O(log n)", "mid = ..."). Put those in explanations instead.
   - Avoid generic titles like "Overview", "Concepts", "Introduction", "Theory", "Methods" unless truly present as a heading.
+  - Never end a title with connector words like "and", "for", "with", "to", "of".
 - Subtopic title style:
-  - Keep compact, map-friendly labels (prefer 1-5 words).
+  - Keep compact, map-friendly labels (usually 2-6 words).
   - Prefer actionable short labels (for example: "Login request", "Handle login response", "Store JWT").
+  - Subtopic titles must be understandable on their own.
+  - MAP LABEL MODE: subtopic labels should be quick-scan node names, not explanatory clauses.
+  - Keep one core concept per subtopic label.
   - Never include formula text or code-like expressions in titles.
   - Avoid redundant prefixes/suffixes like "Subtopic -", "Concept of", "Basics of".
+  - Never end a title with connector words like "and", "for", "with", "to", "of".
 - Remove heading numbering from output titles (e.g., "3.3.1 Cookies.set()" -> "Cookies.set()").
 - Preserve source order.
 - Do not duplicate near-identical titles.
@@ -1264,9 +1411,10 @@ router.post("/admin/library/units/extract-from-text", requireAdmin, async (req, 
         extracted?.unitTitle ||
         material.titleHint
       ).trim();
-      const topics = extracted?.topics ?? [];
-      const normalizedTopics = topics.length > 0
-        ? topics
+      const extractedTopics = extracted?.topics ?? [];
+      const cleanedTopics = makeCleanupGlanceableTopics(extractedTopics);
+      const normalizedTopics = cleanedTopics.length > 0
+        ? cleanedTopics
         : [{ title: "Overview", subtopics: ["Introduction"] }];
 
       const normalizedUnitTitle = normalizeText(resolvedUnitTitle);
@@ -1289,47 +1437,21 @@ router.post("/admin/library/units/extract-from-text", requireAdmin, async (req, 
         .limit(1);
 
       if (existing) {
-        const existingTopics = Array.isArray(existing.topics) ? existing.topics : [];
-        const hasExistingTopics = existingTopics.length > 0;
-        const hasExistingSource = Boolean((existing.sourceText ?? "").trim());
-        effectiveTopics = hasExistingTopics ? normalizeAndSanitizeTopics(existingTopics) : normalizedTopics;
-        const patch: {
-          unitTitle?: string;
-          topics?: UnitTopicInput[];
-          sourceText?: string;
-          updatedAt: Date;
-        } = { updatedAt: new Date() };
-        let shouldUpdate = false;
+        // Keep extract-from-text deterministic: latest extraction replaces existing unit content.
+        await db
+          .update(unitLibraryTable)
+          .set({
+            unitTitle: resolvedUnitTitle,
+            topics: normalizedTopics,
+            sourceText: material.readingText,
+            updatedAt: new Date(),
+          })
+          .where(eq(unitLibraryTable.id, existing.id));
 
-        // Preserve existing extracted/edited content. Only fill missing values.
-        if (!String(existing.unitTitle || "").trim()) {
-          patch.unitTitle = resolvedUnitTitle;
-          shouldUpdate = true;
-        }
-        if (!hasExistingTopics) {
-          patch.topics = normalizedTopics;
-          shouldUpdate = true;
-        }
-        if (!hasExistingSource) {
-          patch.sourceText = material.readingText;
-          shouldUpdate = true;
-        }
-
-        if (shouldUpdate) {
-          await db
-            .update(unitLibraryTable)
-            .set(patch)
-            .where(eq(unitLibraryTable.id, existing.id));
-          if (patch.unitTitle) {
-            effectiveUnitTitle = patch.unitTitle;
-          } else if (existing.unitTitle) {
-            effectiveUnitTitle = existing.unitTitle;
-          }
-        } else if (existing.unitTitle) {
-          effectiveUnitTitle = existing.unitTitle;
-        }
+        effectiveUnitTitle = resolvedUnitTitle;
+        effectiveTopics = normalizedTopics;
         unitLibraryId = existing.id;
-        upserted.push({ id: existing.id, unitTitle: existing.unitTitle || resolvedUnitTitle });
+        upserted.push({ id: existing.id, unitTitle: resolvedUnitTitle });
       } else {
         const id = `unit_${randomUUID().substring(0, 8)}`;
         await db.insert(unitLibraryTable).values({
@@ -1557,6 +1679,9 @@ router.post("/admin/library/units/:id/cleanup-titles", requireAdmin, async (req,
     const [existing] = await db
       .select({
         id: unitLibraryTable.id,
+        subjectId: unitLibraryTable.subjectId,
+        unitTitle: unitLibraryTable.unitTitle,
+        sourceText: unitLibraryTable.sourceText,
         topics: unitLibraryTable.topics,
       })
       .from(unitLibraryTable)
@@ -1580,7 +1705,41 @@ router.post("/admin/library/units/:id/cleanup-titles", requireAdmin, async (req,
     }
 
     const beforeTopics = sanitizeTopics(existing.topics);
-    const cleanedTopics = normalizeAndSanitizeTopics(existing.topics);
+    const sourceText = String(existing.sourceText || "").trim();
+    if (!sourceText) {
+      res.status(400).json({
+        error: "Reading material (sourceText) is empty for this unit. Add reading material text first.",
+      });
+      return;
+    }
+
+    const [subject] = await db
+      .select({ id: subjectsTable.id, name: subjectsTable.name })
+      .from(subjectsTable)
+      .where(eq(subjectsTable.id, existing.subjectId))
+      .limit(1);
+    if (!subject) {
+      res.status(404).json({ error: "Subject not found for unit" });
+      return;
+    }
+
+    const extractedByMaterial = await extractTopicsForMaterialsBatch(subject.name, [
+      {
+        materialId: id,
+        explicitTitle: String(existing.unitTitle || "").trim() || null,
+        titleHint: String(existing.unitTitle || "").trim() || "Unit",
+        readingText: sourceText,
+      },
+    ]);
+    const extracted = extractedByMaterial.get(id);
+    const cleanedTopics = makeCleanupGlanceableTopics(extracted?.topics ?? []);
+    if (cleanedTopics.length === 0) {
+      res.status(422).json({
+        error: "Could not generate topic/subtopic titles from reading material. Please update reading material and retry.",
+      });
+      return;
+    }
+
     const updated = JSON.stringify(beforeTopics) !== JSON.stringify(cleanedTopics);
 
     if (updated && !preview) {

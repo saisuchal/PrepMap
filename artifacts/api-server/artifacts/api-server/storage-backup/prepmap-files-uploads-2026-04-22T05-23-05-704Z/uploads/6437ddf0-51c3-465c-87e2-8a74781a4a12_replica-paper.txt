@@ -1,0 +1,38 @@
+Here is the complete Set C — Building LLM Applications:
+
+---
+
+# SET C — Building LLM Applications
+**Chaitanya (Deemed to be University) | II Internal Examinations – April 2026**
+**B.Tech (CSE) - II Semester | Time: 1½ Hrs. | Max. Marks: 20**
+
+---
+
+## Section A — Answer any six Questions (6 × 2 = 12)
+
+1. What are the smaller parts called when a sentence is split during tokenization?
+2. How many sub-layers are present in a standard Transformer encoder layer?
+3. Which core principle allows LLMs to generate coherent text?
+4. How many sub-layers are present in a standard Transformer decoder layer?
+5. What is the purpose of positional encoding in Transformers?
+6. Which layer converts decoder outputs into actual words?
+7. What does the "Norm" (Normalization) operation do?
+8. What is LangChain primarily used for?
+9. Which sub-layer helps capture relationships between words in a sentence?
+10. Which architecture solved the memory fading problem present in RNNs and LSTMs?
+
+---
+
+## Section B — Answer the following Questions (2 × 4 = 8)
+
+11. Explain any four capabilities of Comet AI Browser.
+
+**OR**
+
+12. Explain the role of embeddings in a RAG application.
+
+13. Explain the key features of Google Antigravity.
+
+**OR**
+
+14. Explain how a checkpointer works in LangGraph for agent memory.

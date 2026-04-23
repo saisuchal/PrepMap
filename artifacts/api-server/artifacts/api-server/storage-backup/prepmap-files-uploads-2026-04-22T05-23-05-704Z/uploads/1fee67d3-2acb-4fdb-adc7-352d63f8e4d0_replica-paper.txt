@@ -1,0 +1,38 @@
+Here is the complete Set B — Data Structures and Algorithms:
+
+---
+
+# SET B — Data Structures and Algorithms
+**Chaitanya (Deemed to be University) | II Internal Examinations – April 2026**
+**B.Tech (CSE) - II Semester | Time: 1½ Hrs. | Max. Marks: 20**
+
+---
+
+## Section A — Answer any six Questions (6 × 2 = 12)
+
+1. What does the replace() method do in C++ strings?
+2. What does the push_back() method do in C++ strings?
+3. Define what constitutes a 'word' in the context of reversing words in a string.
+4. Why do even-frequency characters not contribute to the oddCount in the canPartition algorithm?
+5. At what point is a stack frame removed (popped) from the call stack? What triggers this in recursion?
+6. What are the base cases for the factorial recursive function? Why are both n=0 and n=1 base cases?
+7. Why is sorting the input array recommended before applying the backtracking approach for unique subsets?
+8. Why does selection sort have O(n²) time complexity even in the best case?
+9. What is the best-case time complexity of optimised bubble sort and when does it occur?
+10. State the time complexity of merge sort for all cases and why it never changes.
+
+---
+
+## Section B — Answer the following Questions (2 × 4 = 8)
+
+11. Trace fib(5) and list the return values during unwinding.
+
+**OR**
+
+12. Trace the first two passes of bubble sort on [5, 1, 4, 2, 8]. Show each comparison and swap.
+
+13. Compare quick sort and merge sort: time complexity, space complexity, stability, and in-place nature.
+
+**OR**
+
+14. Differentiate between Lower Bound and Upper Bound.

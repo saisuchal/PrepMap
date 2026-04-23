@@ -3,7 +3,7 @@ import { useLocation } from "wouter";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   ArrowLeft, Layers, BookOpen, FileText, MessageSquare,
-  CheckCircle2, AlertCircle, ZoomIn, ZoomOut, X, List, Plus, Minus, Star, ChevronLeft, ChevronRight, Lightbulb, Info, PenLine
+  CheckCircle2, AlertCircle, ZoomIn, ZoomOut, X, List, Plus, Minus, Star, ChevronLeft, ChevronRight, Lightbulb, Info, PenLine, Search
 } from "lucide-react";
 import {
   useGetAppMetadata,
@@ -42,6 +42,7 @@ const QUESTION_BANK_LANE_H = 88;
 const QUESTION_BANK_EVENT_PREFIX = "__qb__:";
 const ZOOM_STEP = 1.1;
 const MAX_AUTO_FOCUS_ZOOM = 1.1;
+const COLLAPSED_GRID_VISIBLE_COLUMNS = 3.5;
 
 function getSubtopicTrackSessionKey(configId: string, userId: string, subtopicId: string): string {
   return `tracked_subtopic_${configId}_${userId}_${subtopicId}`;
@@ -741,6 +742,14 @@ export default function Roadmap() {
     tree.forEach((unit, idx) => map.set(unit.id, idx + 1));
     return map;
   }, [tree]);
+  const firstTopicByUnitId = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const unit of tree) {
+      const firstTopic = unit.children.find((child) => child.type === "topic");
+      if (firstTopic) map.set(unit.id, firstTopic.id);
+    }
+    return map;
+  }, [tree]);
 
   const { laid, totalHeight, totalWidth } = useMemo(() => computeLayout(mapTree), [mapTree]);
   const allNodes = useMemo(() => flattenLayout(laid), [laid]);
@@ -766,6 +775,8 @@ export default function Roadmap() {
   const pinchStart = useRef({ distance: 0, zoom: 1 });
 
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+  const [globalSearchQuery, setGlobalSearchQuery] = useState("");
+  const [isGlobalSearchOpen, setIsGlobalSearchOpen] = useState(false);
   const [questionBankOpen, setQuestionBankOpen] = useState(false);
   const [viewMode, setViewMode] = useState<"list" | "map">("map");
   const viewer = getStoredUser();
@@ -794,6 +805,7 @@ export default function Roadmap() {
   const bootCameraRaf2Ref = useRef<number | null>(null);
   const bootCameraTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isDesktopMapView = viewMode === "map" && !isMobileViewport;
+  const globalSearchRef = useRef<HTMLDivElement>(null);
 
   const clearBootCameraSequence = useCallback(() => {
     if (bootCameraRaf1Ref.current) {
@@ -817,6 +829,86 @@ export default function Roadmap() {
     }
     return map;
   }, [nodes]);
+  const nodeSearchIndex = useMemo(() => {
+    const map = new Map<string, { id: string; title: string; parentId: string | null; type: "unit" | "topic" | "subtopic" }>();
+    for (const n of nodes ?? []) {
+      map.set(n.id, {
+        id: n.id,
+        title: String(n.title || "").trim(),
+        parentId: n.parentId ?? null,
+        type: n.type as "unit" | "topic" | "subtopic",
+      });
+    }
+    return map;
+  }, [nodes]);
+  const searchableNodes = useMemo(() => {
+    const items: Array<{
+      id: string;
+      type: "unit" | "topic" | "subtopic";
+      title: string;
+      path: string;
+      searchable: string;
+    }> = [];
+    for (const n of nodes ?? []) {
+      const curr = nodeSearchIndex.get(n.id);
+      if (!curr) continue;
+      const currentTitle = curr.title || n.id;
+      let unitTitle = "";
+      let topicTitle = "";
+      if (curr.type === "unit") {
+        unitTitle = currentTitle;
+      } else if (curr.type === "topic") {
+        topicTitle = currentTitle;
+        const parent = curr.parentId ? nodeSearchIndex.get(curr.parentId) : null;
+        unitTitle = parent?.title || "";
+      } else {
+        const topic = curr.parentId ? nodeSearchIndex.get(curr.parentId) : null;
+        topicTitle = topic?.title || "";
+        const unit = topic?.parentId ? nodeSearchIndex.get(topic.parentId) : null;
+        unitTitle = unit?.title || "";
+      }
+      const pathParts =
+        curr.type === "unit"
+          ? [currentTitle]
+          : curr.type === "topic"
+            ? [unitTitle, currentTitle]
+            : [unitTitle, topicTitle, currentTitle];
+      const path = pathParts.map((p) => String(p || "").trim()).filter(Boolean).join(" > ");
+      items.push({
+        id: curr.id,
+        type: curr.type,
+        title: currentTitle,
+        path,
+        searchable: `${currentTitle} ${curr.id} ${curr.type} ${path}`.toLowerCase(),
+      });
+    }
+    return items;
+  }, [nodes, nodeSearchIndex]);
+  const globalSearchResults = useMemo(() => {
+    const q = globalSearchQuery.trim().toLowerCase();
+    if (!q) return [] as typeof searchableNodes;
+    const typePriority = (type: "unit" | "topic" | "subtopic") =>
+      type === "unit" ? 0 : type === "topic" ? 1 : 2;
+    return searchableNodes
+      .map((item) => {
+        let score = 0;
+        if (item.id.toLowerCase() === q) score += 400;
+        if (item.title.toLowerCase() === q) score += 300;
+        if (item.title.toLowerCase().startsWith(q)) score += 200;
+        if (item.title.toLowerCase().includes(q)) score += 120;
+        if (item.id.toLowerCase().includes(q)) score += 90;
+        if (item.path.toLowerCase().includes(q)) score += 60;
+        if (item.searchable.includes(q)) score += 20;
+        return { item, score };
+      })
+      .filter((entry) => entry.score > 0)
+      .sort((a, b) =>
+        typePriority(a.item.type) - typePriority(b.item.type) ||
+        b.score - a.score ||
+        a.item.title.localeCompare(b.item.title)
+      )
+      .map((entry) => entry.item);
+  }, [searchableNodes, globalSearchQuery]);
 
   const expandPathForNode = useCallback((nodeId: string, options?: { skipCamera?: boolean; focusTopicId?: string | null }) => {
     const target = nodeById.get(nodeId);
@@ -872,6 +964,43 @@ export default function Roadmap() {
     setQuestionBankOpen(false);
     setSelectedNodeId(nodeId);
   }, [expandPathForNode, nodeById]);
+  const handleGlobalSearchSelect = useCallback((nodeId: string) => {
+    const nextId = String(nodeId || "").trim();
+    if (!nextId) return;
+    const target = nodeById.get(nextId);
+    if (target?.type === "unit") {
+      const firstTopicId = firstTopicByUnitId.get(nextId);
+      if (firstTopicId) {
+        const firstTopicTarget = nodeById.get(firstTopicId);
+        if (firstTopicTarget) {
+          expandPathForNode(firstTopicId, {
+            skipCamera: false,
+            focusTopicId:
+              firstTopicTarget.type === "subtopic"
+                ? (firstTopicTarget.parentId || null)
+                : firstTopicTarget.type === "topic"
+                  ? firstTopicTarget.id
+                  : null,
+          });
+        }
+        setQuestionBankOpen(false);
+        setSelectedNodeId(firstTopicId);
+      } else {
+        expandPathForNode(nextId, { skipCamera: false, focusTopicId: null });
+        setQuestionBankOpen(false);
+        setSelectedNodeId(null);
+      }
+    } else {
+      expandPathForNode(nextId, {
+        skipCamera: false,
+        focusTopicId: target?.type === "subtopic" ? (target.parentId || null) : target?.type === "topic" ? target.id : null,
+      });
+      setQuestionBankOpen(false);
+      setSelectedNodeId(nextId);
+    }
+    setGlobalSearchQuery("");
+    setIsGlobalSearchOpen(false);
+  }, [nodeById, firstTopicByUnitId, expandPathForNode]);
 
   const openQuestionBank = useCallback(() => {
     setSelectedNodeId(null);
@@ -1005,6 +1134,17 @@ export default function Roadmap() {
     setBootFocusRootId(null);
     setBootStage("collapsing");
   }, [configId]);
+  useEffect(() => {
+    const onMouseDown = (event: MouseEvent) => {
+      const target = event.target as Node | null;
+      if (!globalSearchRef.current || !target) return;
+      if (!globalSearchRef.current.contains(target)) {
+        setIsGlobalSearchOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", onMouseDown);
+    return () => document.removeEventListener("mousedown", onMouseDown);
+  }, []);
 
   const getVisibleBounds = useCallback(() => {
     if (allNodes.length === 0) return null;
@@ -1070,6 +1210,36 @@ export default function Roadmap() {
     () => allUnitIds.length > 0 && collapsedUnitIds.size === allUnitIds.length,
     [allUnitIds, collapsedUnitIds],
   );
+
+  const getCollapsedGridPreviewBounds = useCallback(() => {
+    if (!areAllUnitsCollapsed) return null;
+    const unitNodes = allNodes.filter((n) => n.type === "unit");
+    if (unitNodes.length === 0) return null;
+
+    const minY = Math.min(...unitNodes.map((n) => n.y));
+    const maxY = Math.max(...unitNodes.map((n) => n.y + n.h));
+    const minX = Math.min(...unitNodes.map((n) => n.x));
+    const maxX = Math.max(...unitNodes.map((n) => n.x + n.w));
+    const sortedColumns = Array.from(new Set(unitNodes.map((n) => n.x))).sort((a, b) => a - b);
+
+    if (sortedColumns.length <= Math.ceil(COLLAPSED_GRID_VISIBLE_COLUMNS)) {
+      return { minX, maxX, minY, maxY };
+    }
+
+    const fullColumns = Math.max(1, Math.floor(COLLAPSED_GRID_VISIBLE_COLUMNS));
+    const fractionalColumn = Math.max(0, COLLAPSED_GRID_VISIBLE_COLUMNS - fullColumns);
+    const firstColumnX = sortedColumns[0] ?? minX;
+    const fullEndColumnX = sortedColumns[Math.max(0, fullColumns - 1)] ?? firstColumnX;
+    const sampleUnitWidth = unitNodes.find((n) => n.x === firstColumnX)?.w ?? NODE_W;
+    let previewMaxX = fullEndColumnX + sampleUnitWidth;
+
+    const nextColumnX = sortedColumns[fullColumns];
+    if (fractionalColumn > 0 && Number.isFinite(nextColumnX)) {
+      previewMaxX = nextColumnX + sampleUnitWidth * fractionalColumn;
+    }
+
+    return { minX, maxX: Math.min(maxX, previewMaxX), minY, maxY };
+  }, [areAllUnitsCollapsed, allNodes]);
 
   useEffect(() => {
     const prev = prevAllUnitsCollapsedRef.current;
@@ -1209,13 +1379,14 @@ export default function Roadmap() {
   }, [animateCameraTo, clampPan]);
 
   const fitToWidth = useCallback(() => {
-    const bounds = getPreferredFocusBounds();
     if (areAllUnitsCollapsed) {
-      fitCameraToBounds(bounds, { strategy: "width", minZoom: 0.4 });
+      const collapsedPreviewBounds = getCollapsedGridPreviewBounds() ?? getPreferredFocusBounds();
+      fitCameraToBounds(collapsedPreviewBounds, { strategy: "width", minZoom: 0.4 });
       return;
     }
+    const bounds = getPreferredFocusBounds();
     fitCameraToBounds(bounds);
-  }, [fitCameraToBounds, getPreferredFocusBounds, areAllUnitsCollapsed]);
+  }, [fitCameraToBounds, getPreferredFocusBounds, areAllUnitsCollapsed, getCollapsedGridPreviewBounds]);
 
   const getMinVisibleZoom = useCallback(() => {
     if (!containerRef.current || allNodes.length === 0) return 0.2;
@@ -1378,10 +1549,11 @@ export default function Roadmap() {
         const topicFocusId = pendingTopicFocusRef.current;
         const topicFocusBounds = topicFocusId ? getSubtreeBounds(topicFocusId) : null;
         const fallbackBounds = getPreferredFocusBounds();
+        const collapsedPreviewBounds = getCollapsedGridPreviewBounds();
         const shouldSnapCamera = instantCameraForLayoutSwitchRef.current;
         const cameraOptions = shouldSnapCamera ? { animate: false as const } : undefined;
         if (!topicFocusBounds && areAllUnitsCollapsed) {
-          fitCameraToBounds(fallbackBounds, {
+          fitCameraToBounds(collapsedPreviewBounds ?? fallbackBounds, {
             strategy: "width",
             minZoom: 0.4,
             ...(cameraOptions ?? {}),
@@ -1399,7 +1571,7 @@ export default function Roadmap() {
       if (raf1) window.cancelAnimationFrame(raf1);
       if (raf2) window.cancelAnimationFrame(raf2);
     };
-  }, [bootStage, viewMode, allNodes, collapsedTopicIds, collapsedUnitIds, areAllUnitsCollapsed, fitCameraToBounds, getPreferredFocusBounds, getSubtreeBounds]);
+  }, [bootStage, viewMode, allNodes, collapsedTopicIds, collapsedUnitIds, areAllUnitsCollapsed, fitCameraToBounds, getPreferredFocusBounds, getSubtreeBounds, getCollapsedGridPreviewBounds]);
 
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
     if (panAnimRafRef.current) {
@@ -1477,18 +1649,34 @@ export default function Roadmap() {
     }
   }, [isPinching]);
 
-  const handleWheel = useCallback((e: React.WheelEvent) => {
-    // Wheel only pans. Zoom is controlled via +/- buttons.
-    if (panAnimRafRef.current) {
-      window.cancelAnimationFrame(panAnimRafRef.current);
-      panAnimRafRef.current = null;
-    }
-    setPan((prev) => clampPan(prev.x - e.deltaX, prev.y - e.deltaY, zoom));
-  }, [clampPan, zoom]);
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container || viewMode !== "map") return;
+
+    const onWheelNative = (event: WheelEvent) => {
+      if (event.cancelable) {
+        event.preventDefault();
+      }
+      event.stopPropagation();
+      if (panAnimRafRef.current) {
+        window.cancelAnimationFrame(panAnimRafRef.current);
+        panAnimRafRef.current = null;
+      }
+      setPan((prev) => clampPan(prev.x - event.deltaX, prev.y - event.deltaY, zoomRef.current));
+    };
+
+    container.addEventListener("wheel", onWheelNative, { passive: false });
+    return () => {
+      container.removeEventListener("wheel", onWheelNative);
+    };
+  }, [viewMode, clampPan]);
 
   const resetView = useCallback(() => {
-    fitCameraToBounds(getVisibleBounds(), { animate: false });
-  }, [fitCameraToBounds, getVisibleBounds]);
+    const bounds =
+      (areAllUnitsCollapsed ? getCollapsedGridPreviewBounds() : null) ??
+      getVisibleBounds();
+    fitCameraToBounds(bounds, { animate: false });
+  }, [fitCameraToBounds, getVisibleBounds, areAllUnitsCollapsed, getCollapsedGridPreviewBounds]);
 
   const handleZoomOut = useCallback(() => {
     const minZoom = getMinVisibleZoom();
@@ -1590,6 +1778,71 @@ export default function Roadmap() {
               </>
             )}
           </div>
+        </div>
+        <div ref={globalSearchRef} className="mt-3 max-w-2xl relative">
+          <div className="relative">
+            <Search className="w-4 h-4 text-muted-foreground absolute left-3 top-1/2 -translate-y-1/2" />
+            <input
+              type="text"
+              value={globalSearchQuery}
+              onFocus={() => setIsGlobalSearchOpen(true)}
+              onChange={(e) => {
+                setGlobalSearchQuery(e.target.value);
+                setIsGlobalSearchOpen(true);
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && globalSearchResults.length > 0) {
+                  e.preventDefault();
+                  handleGlobalSearchSelect(globalSearchResults[0]!.id);
+                }
+                if (e.key === "Escape") {
+                  setIsGlobalSearchOpen(false);
+                }
+              }}
+              placeholder="Search units, topics, subtopics, or node id..."
+              className="h-10 w-full rounded-lg border border-border bg-background pl-9 pr-3 text-sm text-foreground placeholder:text-muted-foreground outline-none focus:ring-2 focus:ring-primary/40"
+            />
+          </div>
+          {isGlobalSearchOpen && (
+            <div className="absolute left-0 right-0 top-full mt-2 z-50 rounded-xl border border-border bg-card shadow-xl max-h-80 overflow-y-auto">
+              {globalSearchQuery.trim().length === 0 ? (
+                <p className="px-3 py-2.5 text-xs text-muted-foreground">
+                  Type to search across all units, topics, and subtopics.
+                </p>
+              ) : globalSearchResults.length === 0 ? (
+                <p className="px-3 py-2.5 text-xs text-muted-foreground">
+                  No matching roadmap nodes found.
+                </p>
+              ) : (
+                <div className="py-1">
+                  {globalSearchResults.map((item) => (
+                    <button
+                      key={item.id}
+                      type="button"
+                      onClick={() => handleGlobalSearchSelect(item.id)}
+                      className="w-full px-3 py-2 text-left hover:bg-secondary/60 transition-colors border-b border-border/40 last:border-0"
+                    >
+                      <div className="flex items-center gap-2 min-w-0">
+                        <span className="text-sm font-semibold text-foreground truncate">{item.title}</span>
+                        <span
+                          className={`shrink-0 rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${
+                            item.type === "unit"
+                              ? "bg-blue-100 text-blue-700"
+                              : item.type === "topic"
+                                ? "bg-violet-100 text-violet-700"
+                                : "bg-emerald-100 text-emerald-700"
+                          }`}
+                        >
+                          {item.type}
+                        </span>
+                      </div>
+                      <p className="text-xs text-muted-foreground truncate">{item.path}</p>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
         </div>
       </div>
 
@@ -1891,7 +2144,7 @@ export default function Roadmap() {
         <div className="flex-1 min-h-0 flex bg-slate-50 overflow-hidden">
           <div
             ref={containerRef}
-            className="basis-[55%] w-[55%] max-w-[55%] grow-0 shrink-0 min-w-0 overflow-hidden bg-[#f8fafc] relative select-none border-r border-border/70"
+            className="basis-[55%] w-[55%] max-w-[55%] grow-0 shrink-0 min-w-0 overflow-hidden overscroll-contain bg-[#f8fafc] relative select-none border-r border-border/70"
           style={{ cursor: isDragging ? "grabbing" : "grab", touchAction: "none" }}
           onMouseDown={handleMouseDown}
           onMouseMove={handleMouseMove}
@@ -1900,7 +2153,6 @@ export default function Roadmap() {
           onTouchStart={handleTouchStart}
           onTouchMove={handleTouchMove}
           onTouchEnd={handleTouchEnd}
-          onWheel={handleWheel}
         >
           <div className="absolute inset-0 bg-[radial-gradient(circle,#e2e8f0_1px,transparent_1px)] bg-[length:24px_24px] opacity-50" />
 
@@ -2053,26 +2305,36 @@ export default function Roadmap() {
           )}
 
           {viewMode === "map" && (
-            <div className="absolute right-3 bottom-3 z-20 flex flex-col gap-2 rounded-xl border border-border/80 bg-card/95 backdrop-blur p-2 shadow-lg">
-              <Button
-                variant="outline"
-                size="icon"
-                className="h-9 w-9"
-                onClick={() => setZoom((z) => Math.min(2.2, z * ZOOM_STEP))}
-                title="Zoom in"
-              >
-                <ZoomIn className="w-4 h-4" />
-              </Button>
-              <Button
-                variant="outline"
-                size="icon"
-                className="h-9 w-9"
-                onClick={handleZoomOut}
-                title="Zoom out"
-              >
-                <ZoomOut className="w-4 h-4" />
-              </Button>
-            </div>
+            <>
+              {areAllUnitsCollapsed && (
+                <div className="absolute left-3 bottom-3 z-20 pointer-events-none">
+                  <div className="inline-flex items-center gap-1.5 rounded-lg border border-blue-200 bg-white/95 px-2.5 py-1.5 text-[11px] font-medium text-blue-700 shadow-sm">
+                    <Info className="w-3.5 h-3.5" />
+                    Scroll horizontally to view more units
+                  </div>
+                </div>
+              )}
+              <div className="absolute right-3 bottom-3 z-20 flex flex-col gap-2 rounded-xl border border-border/80 bg-card/95 backdrop-blur p-2 shadow-lg">
+                <Button
+                  variant="outline"
+                  size="icon"
+                  className="h-9 w-9"
+                  onClick={() => setZoom((z) => Math.min(2.2, z * ZOOM_STEP))}
+                  title="Zoom in"
+                >
+                  <ZoomIn className="w-4 h-4" />
+                </Button>
+                <Button
+                  variant="outline"
+                  size="icon"
+                  className="h-9 w-9"
+                  onClick={handleZoomOut}
+                  title="Zoom out"
+                >
+                  <ZoomOut className="w-4 h-4" />
+                </Button>
+              </div>
+            </>
           )}
           </div>
 

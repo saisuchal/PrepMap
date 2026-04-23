@@ -2,10 +2,8 @@ import { useEffect, useMemo, useState } from "react";
 import {
   useGetConfigs,
   useCreateConfig,
-  useGetAdminStats,
   useDeleteConfig,
   useGetAppMetadata,
-  useGetQuestionBankInteractionSummary,
   useGetLiveConfigQuestionBankInteractionSummary,
   useGetUniversityAnalytics,
   useGetConfigStudentProgress,
@@ -15,12 +13,14 @@ import {
   useUpsertLibrarySubject,
   useSaveConfigUnitLinks,
   usePurgeConfig,
+  useCloneConfigToUniversity,
 } from "@/api-client";
 import { UNIVERSITIES, EXAM_TYPES, COMMON_BRANCH, SEMESTERS } from "@/lib/constants";
 import { useLocation } from "wouter";
 import {
-  BarChart3, Users, BookOpen, Plus, Settings, FileText,
-  CheckCircle2, Clock, ChevronRight, Search, Ban, MessageSquare, Eye,
+  BarChart3, Users, Plus, Settings, FileText,
+  CheckCircle2, Clock, ChevronRight, Search, Ban, Eye,
+  Copy,
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Button } from "@/components/ui/button";
@@ -43,6 +43,7 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import { Label } from "@/components/ui/label";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/hooks/use-toast";
 
@@ -583,6 +584,7 @@ function ConfigsTab() {
   const { data: configs, isLoading, refetch } = useGetConfigs({}, { query: { queryKey: ["configs", "all"] } });
   const deleteConfig = useDeleteConfig();
   const purgeConfig = usePurgeConfig();
+  const cloneConfig = useCloneConfigToUniversity();
   const enableConfig = useCreateConfig();
   const { toast } = useToast();
   const [disableTarget, setDisableTarget] = useState<{
@@ -597,6 +599,17 @@ function ConfigsTab() {
     year: string;
     exam: string;
   } | null>(null);
+  const [cloneTarget, setCloneTarget] = useState<{
+    id: string;
+    subject: string;
+    year: string;
+    exam: string;
+    universityId: string;
+  } | null>(null);
+  const [cloneUniversityId, setCloneUniversityId] = useState<string>("");
+  const [cloneIncludeQuestions, setCloneIncludeQuestions] = useState(true);
+  const [cloneIncludeSyllabus, setCloneIncludeSyllabus] = useState(true);
+  const [cloneIncludeReplicaQuestions, setCloneIncludeReplicaQuestions] = useState(true);
 
   const sortedConfigs = [...(configs ?? [])].sort((a, b) => {
     const aTime = a.createdAt ? new Date(a.createdAt).getTime() : 0;
@@ -862,6 +875,30 @@ function ConfigsTab() {
                               type="button"
                               variant="ghost"
                               size="icon"
+                              className="h-7 w-7"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setCloneTarget({
+                                  id: config.id,
+                                  subject: config.subject,
+                                  year: config.year,
+                                  exam: config.exam,
+                                  universityId: config.universityId,
+                                });
+                                setCloneUniversityId("");
+                                setCloneIncludeQuestions(true);
+                                setCloneIncludeSyllabus(true);
+                                setCloneIncludeReplicaQuestions(true);
+                              }}
+                              aria-label={`Clone ${config.subject}`}
+                              title="Clone to another university"
+                            >
+                              <Copy className="w-4 h-4" />
+                            </Button>
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="icon"
                               className="h-7 w-7 text-destructive hover:text-destructive"
                               onClick={(e) => {
                                 e.stopPropagation();
@@ -1049,6 +1086,134 @@ function ConfigsTab() {
         </AlertDialogContent>
       </AlertDialog>
 
+      <Dialog
+        open={!!cloneTarget}
+        onOpenChange={(open) => {
+          if (!open) {
+            setCloneTarget(null);
+            setCloneUniversityId("");
+            setCloneIncludeQuestions(true);
+            setCloneIncludeSyllabus(true);
+            setCloneIncludeReplicaQuestions(true);
+          }
+        }}
+      >
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Clone Config To University</DialogTitle>
+          </DialogHeader>
+          {cloneTarget && (
+            <div className="space-y-4">
+              <p className="text-sm text-muted-foreground">
+                Clone <span className="font-medium text-foreground">{cloneTarget.subject}</span> (
+                {semExamLabel(cloneTarget.year, cloneTarget.exam)}) to another university as a new
+                <span className="font-medium text-foreground"> draft </span>
+                config.
+              </p>
+              <div className="space-y-2">
+                <Label>Target University</Label>
+                <Select value={cloneUniversityId} onValueChange={setCloneUniversityId}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select target university" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {universities
+                      .filter((u) => u.id !== cloneTarget.universityId)
+                      .map((u) => (
+                        <SelectItem key={u.id} value={u.id}>
+                          {u.name}
+                        </SelectItem>
+                      ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2 rounded-md border border-border p-3">
+                <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                  Clone Includes
+                </p>
+                <label className="flex items-center gap-2 text-sm">
+                  <Checkbox
+                    checked={cloneIncludeQuestions}
+                    onCheckedChange={(v) => setCloneIncludeQuestions(Boolean(v))}
+                  />
+                  <span>Questions</span>
+                </label>
+                <label className="flex items-center gap-2 text-sm">
+                  <Checkbox
+                    checked={cloneIncludeSyllabus}
+                    onCheckedChange={(v) => setCloneIncludeSyllabus(Boolean(v))}
+                  />
+                  <span>Syllabus</span>
+                </label>
+                <label className="flex items-center gap-2 text-sm">
+                  <Checkbox
+                    checked={cloneIncludeReplicaQuestions}
+                    onCheckedChange={(v) => setCloneIncludeReplicaQuestions(Boolean(v))}
+                  />
+                  <span>Replica Questions</span>
+                </label>
+              </div>
+              <div className="flex justify-end gap-2">
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    setCloneTarget(null);
+                    setCloneUniversityId("");
+                    setCloneIncludeQuestions(true);
+                    setCloneIncludeSyllabus(true);
+                    setCloneIncludeReplicaQuestions(true);
+                  }}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  disabled={!cloneUniversityId || cloneConfig.isPending}
+                  onClick={() => {
+                    if (!cloneTarget || !cloneUniversityId) return;
+                    cloneConfig.mutate(
+                      {
+                        configId: cloneTarget.id,
+                        targetUniversityId: cloneUniversityId,
+                        includeQuestions: cloneIncludeQuestions,
+                        includeSyllabus: cloneIncludeSyllabus,
+                        includeReplicaQuestions: cloneIncludeReplicaQuestions,
+                      },
+                      {
+                        onSuccess: () => {
+                          toast({
+                            title: "Config cloned",
+                            description: `${cloneTarget.subject} was cloned successfully.`,
+                          });
+                          setCloneTarget(null);
+                          setCloneUniversityId("");
+                          setCloneIncludeQuestions(true);
+                          setCloneIncludeSyllabus(true);
+                          setCloneIncludeReplicaQuestions(true);
+                          refetch();
+                        },
+                        onError: (err: any) => {
+                          const message =
+                            err?.response?.data?.error ||
+                            err?.message ||
+                            "Could not clone config. Please try again.";
+                          toast({
+                            title: "Clone failed",
+                            description: message,
+                            variant: "destructive",
+                          });
+                        },
+                      },
+                    );
+                  }}
+                >
+                  {cloneConfig.isPending ? "Cloning..." : "Clone Config"}
+                </Button>
+              </div>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+
       <AlertDialog open={!!purgeTarget} onOpenChange={(open) => !open && setPurgeTarget(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
@@ -1124,7 +1289,6 @@ function AnalyticsTab() {
     isError: configsError,
     error: configsErrorDetails,
   } = useGetConfigs({}, { query: { queryKey: ["configs", "all"] } });
-  const { data: questionBankInteractionSummary } = useGetQuestionBankInteractionSummary();
   const { data: liveConfigQbSummary } = useGetLiveConfigQuestionBankInteractionSummary();
   const { data: universityAnalytics } = useGetUniversityAnalytics();
   const liveConfigs = useMemo(
@@ -1172,7 +1336,6 @@ function AnalyticsTab() {
     selectedConfigId
   );
   const { data: selectedConfigQuestionBank } = useGetQuestionBank(selectedConfigId);
-  const { data: stats } = useGetAdminStats();
   const ratingOrder = ["Poor", "Average", "Good"] as const;
   type RatingBucket = (typeof ratingOrder)[number];
   const [subtopicRatingFilter, setSubtopicRatingFilter] = useState<"all" | RatingBucket>("all");
@@ -1259,49 +1422,6 @@ function AnalyticsTab() {
 
   return (
     <div>
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 mb-10">
-        <div className="bg-card rounded-2xl p-6 border border-border shadow-sm flex items-center gap-5">
-          <div className="w-14 h-14 rounded-xl bg-blue-500/10 flex items-center justify-center text-blue-600">
-            <BookOpen className="w-7 h-7" />
-          </div>
-          <div>
-            <p className="text-sm font-semibold text-muted-foreground">Tracked Subtopics</p>
-            <p className="text-3xl font-display font-bold text-foreground">{stats?.length || 0}</p>
-          </div>
-        </div>
-        <div className="bg-card rounded-2xl p-6 border border-border shadow-sm flex items-center gap-5">
-          <div className="w-14 h-14 rounded-xl bg-green-500/10 flex items-center justify-center text-green-600">
-            <Users className="w-7 h-7" />
-          </div>
-          <div>
-            <p className="text-sm font-semibold text-muted-foreground">Total Interactions</p>
-            <p className="text-3xl font-display font-bold text-foreground">
-              {stats?.reduce((acc, curr) => acc + curr.eventCount, 0) || 0}
-            </p>
-          </div>
-        </div>
-        <div className="bg-card rounded-2xl p-6 border border-border shadow-sm flex items-center gap-5">
-          <div className="w-14 h-14 rounded-xl bg-violet-500/10 flex items-center justify-center text-violet-600">
-            <Users className="w-7 h-7" />
-          </div>
-          <div>
-            <p className="text-sm font-semibold text-muted-foreground">Universities Covered</p>
-            <p className="text-3xl font-display font-bold text-foreground">{universities.length}</p>
-          </div>
-        </div>
-        <div className="bg-card rounded-2xl p-6 border border-border shadow-sm flex items-center gap-5">
-          <div className="w-14 h-14 rounded-xl bg-amber-500/10 flex items-center justify-center text-amber-600">
-            <MessageSquare className="w-7 h-7" />
-          </div>
-          <div>
-            <p className="text-sm font-semibold text-muted-foreground">QB Events Logged</p>
-            <p className="text-3xl font-display font-bold text-foreground">
-              {questionBankInteractionSummary?.questionBankInteractionCount || 0}
-            </p>
-          </div>
-        </div>
-      </div>
-
       <div className="bg-card rounded-3xl border border-border shadow-lg shadow-black/5 overflow-hidden">
         <div className="px-6 py-5 border-b border-border bg-secondary/30">
           <h2 className="text-lg font-semibold text-foreground">Detailed Analytics By University</h2>
@@ -1421,7 +1541,7 @@ function AnalyticsTab() {
                     selectedUniversityConfigs.map((cfg) => {
                       const qb = qbSummaryByConfig.get(cfg.id);
                       const percent = Math.round(qb?.interactionPercent ?? 0);
-                      const totalInteractions = qb?.totalInteractions ?? 0;
+                      const uniqueStudents = qb?.uniqueStudents ?? 0;
                       return (
                         <tr key={cfg.id}>
                           <td className="px-4 py-3 font-medium text-foreground">{cfg.subject}</td>
@@ -1431,7 +1551,7 @@ function AnalyticsTab() {
                           <td className="px-4 py-3 text-right">
                             <div className="inline-flex items-center gap-2">
                               <span className="font-semibold text-foreground">{percent}%</span>
-                              <span className="text-xs text-muted-foreground">({totalInteractions})</span>
+                              <span className="text-xs text-muted-foreground">({uniqueStudents})</span>
                             </div>
                           </td>
                           <td className="px-4 py-3 text-right sticky right-0 bg-card border-l border-border">

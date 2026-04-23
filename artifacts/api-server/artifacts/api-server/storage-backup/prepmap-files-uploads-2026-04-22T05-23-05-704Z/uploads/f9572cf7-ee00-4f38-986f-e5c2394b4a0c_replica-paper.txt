@@ -1,0 +1,42 @@
+Here is the complete paper extracted from the images:
+
+---
+
+# Web Application Development 2
+**Chaitanya (Deemed to be University) | II Internal Examinations – April 2026**
+**B.Tech (CSE) - II Semester**
+
+---
+
+## PART – A (5 × 2 = 10 Marks) — Answer Any Five Questions
+
+1. What does the fetch() function return in JavaScript?
+2. List the three states of a JavaScript Promise.
+3. Write the basic syntax for using fetch() to make a request.
+4. What does the map() method return?
+5. Explain the difference between core modules and third-party packages in Node.js.
+6. What is NPM and what is its primary function?
+7. What is JSX in React?
+8. What is the difference between default exports and named exports in ES6 modules?
+
+---
+
+## PART – B (2 × 10 = 20 Marks) — Answer Any Two Questions
+
+9. Evaluate the advantages and disadvantages of asynchronous execution with promises compared to synchronous code execution. Provide examples to support your evaluation.
+
+10. Evaluate the advantages and disadvantages of using async/await versus traditional Promise chains, and recommend when each should be used.
+
+11. Why don't keys get passed as props to components? Explain with an example.
+
+12. Describe how the useState() hook is used to maintain and display a changing value in a React component. Explain how the state value and the setter function work together.
+
+---
+
+## PART – C (1 × 10 = 10 Marks) — Answer All the Questions
+
+13. Explain the concept of reusable and composable components in React.
+
+**OR**
+
+14. Explain the steps to create a Node JS project from scratch. What commands are used and what does each command do?

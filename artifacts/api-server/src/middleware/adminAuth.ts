@@ -3,30 +3,44 @@ import { db, usersTable } from "../db";
 import { eq } from "drizzle-orm";
 
 export async function requireAdmin(req: Request, res: Response, next: NextFunction) {
-  const userId = req.headers["x-user-id"] as string | undefined;
+  const userId = String(req.headers["x-user-id"] || "").trim();
 
   if (!userId) {
     res.status(401).json({ error: "Authentication required. Provide x-user-id header." });
     return;
   }
 
-  const [user] = await db
-    .select({ id: usersTable.id, role: usersTable.role })
-    .from(usersTable)
-    .where(eq(usersTable.id, userId))
-    .limit(1);
+  try {
+    const [user] = await db
+      .select({ id: usersTable.id, role: usersTable.role })
+      .from(usersTable)
+      .where(eq(usersTable.id, userId))
+      .limit(1);
 
-  if (!user) {
-    res.status(401).json({ error: "Invalid user" });
-    return;
+    if (!user) {
+      res.status(401).json({ error: "Invalid user" });
+      return;
+    }
+
+    const normalizedRole = String(user.role || "").trim().toLowerCase();
+    if (normalizedRole !== "admin") {
+      res.status(403).json({ error: "Admin access required" });
+      return;
+    }
+
+    (req as any).userId = user.id;
+    next();
+  } catch (error: any) {
+    req.log.error(
+      {
+        err: error,
+        userId,
+        dbCause: error?.cause?.message || null,
+        dbCode: error?.cause?.code || null,
+      },
+      "Admin auth database lookup failed",
+    );
+    res.status(500).json({ error: "Authentication lookup failed" });
   }
-
-  if (user.role !== "admin") {
-    res.status(403).json({ error: "Admin access required" });
-    return;
-  }
-
-  (req as any).userId = user.id;
-  next();
 }
 

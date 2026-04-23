@@ -1,0 +1,42 @@
+Here is the complete paper extracted from the images:
+
+---
+
+# Data Structures and Algorithms
+**Chaitanya (Deemed to be University) | II Internal Examinations – April 2026**
+**B.Tech (CSE) - II Semester**
+
+---
+
+## PART – A (5 × 2 = 10 Marks) — Answer Any Five Questions
+
+1. What is contiguous memory allocation in the context of arrays?
+2. In the brute force approach for finding the second largest element, why is the backward traversal started from index n-2 instead of n-1?
+3. What are the three pieces of information stored inside a single stack frame when a function is called?
+4. In the backtracking approach to print 1 to N, where is the print statement placed relative to the recursive call, and why does this produce ascending output?
+5. What is the base case for recursion_sum(n)?
+6. State the time and space complexity of the optimal solution for finding the largest element in an array.
+7. Why is secondLargest initialized to -1 in both the Better and Optimal approaches?
+8. What does 'maintaining relative order of non-zero elements' mean in moving zeros to end problem? Give a short example.
+
+---
+
+## PART – B (2 × 10 = 20 Marks) — Answer Any Two Questions
+
+9. How does the better approach differ from the brute-force approach in finding the second largest element?
+
+10. What is the primary objective of the problem statement regarding the second largest element in an array?
+
+11. Design a function to reverse the words in the input 'Welcome to NXTWAVE'. Explain the algorithm with step-by-step iteration.
+
+12. Explain how the optimal approach for removing duplicates leverages the sorted property of the array to achieve O(1) space complexity.
+
+---
+
+## PART – C (1 × 10 = 10 Marks) — Answer All the Questions
+
+13. What is the primary advantage of using the optimal approach over the brute force approach in terms of space complexity?
+
+**OR**
+
+14. Compare the handling of duplicate elements in the brute-force and optimal approaches. Which method better addresses duplicates and why?

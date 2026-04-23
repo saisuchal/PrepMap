@@ -205,6 +205,19 @@ function normalizeText(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
 }
 
+function toSlug(value: string): string {
+  const n = normalizeText(value);
+  return n ? n.replace(/\s+/g, "_") : "untitled";
+}
+
+function legacyUnitTopicId(unitLibraryId: string, topicTitle: string): string {
+  return `utp_${unitLibraryId}_${toSlug(topicTitle)}`;
+}
+
+function legacyUnitSubtopicId(unitTopicId: string, subtopicTitle: string): string {
+  return `ust_${unitTopicId}_${toSlug(subtopicTitle)}`;
+}
+
 function hash8(parts: string[]): string {
   return createHash("sha1").update(parts.join("|")).digest("hex").slice(0, 8);
 }
@@ -286,6 +299,8 @@ async function loadFactGroundingFromUnitFacts(
 
   const topicCol = ["topic_title", "topic", "topic_name"].find((c) => colSet.has(c));
   const subtopicCol = ["subtopic_title", "subtopic", "subtopic_name"].find((c) => colSet.has(c));
+  const topicIdCol = ["unit_topic_id", "topic_id"].find((c) => colSet.has(c));
+  const subtopicIdCol = ["unit_subtopic_id", "subtopic_id"].find((c) => colSet.has(c));
   const factTextCol = ["fact_text", "text", "fact", "content"].find((c) => colSet.has(c));
   const factTypeCol = ["fact_type", "type"].find((c) => colSet.has(c));
   const factIdCol = ["fact_id", "id"].find((c) => colSet.has(c));
@@ -296,6 +311,8 @@ async function loadFactGroundingFromUnitFacts(
       CAST(uf.${unitCol} AS text) AS unit_id
       ${topicCol ? `, CAST(uf.${topicCol} AS text) AS topic_title` : ", NULL::text AS topic_title"}
       ${subtopicCol ? `, CAST(uf.${subtopicCol} AS text) AS subtopic_title` : ", NULL::text AS subtopic_title"}
+      ${topicIdCol ? `, CAST(uf.${topicIdCol} AS text) AS topic_id` : ", NULL::text AS topic_id"}
+      ${subtopicIdCol ? `, CAST(uf.${subtopicIdCol} AS text) AS subtopic_id` : ", NULL::text AS subtopic_id"}
       ${factTextCol ? `, CAST(uf.${factTextCol} AS text) AS fact_text` : ", ''::text AS fact_text"}
       ${factTypeCol ? `, CAST(uf.${factTypeCol} AS text) AS fact_type` : ", 'note'::text AS fact_type"}
       ${factIdCol ? `, CAST(uf.${factIdCol} AS text) AS fact_id` : ", ''::text AS fact_id"}
@@ -308,6 +325,8 @@ async function loadFactGroundingFromUnitFacts(
     unit_id: string;
     topic_title: string | null;
     subtopic_title: string | null;
+    topic_id: string | null;
+    subtopic_id: string | null;
     fact_text: string | null;
     fact_type: string | null;
     fact_id: string | null;
@@ -324,6 +343,31 @@ async function loadFactGroundingFromUnitFacts(
   ]);
   const fallbackByUnitNorm = new Map<string, LaneAStructureUnit>();
   for (const unit of structure) fallbackByUnitNorm.set(normalizeText(unit.title), unit);
+  const idLookupByUnitNorm = new Map<
+    string,
+    {
+      topicTitleById: Map<string, string>;
+      subtopicById: Map<string, { topicTitle: string; subtopicTitle: string }>;
+    }
+  >();
+  for (const unit of structure) {
+    const unitNorm = normalizeText(unit.title);
+    const linkedUnit = Array.from(unitById.values()).find(
+      (u) => normalizeText(String(u.unitTitle || "")) === unitNorm
+    );
+    if (!linkedUnit) continue;
+    const topicTitleById = new Map<string, string>();
+    const subtopicById = new Map<string, { topicTitle: string; subtopicTitle: string }>();
+    for (const topic of unit.topics) {
+      const topicId = legacyUnitTopicId(linkedUnit.id, topic.title);
+      topicTitleById.set(topicId, topic.title);
+      for (const subtopic of topic.subtopics) {
+        const subId = legacyUnitSubtopicId(topicId, subtopic);
+        subtopicById.set(subId, { topicTitle: topic.title, subtopicTitle: subtopic });
+      }
+    }
+    idLookupByUnitNorm.set(unitNorm, { topicTitleById, subtopicById });
+  }
 
   const out = new Map<string, { topicFacts: Map<string, LaneAFact[]>; subtopicFacts: Map<string, LaneAFact[]> }>();
   const pushTopicFact = (unitTitle: string, topicTitle: string, fact: LaneAFact) => {
@@ -362,14 +406,29 @@ async function loadFactGroundingFromUnitFacts(
       sourceSpan: String(row.source_span || "").trim(),
     };
 
-    const topicTitleRaw = String(row.topic_title || "").trim();
-    const subtopicTitleRaw = String(row.subtopic_title || "").trim();
-    if (topicTitleRaw && subtopicTitleRaw) {
-      pushSubtopicFact(unit.unitTitle, topicTitleRaw, subtopicTitleRaw, fact);
+    let topicTitleResolved = String(row.topic_title || "").trim();
+    let subtopicTitleResolved = String(row.subtopic_title || "").trim();
+    const topicIdRaw = String(row.topic_id || "").trim();
+    const subtopicIdRaw = String(row.subtopic_id || "").trim();
+    const idLookup = idLookupByUnitNorm.get(unitNorm);
+
+    if (!topicTitleResolved && topicIdRaw) {
+      topicTitleResolved = idLookup?.topicTitleById.get(topicIdRaw) ?? "";
+    }
+    if (!subtopicTitleResolved && subtopicIdRaw) {
+      const sub = idLookup?.subtopicById.get(subtopicIdRaw);
+      if (sub) {
+        topicTitleResolved = topicTitleResolved || sub.topicTitle;
+        subtopicTitleResolved = sub.subtopicTitle;
+      }
+    }
+
+    if (topicTitleResolved && subtopicTitleResolved) {
+      pushSubtopicFact(unit.unitTitle, topicTitleResolved, subtopicTitleResolved, fact);
       continue;
     }
-    if (topicTitleRaw) {
-      pushTopicFact(unit.unitTitle, topicTitleRaw, fact);
+    if (topicTitleResolved) {
+      pushTopicFact(unit.unitTitle, topicTitleResolved, fact);
       continue;
     }
 
@@ -997,14 +1056,14 @@ async function loadFactGroundingFromReusableUnits(
       return {
         title: unit.title,
         topics: unit.topics.map((topic) => {
-          const topicFacts = (unitBucket?.topicFacts.get(normalizeText(topic.title)) ?? []).slice(0, 8);
+          const topicFacts = (unitBucket?.topicFacts.get(normalizeText(topic.title)) ?? []);
           return {
             title: topic.title,
             topicFacts,
             subtopics: topic.subtopics.map((subtopic) => ({
               title: subtopic,
               facts:
-                (unitBucket?.subtopicFacts.get(`${normalizeText(topic.title)}|${normalizeText(subtopic)}`) ?? []).slice(0, 8),
+                (unitBucket?.subtopicFacts.get(`${normalizeText(topic.title)}|${normalizeText(subtopic)}`) ?? []),
             })),
           };
         }),

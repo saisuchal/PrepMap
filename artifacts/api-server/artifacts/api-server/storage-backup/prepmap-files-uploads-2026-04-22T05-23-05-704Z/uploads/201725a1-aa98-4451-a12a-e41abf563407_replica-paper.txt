@@ -1,0 +1,38 @@
+Here is the complete Set C — Web Application Development 2:
+
+---
+
+# SET C — Web Application Development 2
+**Chaitanya (Deemed to be University) | II Internal Examinations – April 2026**
+**B.Tech (CSE) - II Semester | Time: 1½ Hrs. | Max. Marks: 20**
+
+---
+
+## Section A — Answer any six Questions (6 × 2 = 12)
+
+1. When choosing between a Controlled Input and an Uncontrolled Input, what is one reason a developer might prefer the controlled approach?
+2. What does React Batch Updating do?
+3. Name any two ways to implement conditional rendering in React.
+4. Why must hooks not be called inside loops or conditions?
+5. What is the purpose of keeping the comments list inside the state when implementing delete functionality?
+6. What is a controlled input?
+7. What happens to the execution context when the page reloads?
+8. Why does React use a Virtual DOM instead of updating the actual DOM directly whenever UI changes occur?
+9. Define JWT Token.
+10. Explain the use of Cookies.set() method.
+
+---
+
+## Section B — Answer the following Questions (2 × 4 = 8)
+
+11. What is the purpose of preventing the default behaviour in a form submission event?
+
+**OR**
+
+12. Why should intervals be cleared when a component unmounts?
+
+13. Describe how a component can obtain route-specific information from the URL during rendering.
+
+**OR**
+
+14. Describe how cookies can be used to maintain a user's authenticated session in a web application.

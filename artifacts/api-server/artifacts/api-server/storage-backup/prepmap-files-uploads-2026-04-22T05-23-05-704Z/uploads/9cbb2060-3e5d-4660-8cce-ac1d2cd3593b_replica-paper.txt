@@ -1,0 +1,38 @@
+Here is Set A — Web Application Development 2 extracted from the image:
+
+---
+
+# SET A — Web Application Development 2
+**Chaitanya (Deemed to be University) | II Internal Examinations – April 2026**
+**B.Tech (CSE) - II Semester | Time: 1½ Hrs. | Max. Marks: 20**
+
+---
+
+## Section A — Answer any six Questions (6 × 2 = 12)
+
+1. What does the logical '&&' operator do in conditional rendering?
+2. Why should values stored in Local Storage be strings?
+3. What is an uncontrolled input?
+4. How is text passed to a component via the children prop?
+5. What is Reconciliation?
+6. What is the purpose of making API calls inside useEffect in React?
+7. When does React re-render the UI during state updates?
+8. Why do we use JSON.parse() when reading from Local Storage?
+9. What does prevState represent in the callback syntax of setter functions?
+10. What does the Dependency Array in useEffect control?
+
+---
+
+## Section B — Answer the following Questions (2 × 4 = 8)
+
+11. What does the spread operator help to achieve, while updating a list in React?
+
+**OR**
+
+12. What is the purpose of a Cleanup function inside useEffect?
+
+13. What does the BrowserRouter component do?
+
+**OR**
+
+14. Explain why storing authentication data only in application state is unreliable across page refreshes.

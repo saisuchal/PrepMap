@@ -707,6 +707,7 @@ interface EditableQuestion {
 
 function CheapGenerationSection({ configId }: { configId: string }) {
   const [laneAMode, setLaneAMode] = useState<CheapGenerationMode>("explanations_only");
+  const [includeFactsInMasterPrompt, setIncludeFactsInMasterPrompt] = useState(false);
   const [forceOverwrite, setForceOverwrite] = useState(false);
   const [masterPrompt, setMasterPrompt] = useState("");
   const [laneBJson, setLaneBJson] = useState("");
@@ -819,7 +820,7 @@ function CheapGenerationSection({ configId }: { configId: string }) {
 
   const handleLaneA = () => {
     generateLaneA.mutate(
-      { configId, mode: laneAMode },
+      { configId, mode: laneAMode, includeFactsInMasterPrompt },
       {
         onSuccess: (data) => {
           setMasterPrompt(data.masterPrompt);
@@ -954,6 +955,14 @@ function CheapGenerationSection({ configId }: { configId: string }) {
             </SelectContent>
           </Select>
         </div>
+        <label className="inline-flex items-center gap-2 text-xs text-foreground">
+          <input
+            type="checkbox"
+            checked={includeFactsInMasterPrompt}
+            onChange={(e) => setIncludeFactsInMasterPrompt(e.target.checked)}
+          />
+          Include facts in master prompt (better explanation output)
+        </label>
         <Button onClick={handleLaneA} disabled={generateLaneA.isPending} className="gap-2">
           {generateLaneA.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
           Generate Lane A Package
@@ -1415,24 +1424,33 @@ function ReusableUnitLibrarySection({ configId, subjectName }: { configId: strin
 
   const handleCleanupTitlesForSelectedUnit = () => {
     if (!subject?.id || !selectedUnitId) return;
-    cleanupTitles.mutate(
-      { unitId: selectedUnitId, preview: false },
+    const topics = parseTopics();
+    if (topics.length === 0) {
+      toast({
+        title: "No titles to save",
+        description: "Preview titles first, then save.",
+        variant: "destructive",
+      });
+      return;
+    }
+    updateUnit.mutate(
       {
-        onSuccess: (data) => {
+        unitId: selectedUnitId,
+        unitTitle: unitTitle.trim(),
+        topics,
+        sourceText: sourceText.trim() || null,
+      },
+      {
+        onSuccess: () => {
           queryClient.invalidateQueries({ queryKey: ["library-units", subject.id] });
-          setTopicsText(
-            (data.topics ?? [])
-              .map((t) => `${t.title}: ${t.subtopics.join(", ")}`)
-              .join("\n"),
-          );
           toast({
-            title: data.updated ? "Titles cleaned" : "No title cleanup needed",
-            description: `Topics ${data.topicCountBefore} -> ${data.topicCountAfter}, subtopics ${data.subtopicCountBefore} -> ${data.subtopicCountAfter}.`,
+            title: "Titles saved",
+            description: "Previewed topic/subtopic titles were saved and replaced existing titles.",
           });
         },
         onError: (error) => {
           toast({
-            title: "Cleanup failed",
+            title: "Save failed",
             description: error instanceof Error ? error.message : "Please try again.",
             variant: "destructive",
           });
@@ -1461,7 +1479,7 @@ function ReusableUnitLibrarySection({ configId, subjectName }: { configId: strin
           );
           toast({
             title: "Preview loaded",
-            description: `Preview shows cleaned titles. Topics ${data.topicCountBefore} -> ${data.topicCountAfter}, subtopics ${data.subtopicCountBefore} -> ${data.subtopicCountAfter}. Click "Clean Topic/Subtopic Titles" to apply.`,
+            description: `Preview shows AI-generated titles from reading material. Topics ${data.topicCountBefore} -> ${data.topicCountAfter}, subtopics ${data.subtopicCountBefore} -> ${data.subtopicCountAfter}. Click "Save Topic/Subtopic Titles" to apply.`,
           });
         },
         onError: (error) => {
@@ -1687,23 +1705,13 @@ function ReusableUnitLibrarySection({ configId, subjectName }: { configId: strin
                     <Button
                       type="button"
                       variant="outline"
-                      onClick={handleRegenerateFactsForSelectedUnit}
-                      disabled={regeneratingFacts}
-                      className="gap-2"
-                    >
-                      {regeneratingFacts ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
-                      Generate Facts For This Unit (Replace Existing)
-                    </Button>
-                    <Button
-                      type="button"
-                      variant="outline"
                       onClick={handlePreviewCleanupTitlesForSelectedUnit}
                       disabled={cleaningTitles || !!selectedUnit?.hasCanonicalNodes}
                       className="gap-2"
                       title={
                         selectedUnit?.hasCanonicalNodes
                           ? `Locked: ${selectedUnit?.canonicalNodeCount ?? 0} canonical node(s) already exist for this unit`
-                          : "Preview cleaned titles without saving"
+                          : "Preview AI-generated topic/subtopic titles from reading material"
                       }
                     >
                       {cleaningTitles ? <Loader2 className="w-4 h-4 animate-spin" /> : <HelpCircle className="w-4 h-4" />}
@@ -1713,16 +1721,26 @@ function ReusableUnitLibrarySection({ configId, subjectName }: { configId: strin
                       type="button"
                       variant="outline"
                       onClick={handleCleanupTitlesForSelectedUnit}
-                      disabled={cleaningTitles || !!selectedUnit?.hasCanonicalNodes}
+                      disabled={saving || !!selectedUnit?.hasCanonicalNodes}
                       className="gap-2"
                       title={
                         selectedUnit?.hasCanonicalNodes
                           ? `Locked: ${selectedUnit?.canonicalNodeCount ?? 0} canonical node(s) already exist for this unit`
-                          : "Apply cleaned topic/subtopic titles"
+                          : "Save previewed topic/subtopic titles and replace existing ones"
                       }
                     >
-                      {cleaningTitles ? <Loader2 className="w-4 h-4 animate-spin" /> : <Pencil className="w-4 h-4" />}
-                      Clean Topic/Subtopic Titles
+                      {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Pencil className="w-4 h-4" />}
+                      Save Topic/Subtopic Titles
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={handleRegenerateFactsForSelectedUnit}
+                      disabled={regeneratingFacts}
+                      className="gap-2"
+                    >
+                      {regeneratingFacts ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
+                      Generate Facts For This Unit (Replace Existing)
                     </Button>
                     {!!selectedUnit?.hasCanonicalNodes && (
                       <p className="text-xs text-muted-foreground">

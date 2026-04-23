@@ -311,6 +311,26 @@ export interface CompletionStateResponse {
   doneSubtopicIds: string[];
 }
 
+export interface CloneConfigResponse {
+  id: string;
+  universityId: string;
+  year: string;
+  branch: string;
+  subject: string;
+  exam: string;
+  status: string;
+  createdBy: string;
+  createdAt?: string;
+  syllabusFileUrl?: string | null;
+  paperFileUrls?: string[] | null;
+  clonedFromConfigId: string;
+  cloneOptions?: {
+    includeQuestions: boolean;
+    includeSyllabus: boolean;
+    includeReplicaQuestions: boolean;
+  };
+}
+
 export interface QuestionBankQuestion {
   id: number;
   markType: string;
@@ -571,6 +591,27 @@ export const purgeConfig = async (id: string, options?: RequestInit) => {
   });
 };
 
+export const cloneConfigToUniversity = async (
+  configId: string,
+  payload: {
+    targetUniversityId: string;
+    includeQuestions?: boolean;
+    includeSyllabus?: boolean;
+    includeReplicaQuestions?: boolean;
+  },
+  options?: RequestInit,
+) => {
+  return customFetch<CloneConfigResponse>(`/api/configs/${configId}/clone`, {
+    ...options,
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      ...(options?.headers || {}),
+    },
+    body: JSON.stringify(payload),
+  });
+};
+
 export const usePurgeConfig = <
   TError = ErrorType<unknown>,
   TContext = unknown,
@@ -580,6 +621,53 @@ export const usePurgeConfig = <
   return useMutation<SuccessResponse, TError, { id: string }, TContext>({
     mutationKey: ["purgeConfig"],
     mutationFn: ({ id }) => purgeConfig(id),
+    ...options,
+  });
+};
+
+export const useCloneConfigToUniversity = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(
+  options?: UseMutationOptions<
+    CloneConfigResponse,
+    TError,
+    {
+      configId: string;
+      targetUniversityId: string;
+      includeQuestions?: boolean;
+      includeSyllabus?: boolean;
+      includeReplicaQuestions?: boolean;
+    },
+    TContext
+  >,
+) => {
+  return useMutation<
+    CloneConfigResponse,
+    TError,
+    {
+      configId: string;
+      targetUniversityId: string;
+      includeQuestions?: boolean;
+      includeSyllabus?: boolean;
+      includeReplicaQuestions?: boolean;
+    },
+    TContext
+  >({
+    mutationKey: ["clone-config-to-university"],
+    mutationFn: ({
+      configId,
+      targetUniversityId,
+      includeQuestions,
+      includeSyllabus,
+      includeReplicaQuestions,
+    }) =>
+      cloneConfigToUniversity(configId, {
+        targetUniversityId,
+        includeQuestions,
+        includeSyllabus,
+        includeReplicaQuestions,
+      }),
     ...options,
   });
 };
@@ -639,6 +727,7 @@ export const generateCheapLaneA = async (
   mode: CheapGenerationMode,
   payloadOptions?: {
     ignoreSavedReplica?: boolean;
+    includeFactsInMasterPrompt?: boolean;
   },
   requestOptions?: RequestInit,
 ) => {
@@ -649,7 +738,11 @@ export const generateCheapLaneA = async (
       "content-type": "application/json",
       ...(requestOptions?.headers || {}),
     },
-    body: JSON.stringify({ mode, ignoreSavedReplica: payloadOptions?.ignoreSavedReplica }),
+    body: JSON.stringify({
+      mode,
+      ignoreSavedReplica: payloadOptions?.ignoreSavedReplica,
+      includeFactsInMasterPrompt: payloadOptions?.includeFactsInMasterPrompt,
+    }),
   });
 };
 
@@ -1216,19 +1309,29 @@ export const useGenerateCheapLaneA = <
   options?: UseMutationOptions<
     CheapLaneAResponse,
     TError,
-    { configId: string; mode: CheapGenerationMode; ignoreSavedReplica?: boolean },
+    {
+      configId: string;
+      mode: CheapGenerationMode;
+      ignoreSavedReplica?: boolean;
+      includeFactsInMasterPrompt?: boolean;
+    },
     TContext
   >,
 ) => {
   return useMutation<
     CheapLaneAResponse,
     TError,
-    { configId: string; mode: CheapGenerationMode; ignoreSavedReplica?: boolean },
+    {
+      configId: string;
+      mode: CheapGenerationMode;
+      ignoreSavedReplica?: boolean;
+      includeFactsInMasterPrompt?: boolean;
+    },
     TContext
   >({
     mutationKey: ["cheap-lane-a"],
-    mutationFn: ({ configId, mode, ignoreSavedReplica }) =>
-      generateCheapLaneA(configId, mode, { ignoreSavedReplica }),
+    mutationFn: ({ configId, mode, ignoreSavedReplica, includeFactsInMasterPrompt }) =>
+      generateCheapLaneA(configId, mode, { ignoreSavedReplica, includeFactsInMasterPrompt }),
     ...options,
   });
 };

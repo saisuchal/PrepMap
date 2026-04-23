@@ -21,6 +21,9 @@ if (envPath) {
 }
 
 const { Pool } = pg;
+const poolMax = Number(process.env.PGPOOL_MAX ?? "3");
+const poolIdleTimeoutMs = Number(process.env.PGPOOL_IDLE_TIMEOUT_MS ?? "10000");
+const poolConnectionTimeoutMs = Number(process.env.PGPOOL_CONNECTION_TIMEOUT_MS ?? "5000");
 
 if (!process.env.DATABASE_URL) {
   throw new Error(
@@ -28,7 +31,16 @@ if (!process.env.DATABASE_URL) {
   );
 }
 
-export const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+export const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  max: Number.isFinite(poolMax) && poolMax > 0 ? poolMax : 3,
+  idleTimeoutMillis:
+    Number.isFinite(poolIdleTimeoutMs) && poolIdleTimeoutMs >= 0 ? poolIdleTimeoutMs : 10000,
+  connectionTimeoutMillis:
+    Number.isFinite(poolConnectionTimeoutMs) && poolConnectionTimeoutMs >= 0
+      ? poolConnectionTimeoutMs
+      : 5000,
+});
 export const db = drizzle(pool, { schema });
 
 export * from "./schema";
