@@ -1,7 +1,8 @@
 import { Router, type IRouter } from "express";
 import { GetNodesQueryParams, GetNodesResponse } from "../api-zod";
-import { db, nodesTable, configsTable, usersTable, configUnitLinksTable, canonicalNodesTable } from "../db";
+import { db, nodesTable, configsTable, usersTable, configUnitLinksTable, canonicalNodesTable, withRequestDbContext } from "../db";
 import { eq, inArray } from "drizzle-orm";
+import { getJwtRequestAuth } from "../lib/requestAuth";
 
 const router: IRouter = Router();
 
@@ -102,26 +103,14 @@ function doesStudentYearMatchConfigYear(
 router.get("/nodes", async (req, res) => {
   try {
     const { configId } = GetNodesQueryParams.parse(req.query);
-    const [config] = await db
-      .select({
-        id: configsTable.id,
-        universityId: configsTable.universityId,
-        year: configsTable.year,
-        branch: configsTable.branch,
-        status: configsTable.status,
-      })
-      .from(configsTable)
-      .where(eq(configsTable.id, configId))
-      .limit(1);
-
-    if (!config) {
-      res.status(404).json({ error: "Config not found" });
+    const auth = getJwtRequestAuth(req);
+    const userId = auth?.userId || "";
+    if (!userId) {
+      res.status(401).json({ error: "Authentication required. Provide a valid bearer token." });
       return;
     }
 
-    const userId = String(req.headers["x-user-id"] || "").trim();
-    if (userId) {
-      const [user] = await db
+    const [user] = await db
         .select({
           id: usersTable.id,
           role: usersTable.role,
@@ -133,43 +122,62 @@ router.get("/nodes", async (req, res) => {
         .where(eq(usersTable.id, userId))
         .limit(1);
 
-      if (!user) {
-        res.status(401).json({ error: "Invalid user." });
-        return;
-      }
-
-      if (user.role !== "admin") {
-        if (config.status !== "live") {
-          res.status(403).json({ error: "Access denied." });
-          return;
-        }
-        if (user.universityId !== config.universityId) {
-          res.status(403).json({ error: "Access denied." });
-          return;
-        }
-        const isSuperStudent = (user.role || "").toLowerCase() === "super_student";
-        const yearMismatch = !doesStudentYearMatchConfigYear(user.year, config.year);
-        const branchMismatch = normalizeToken(user.branch) !== normalizeToken(config.branch);
-        if (!isSuperStudent && (yearMismatch || branchMismatch)) {
-          res.status(403).json({ error: "Access denied." });
-          return;
-        }
-      }
-    } else if (config.status !== "live") {
-      res.status(403).json({ error: "Access denied." });
+    if (!user) {
+      res.status(401).json({ error: "Invalid user." });
       return;
     }
 
-    const selectedLinks = await db
-      .select({ unitLibraryId: configUnitLinksTable.unitLibraryId })
-      .from(configUnitLinksTable)
-      .where(eq(configUnitLinksTable.configId, configId));
-    const selectedUnitIds = selectedLinks.map((l) => l.unitLibraryId);
+    const [config, selectedLinks, loadedNodes] = await withRequestDbContext(auth.claims, async (tx) => {
+      const [config] = await tx
+        .select({
+          id: configsTable.id,
+          universityId: configsTable.universityId,
+          year: configsTable.year,
+          branch: configsTable.branch,
+          status: configsTable.status,
+        })
+        .from(configsTable)
+        .where(eq(configsTable.id, configId))
+        .limit(1);
 
-    let nodes = await db
-      .select()
-      .from(nodesTable)
-      .where(eq(nodesTable.configId, configId));
+      const selectedLinks = await tx
+        .select({ unitLibraryId: configUnitLinksTable.unitLibraryId })
+        .from(configUnitLinksTable)
+        .where(eq(configUnitLinksTable.configId, configId));
+
+      const nodes = await tx
+        .select()
+        .from(nodesTable)
+        .where(eq(nodesTable.configId, configId));
+
+      return [config ?? null, selectedLinks, nodes] as const;
+    });
+
+    if (!config) {
+      res.status(404).json({ error: "Config not found" });
+      return;
+    }
+
+    if (user.role !== "admin") {
+      if (config.status !== "live") {
+        res.status(403).json({ error: "Access denied." });
+        return;
+      }
+      if (user.universityId !== config.universityId) {
+        res.status(403).json({ error: "Access denied." });
+        return;
+      }
+      const isSuperStudent = (user.role || "").toLowerCase() === "super_student";
+      const yearMismatch = !doesStudentYearMatchConfigYear(user.year, config.year);
+      const branchMismatch = normalizeToken(user.branch) !== normalizeToken(config.branch);
+      if (!isSuperStudent && (yearMismatch || branchMismatch)) {
+        res.status(403).json({ error: "Access denied." });
+        return;
+      }
+    }
+
+    const selectedUnitIds = selectedLinks.map((l) => l.unitLibraryId);
+    let nodes = loadedNodes;
 
     if (selectedUnitIds.length > 0) {
       nodes = nodes.filter((n) => selectedUnitIds.includes(String(n.unitLibraryId || "")));

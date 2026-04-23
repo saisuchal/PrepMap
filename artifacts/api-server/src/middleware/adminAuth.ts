@@ -1,12 +1,14 @@
 import { type Request, type Response, type NextFunction } from "express";
 import { db, usersTable } from "../db";
 import { eq } from "drizzle-orm";
+import { getJwtRequestAuth } from "../lib/requestAuth";
 
 export async function requireAdmin(req: Request, res: Response, next: NextFunction) {
-  const userId = String(req.headers["x-user-id"] || "").trim();
+  const auth = getJwtRequestAuth(req);
+  const userId = auth?.userId || "";
 
   if (!userId) {
-    res.status(401).json({ error: "Authentication required. Provide x-user-id header." });
+    res.status(401).json({ error: "Authentication required. Provide a valid bearer token." });
     return;
   }
 
@@ -29,6 +31,7 @@ export async function requireAdmin(req: Request, res: Response, next: NextFuncti
     }
 
     (req as any).userId = user.id;
+    (req as any).authClaims = auth?.claims ?? null;
     next();
   } catch (error: any) {
     req.log.error(

@@ -12,9 +12,11 @@ import {
   usersTable,
   configQuestionsTable,
   canonicalNodesTable,
+  withRequestDbContext,
 } from "../db";
 import { and, eq } from "drizzle-orm";
 import { requireAdmin } from "../middleware/adminAuth";
+import { getJwtRequestAuth } from "../lib/requestAuth";
 
 const router: IRouter = Router();
 
@@ -115,51 +117,14 @@ function doesStudentYearMatchConfigYear(
 router.get("/subtopics/:id", async (req, res) => {
   try {
     const { id } = GetSubtopicContentParams.parse(req.params);
-    const [node] = await db
-      .select({
-        id: nodesTable.id,
-        configId: nodesTable.configId,
-        parentId: nodesTable.parentId,
-        explanation: nodesTable.explanation,
-        learningGoal: nodesTable.learningGoal,
-        exampleBlock: nodesTable.exampleBlock,
-        supportNote: nodesTable.supportNote,
-        prerequisiteTitles: nodesTable.prerequisiteTitles,
-        prerequisiteNodeIds: nodesTable.prerequisiteNodeIds,
-        nextRecommendedTitles: nodesTable.nextRecommendedTitles,
-        nextRecommendedNodeIds: nodesTable.nextRecommendedNodeIds,
-        unitSubtopicId: nodesTable.unitSubtopicId,
-        canonicalNodeId: nodesTable.canonicalNodeId,
-      })
-      .from(nodesTable)
-      .where(eq(nodesTable.id, id))
-      .limit(1);
-
-    if (!node) {
-      res.status(404).json({ error: "Subtopic not found" });
+    const auth = getJwtRequestAuth(req);
+    const userId = auth?.userId || "";
+    if (!userId) {
+      res.status(401).json({ error: "Authentication required. Provide a valid bearer token." });
       return;
     }
 
-    const [config] = await db
-      .select({
-        id: configsTable.id,
-        universityId: configsTable.universityId,
-        year: configsTable.year,
-        branch: configsTable.branch,
-        status: configsTable.status,
-      })
-      .from(configsTable)
-      .where(eq(configsTable.id, node.configId))
-      .limit(1);
-
-    if (!config) {
-      res.status(404).json({ error: "Config not found" });
-      return;
-    }
-
-    const userId = String(req.headers["x-user-id"] || "").trim();
-    if (userId) {
-      const [user] = await db
+    const [user] = await db
         .select({
           id: usersTable.id,
           role: usersTable.role,
@@ -171,31 +136,75 @@ router.get("/subtopics/:id", async (req, res) => {
         .where(eq(usersTable.id, userId))
         .limit(1);
 
-      if (!user) {
-        res.status(401).json({ error: "Invalid user." });
+    if (!user) {
+      res.status(401).json({ error: "Invalid user." });
+      return;
+    }
+
+    const [node, config] = await withRequestDbContext(auth.claims, async (tx) => {
+      const [node] = await tx
+        .select({
+          id: nodesTable.id,
+          configId: nodesTable.configId,
+          parentId: nodesTable.parentId,
+          explanation: nodesTable.explanation,
+          learningGoal: nodesTable.learningGoal,
+          exampleBlock: nodesTable.exampleBlock,
+          supportNote: nodesTable.supportNote,
+          prerequisiteTitles: nodesTable.prerequisiteTitles,
+          prerequisiteNodeIds: nodesTable.prerequisiteNodeIds,
+          nextRecommendedTitles: nodesTable.nextRecommendedTitles,
+          nextRecommendedNodeIds: nodesTable.nextRecommendedNodeIds,
+          unitSubtopicId: nodesTable.unitSubtopicId,
+          canonicalNodeId: nodesTable.canonicalNodeId,
+        })
+        .from(nodesTable)
+        .where(eq(nodesTable.id, id))
+        .limit(1);
+
+      const [config] = node
+        ? await tx
+            .select({
+              id: configsTable.id,
+              universityId: configsTable.universityId,
+              year: configsTable.year,
+              branch: configsTable.branch,
+              status: configsTable.status,
+            })
+            .from(configsTable)
+            .where(eq(configsTable.id, node.configId))
+            .limit(1)
+        : [];
+
+      return [node ?? null, config ?? null] as const;
+    });
+
+    if (!node) {
+      res.status(404).json({ error: "Subtopic not found" });
+      return;
+    }
+
+    if (!config) {
+      res.status(404).json({ error: "Config not found" });
+      return;
+    }
+
+    if (user.role !== "admin") {
+      if (config.status !== "live") {
+        res.status(403).json({ error: "Access denied." });
         return;
       }
-
-      if (user.role !== "admin") {
-        if (config.status !== "live") {
-          res.status(403).json({ error: "Access denied." });
-          return;
-        }
-        if (user.universityId !== config.universityId) {
-          res.status(403).json({ error: "Access denied." });
-          return;
-        }
-        const isSuperStudent = (user.role || "").toLowerCase() === "super_student";
-        const yearMismatch = !doesStudentYearMatchConfigYear(user.year, config.year);
-        const branchMismatch = normalizeToken(user.branch) !== normalizeToken(config.branch);
-        if (!isSuperStudent && (yearMismatch || branchMismatch)) {
-          res.status(403).json({ error: "Access denied." });
-          return;
-        }
+      if (user.universityId !== config.universityId) {
+        res.status(403).json({ error: "Access denied." });
+        return;
       }
-    } else if (config.status !== "live") {
-      res.status(403).json({ error: "Access denied." });
-      return;
+      const isSuperStudent = (user.role || "").toLowerCase() === "super_student";
+      const yearMismatch = !doesStudentYearMatchConfigYear(user.year, config.year);
+      const branchMismatch = normalizeToken(user.branch) !== normalizeToken(config.branch);
+      if (!isSuperStudent && (yearMismatch || branchMismatch)) {
+        res.status(403).json({ error: "Access denied." });
+        return;
+      }
     }
 
     if (!node.unitSubtopicId) {
@@ -203,41 +212,45 @@ router.get("/subtopics/:id", async (req, res) => {
       return;
     }
 
-    const [canonical] = node.canonicalNodeId
-      ? await db
-          .select()
-          .from(canonicalNodesTable)
-          .where(eq(canonicalNodesTable.id, node.canonicalNodeId))
-          .limit(1)
-      : [];
+    const { canonical, questions, allNodesForConfig } = await withRequestDbContext(auth.claims, async (tx) => {
+      const [canonical] = node.canonicalNodeId
+        ? await tx
+            .select()
+            .from(canonicalNodesTable)
+            .where(eq(canonicalNodesTable.id, node.canonicalNodeId))
+            .limit(1)
+        : [];
 
-    const questions = await db
-      .select({
-        id: configQuestionsTable.id,
-        markType: configQuestionsTable.markType,
-        question: configQuestionsTable.question,
-        answer: configQuestionsTable.answer,
-        isStarred: configQuestionsTable.isStarred,
-        starSource: configQuestionsTable.starSource,
-      })
-      .from(configQuestionsTable)
-      .where(
-        and(
-          eq(configQuestionsTable.configId, node.configId),
-          eq(configQuestionsTable.unitSubtopicId, node.unitSubtopicId),
-        ),
-      );
+      const questions = await tx
+        .select({
+          id: configQuestionsTable.id,
+          markType: configQuestionsTable.markType,
+          question: configQuestionsTable.question,
+          answer: configQuestionsTable.answer,
+          isStarred: configQuestionsTable.isStarred,
+          starSource: configQuestionsTable.starSource,
+        })
+        .from(configQuestionsTable)
+        .where(
+          and(
+            eq(configQuestionsTable.configId, node.configId),
+            eq(configQuestionsTable.unitSubtopicId, node.unitSubtopicId),
+          ),
+        );
 
-    const allNodesForConfig = await db
-      .select({
-        id: nodesTable.id,
-        title: nodesTable.title,
-        parentId: nodesTable.parentId,
-        sortOrder: nodesTable.sortOrder,
-        canonicalNodeId: nodesTable.canonicalNodeId,
-      })
-      .from(nodesTable)
-      .where(eq(nodesTable.configId, node.configId));
+      const allNodesForConfig = await tx
+        .select({
+          id: nodesTable.id,
+          title: nodesTable.title,
+          parentId: nodesTable.parentId,
+          sortOrder: nodesTable.sortOrder,
+          canonicalNodeId: nodesTable.canonicalNodeId,
+        })
+        .from(nodesTable)
+        .where(eq(nodesTable.configId, node.configId));
+
+      return { canonical: canonical ?? null, questions, allNodesForConfig };
+    });
     const siblings = allNodesForConfig
       .filter((n) => String(n.parentId || "") === String(node.parentId || ""))
       .sort((a, b) => {
@@ -288,6 +301,7 @@ router.put("/subtopics/:id", requireAdmin, async (req, res) => {
   try {
     const { id } = UpdateSubtopicContentParams.parse(req.params);
     const body = UpdateSubtopicContentBody.parse(req.body);
+    const authClaims = ((req as any).authClaims ?? null) as import("../lib/jwt").AccessTokenPayload | null;
 
     const [content] = await db
       .select()
@@ -324,28 +338,30 @@ router.put("/subtopics/:id", requireAdmin, async (req, res) => {
       })
       .where(eq(nodesTable.id, id));
 
-    await db
-      .delete(configQuestionsTable)
-      .where(
-        and(
-          eq(configQuestionsTable.configId, content.configId),
-          eq(configQuestionsTable.unitSubtopicId, content.unitSubtopicId),
-        ),
-      );
+    await withRequestDbContext(authClaims, async (tx) => {
+      await tx
+        .delete(configQuestionsTable)
+        .where(
+          and(
+            eq(configQuestionsTable.configId, content.configId),
+            eq(configQuestionsTable.unitSubtopicId, content.unitSubtopicId),
+          ),
+        );
 
-    if (body.questions.length > 0) {
-      await db.insert(configQuestionsTable).values(
-        body.questions.map((q) => ({
-          configId: content.configId,
-          unitSubtopicId: content.unitSubtopicId!,
-          markType: q.markType,
-          question: q.question,
-          answer: q.answer,
-          isStarred: q.isStarred ?? false,
-          starSource: q.starSource ?? (q.isStarred ? "manual" : "none"),
-        })),
-      );
-    }
+      if (body.questions.length > 0) {
+        await tx.insert(configQuestionsTable).values(
+          body.questions.map((q) => ({
+            configId: content.configId,
+            unitSubtopicId: content.unitSubtopicId!,
+            markType: q.markType,
+            question: q.question,
+            answer: q.answer,
+            isStarred: q.isStarred ?? false,
+            starSource: q.starSource ?? (q.isStarred ? "manual" : "none"),
+          })),
+        );
+      }
+    });
 
     res.json({ success: true });
   } catch (error) {

@@ -1,8 +1,9 @@
 import { Router, type IRouter } from "express";
 import { GetConfigsQueryParams, GetConfigsResponse } from "../api-zod";
-import { db, configsTable, nodesTable, usersTable, configQuestionsTable } from "../db";
+import { db, configsTable, nodesTable, usersTable, configQuestionsTable, withRequestDbContext } from "../db";
 import { eq, and, ne, or, sql, type SQL } from "drizzle-orm";
 import { requireAdmin } from "../middleware/adminAuth";
+import { getJwtRequestAuth } from "../lib/requestAuth";
 
 const router: IRouter = Router();
 
@@ -79,20 +80,28 @@ router.get("/configs", async (req, res) => {
   try {
     const { universityId, status } = GetConfigsQueryParams.parse(req.query);
 
-    const userId = req.headers["x-user-id"] as string | undefined;
+    const auth = getJwtRequestAuth(req);
+    const userId = auth?.userId || "";
+    if (!userId) {
+      res.status(401).json({ error: "Authentication required. Provide a valid bearer token." });
+      return;
+    }
+
     let isAdmin = false;
     let isSuperStudent = false;
     let userUniversityId: string | null = null;
     let userYear: string | null = null;
     let userBranch: string | null = null;
-    if (userId) {
-      const [user] = await db.select().from(usersTable).where(eq(usersTable.id, userId)).limit(1);
-      isAdmin = user?.role === "admin";
-      isSuperStudent = (user?.role || "").toLowerCase() === "super_student";
-      userUniversityId = user?.universityId ?? null;
-      userYear = user?.year ?? null;
-      userBranch = user?.branch ?? null;
+    const [user] = await db.select().from(usersTable).where(eq(usersTable.id, userId)).limit(1);
+    if (!user) {
+      res.status(401).json({ error: "Invalid user." });
+      return;
     }
+    isAdmin = user?.role === "admin";
+    isSuperStudent = (user?.role || "").toLowerCase() === "super_student";
+    userUniversityId = user?.universityId ?? null;
+    userYear = user?.year ?? null;
+    userBranch = user?.branch ?? null;
 
     const conditions: SQL[] = [];
     if (!isAdmin && userUniversityId) {
@@ -124,10 +133,12 @@ router.get("/configs", async (req, res) => {
       conditions.push(ne(configsTable.status, "deleted"));
     }
 
-    const configs = await db
-      .select()
-      .from(configsTable)
-      .where(conditions.length > 0 ? and(...conditions) : undefined);
+    const configs = await withRequestDbContext(auth.claims, async (tx) =>
+      tx
+        .select()
+        .from(configsTable)
+        .where(conditions.length > 0 ? and(...conditions) : undefined)
+    );
 
     const response = GetConfigsResponse.parse(
       configs.map((c) => ({
@@ -160,78 +171,84 @@ router.get("/configs/:id/question-bank", async (req, res) => {
       return;
     }
 
-    const [config] = await db
-      .select({
-        id: configsTable.id,
-        subject: configsTable.subject,
-        universityId: configsTable.universityId,
-        year: configsTable.year,
-        branch: configsTable.branch,
-        status: configsTable.status,
-      })
-      .from(configsTable)
-      .where(eq(configsTable.id, id))
-      .limit(1);
+    const auth = getJwtRequestAuth(req);
+    const userId = auth?.userId || "";
+    if (!userId) {
+      res.status(401).json({ error: "Authentication required. Provide a valid bearer token." });
+      return;
+    }
+
+    const [config] = await withRequestDbContext(auth.claims, async (tx) =>
+      tx
+        .select({
+          id: configsTable.id,
+          subject: configsTable.subject,
+          universityId: configsTable.universityId,
+          year: configsTable.year,
+          branch: configsTable.branch,
+          status: configsTable.status,
+        })
+        .from(configsTable)
+        .where(eq(configsTable.id, id))
+        .limit(1)
+    );
 
     if (!config) {
       res.status(404).json({ error: "Config not found" });
       return;
     }
 
-    const userId = String(req.headers["x-user-id"] || "").trim();
-    if (userId) {
-      const [user] = await db
-        .select({
-          id: usersTable.id,
-          role: usersTable.role,
-          universityId: usersTable.universityId,
-          year: usersTable.year,
-          branch: usersTable.branch,
-        })
-        .from(usersTable)
-        .where(eq(usersTable.id, userId))
-        .limit(1);
+    const [user] = await withRequestDbContext(auth.claims, async (tx) =>
+      tx
+      .select({
+        id: usersTable.id,
+        role: usersTable.role,
+        universityId: usersTable.universityId,
+        year: usersTable.year,
+        branch: usersTable.branch,
+      })
+      .from(usersTable)
+      .where(eq(usersTable.id, userId))
+      .limit(1)
+    );
 
-      if (!user) {
-        res.status(401).json({ error: "Invalid user." });
-        return;
-      }
-
-      if (user.role !== "admin") {
-        if (config.status !== "live") {
-          res.status(403).json({ error: "Access denied." });
-          return;
-        }
-        if (user.universityId !== config.universityId) {
-          res.status(403).json({ error: "Access denied." });
-          return;
-        }
-        const isSuperStudent = (user.role || "").toLowerCase() === "super_student";
-        const branchMismatch = normalizeToken(user.branch) !== normalizeToken(config.branch);
-        if (
-          !isSuperStudent &&
-          (!doesStudentYearMatchConfigYear(user.year, config.year) || branchMismatch)
-        ) {
-          res.status(403).json({ error: "Access denied." });
-          return;
-        }
-      }
-    } else if (config.status !== "live") {
-      // Unauthenticated users can only see live content.
-      res.status(403).json({ error: "Access denied." });
+    if (!user) {
+      res.status(401).json({ error: "Invalid user." });
       return;
     }
 
-    const configNodes = await db
-      .select({
-        id: nodesTable.id,
-        title: nodesTable.title,
-        type: nodesTable.type,
-        parentId: nodesTable.parentId,
-        unitSubtopicId: nodesTable.unitSubtopicId,
-      })
-      .from(nodesTable)
-      .where(eq(nodesTable.configId, id));
+    if (user.role !== "admin") {
+      if (config.status !== "live") {
+        res.status(403).json({ error: "Access denied." });
+        return;
+      }
+      if (user.universityId !== config.universityId) {
+        res.status(403).json({ error: "Access denied." });
+        return;
+      }
+      const isSuperStudent = (user.role || "").toLowerCase() === "super_student";
+      const branchMismatch = normalizeToken(user.branch) !== normalizeToken(config.branch);
+      if (
+        !isSuperStudent &&
+        (!doesStudentYearMatchConfigYear(user.year, config.year) || branchMismatch)
+      ) {
+        res.status(403).json({ error: "Access denied." });
+        return;
+      }
+    }
+
+    const configNodes = await withRequestDbContext(auth.claims, async (tx) =>
+      tx
+        .select({
+          id: nodesTable.id,
+          title: nodesTable.title,
+          type: nodesTable.type,
+          parentId: nodesTable.parentId,
+          unitSubtopicId: nodesTable.unitSubtopicId,
+        })
+        .from(nodesTable)
+        .where(eq(nodesTable.configId, id))
+    );
 
     const nodeById = new Map(configNodes.map((n) => [n.id, n]));
     const subtopicNodeByCanonicalId = new Map<string, string[]>();
@@ -242,18 +259,20 @@ router.get("/configs/:id/question-bank", async (req, res) => {
       subtopicNodeByCanonicalId.set(n.unitSubtopicId, list);
     }
 
-    const canonicalQuestions = await db
-      .select({
-        id: configQuestionsTable.id,
-        markType: configQuestionsTable.markType,
-        question: configQuestionsTable.question,
-        answer: configQuestionsTable.answer,
-        isStarred: configQuestionsTable.isStarred,
-        starSource: configQuestionsTable.starSource,
-        unitSubtopicId: configQuestionsTable.unitSubtopicId,
-      })
-      .from(configQuestionsTable)
-      .where(eq(configQuestionsTable.configId, id));
+    const canonicalQuestions = await withRequestDbContext(auth.claims, async (tx) =>
+      tx
+        .select({
+          id: configQuestionsTable.id,
+          markType: configQuestionsTable.markType,
+          question: configQuestionsTable.question,
+          answer: configQuestionsTable.answer,
+          isStarred: configQuestionsTable.isStarred,
+          starSource: configQuestionsTable.starSource,
+          unitSubtopicId: configQuestionsTable.unitSubtopicId,
+        })
+        .from(configQuestionsTable)
+        .where(eq(configQuestionsTable.configId, id))
+    );
 
     const questions = canonicalQuestions.map((q) => {
       let nodeId = "";
@@ -316,20 +335,23 @@ router.put("/configs/:configId/question-bank/questions/:questionId/star", requir
     const configId = String(req.params.configId || "").trim();
     const questionId = Number(req.params.questionId);
     const isStarred = Boolean(req.body?.isStarred);
+    const authClaims = ((req as any).authClaims ?? null) as import("../lib/jwt").AccessTokenPayload | null;
 
     if (!configId || !Number.isFinite(questionId)) {
       res.status(400).json({ error: "Invalid configId or questionId" });
       return;
     }
 
-    const [question] = await db
-      .select({
-        id: configQuestionsTable.id,
-        configId: configQuestionsTable.configId,
-      })
-      .from(configQuestionsTable)
-      .where(eq(configQuestionsTable.id, questionId))
-      .limit(1);
+    const [question] = await withRequestDbContext(authClaims, async (tx) =>
+      tx
+        .select({
+          id: configQuestionsTable.id,
+          configId: configQuestionsTable.configId,
+        })
+        .from(configQuestionsTable)
+        .where(eq(configQuestionsTable.id, questionId))
+        .limit(1)
+    );
 
     if (!question) {
       res.status(404).json({ error: "Question not found" });
@@ -341,14 +363,16 @@ router.put("/configs/:configId/question-bank/questions/:questionId/star", requir
       return;
     }
 
-    await db
-      .update(configQuestionsTable)
-      .set({
-        isStarred,
-        starSource: isStarred ? "manual" : "none",
-        updatedAt: new Date(),
-      })
-      .where(eq(configQuestionsTable.id, questionId));
+    await withRequestDbContext(authClaims, async (tx) =>
+      tx
+        .update(configQuestionsTable)
+        .set({
+          isStarred,
+          starSource: isStarred ? "manual" : "none",
+          updatedAt: new Date(),
+        })
+        .where(eq(configQuestionsTable.id, questionId))
+    );
 
     res.json({ success: true });
   } catch (error) {

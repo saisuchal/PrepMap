@@ -19,6 +19,7 @@ import {
   unitLibraryTable,
   canonicalNodesTable,
   eventsTable,
+  withRequestDbContext,
 } from "../db";
 import { and, eq, inArray } from "drizzle-orm";
 import { createHash, randomUUID } from "crypto";
@@ -118,11 +119,13 @@ const SaveReplicaQuestionsBody = z.object({
   })),
 });
 
-async function loadSavedReplicaQuestions(configId: string) {
-  const rows = await db
-    .select()
-    .from(configReplicaQuestionsTable)
-    .where(eq(configReplicaQuestionsTable.configId, configId));
+async function loadSavedReplicaQuestions(configId: string, authClaims?: import("../lib/jwt").AccessTokenPayload | null) {
+  const rows = await withRequestDbContext(authClaims ?? null, async (tx) =>
+    tx
+      .select()
+      .from(configReplicaQuestionsTable)
+      .where(eq(configReplicaQuestionsTable.configId, configId))
+  );
   rows.sort((a, b) => Number(a.sortOrder || 0) - Number(b.sortOrder || 0) || Number(a.id || 0) - Number(b.id || 0));
   return rows.map((r) => ({
     markType: r.markType === "Applied" ? "Applied" as const : "Foundational" as const,
@@ -793,8 +796,9 @@ router.post("/configs/:id/clone", requireAdmin, async (req, res) => {
 
     const clonedConfigId = randomUUID().substring(0, 8);
     const userId = String((req as any).userId || "admin");
+    const authClaims = ((req as any).authClaims ?? null) as import("../lib/jwt").AccessTokenPayload | null;
 
-    await db.transaction(async (tx) => {
+    await withRequestDbContext(authClaims, async (tx) => {
       await tx.insert(configsTable).values({
         id: clonedConfigId,
         universityId: targetUniversityId,
@@ -1999,6 +2003,7 @@ async function performCheapImport(
     const pathMap = new Map<string, { nodeId: string; unitSubtopicId: string }>();
     let processedQuestions = 0;
     let unmappedQuestions = 0;
+    const authClaims = ((req as any).authClaims ?? null) as import("../lib/jwt").AccessTokenPayload | null;
 
     const persistQuestions = async (tx: any) => {
       for (let i = 0; i < questions.length; i++) {
@@ -2032,7 +2037,7 @@ async function performCheapImport(
     };
 
     if (isQuestionsOnlyImport) {
-      await db.transaction(async (tx) => {
+      await withRequestDbContext(authClaims, async (tx) => {
         const existingNodes = await tx
           .select({
             id: nodesTable.id,
@@ -2066,7 +2071,7 @@ async function performCheapImport(
         await persistQuestions(tx);
       });
     } else {
-      await db.transaction(async (tx) => {
+      await withRequestDbContext(authClaims, async (tx) => {
         const existingNodes = await tx
           .select({ id: nodesTable.id })
           .from(nodesTable)
@@ -2556,6 +2561,7 @@ router.delete("/configs/:id/permanent", requireAdmin, async (req, res) => {
   try {
     const { id } = PublishConfigParams.parse(req.params);
     const actorUserId = String((req as any).userId || "").trim() || "unknown";
+    const authClaims = ((req as any).authClaims ?? null) as import("../lib/jwt").AccessTokenPayload | null;
 
     const [config] = await db
       .select({
@@ -2581,12 +2587,15 @@ router.delete("/configs/:id/permanent", requireAdmin, async (req, res) => {
       return;
     }
 
-    const [nodeRows, questionRows, eventRows, unitLinkRows] = await Promise.all([
-      db.select({ id: nodesTable.id }).from(nodesTable).where(eq(nodesTable.configId, id)),
-      db.select({ id: configQuestionsTable.id }).from(configQuestionsTable).where(eq(configQuestionsTable.configId, id)),
-      db.select({ id: eventsTable.id }).from(eventsTable).where(eq(eventsTable.configId, id)),
-      db.select({ configId: configUnitLinksTable.configId }).from(configUnitLinksTable).where(eq(configUnitLinksTable.configId, id)),
-    ]);
+    const { nodeRows, questionRows, eventRows, unitLinkRows } = await withRequestDbContext(authClaims, async (tx) => {
+      const [nodeRows, questionRows, eventRows, unitLinkRows] = await Promise.all([
+        tx.select({ id: nodesTable.id }).from(nodesTable).where(eq(nodesTable.configId, id)),
+        tx.select({ id: configQuestionsTable.id }).from(configQuestionsTable).where(eq(configQuestionsTable.configId, id)),
+        tx.select({ id: eventsTable.id }).from(eventsTable).where(eq(eventsTable.configId, id)),
+        tx.select({ configId: configUnitLinksTable.configId }).from(configUnitLinksTable).where(eq(configUnitLinksTable.configId, id)),
+      ]);
+      return { nodeRows, questionRows, eventRows, unitLinkRows };
+    });
 
     req.log.info(
       {
@@ -2611,7 +2620,7 @@ router.delete("/configs/:id/permanent", requireAdmin, async (req, res) => {
       "Permanent delete requested for disabled config",
     );
 
-    await db.transaction(async (tx) => {
+    await withRequestDbContext(authClaims, async (tx) => {
       await tx.delete(configQuestionsTable).where(eq(configQuestionsTable.configId, id));
       await tx.delete(configReplicaQuestionsTable).where(eq(configReplicaQuestionsTable.configId, id));
       await tx.delete(nodesTable).where(eq(nodesTable.configId, id));
@@ -2639,7 +2648,8 @@ router.delete("/configs/:id/permanent", requireAdmin, async (req, res) => {
 router.get("/configs/:id/cheap/replica-questions", requireAdmin, async (req, res) => {
   try {
     const { id } = TriggerGenerationParams.parse(req.params);
-    const questions = await loadSavedReplicaQuestions(id);
+    const authClaims = ((req as any).authClaims ?? null) as import("../lib/jwt").AccessTokenPayload | null;
+    const questions = await loadSavedReplicaQuestions(id, authClaims);
     res.json({
       success: true,
       configId: id,
@@ -2654,6 +2664,7 @@ router.get("/configs/:id/cheap/replica-questions", requireAdmin, async (req, res
 router.post("/configs/:id/cheap/replica-questions", requireAdmin, async (req, res) => {
   try {
     const { id } = TriggerGenerationParams.parse(req.params);
+    const authClaims = ((req as any).authClaims ?? null) as import("../lib/jwt").AccessTokenPayload | null;
     const body = SaveReplicaQuestionsBody.parse(req.body);
     const cleanQuestions = body.questions
       .map((q) => ({
@@ -2667,7 +2678,7 @@ router.post("/configs/:id/cheap/replica-questions", requireAdmin, async (req, re
       }))
       .filter((q) => q.question.length > 0);
 
-    await db.transaction(async (tx) => {
+    await withRequestDbContext(authClaims, async (tx) => {
       await tx.delete(configReplicaQuestionsTable).where(eq(configReplicaQuestionsTable.configId, id));
       if (cleanQuestions.length > 0) {
         await tx.insert(configReplicaQuestionsTable).values(
@@ -2702,6 +2713,7 @@ router.get("/configs/:id/cheap/gap-report", requireAdmin, async (req, res) => {
   try {
     const { id } = TriggerGenerationParams.parse(req.params);
     const mode = parseCheapGenerationMode(req.query.mode);
+    const authClaims = ((req as any).authClaims ?? null) as import("../lib/jwt").AccessTokenPayload | null;
     const includeExplanationGaps = mode !== "questions_only";
     const includeQuestionGaps = mode !== "explanations_only";
 
@@ -2717,10 +2729,12 @@ router.get("/configs/:id/cheap/gap-report", requireAdmin, async (req, res) => {
 
     const expectedQuestionCount = config.exam === "endsem" ? 75 : 50;
     const existingQuestionCount = includeQuestionGaps
-      ? (await db
-          .select({ id: configQuestionsTable.id })
-          .from(configQuestionsTable)
-          .where(eq(configQuestionsTable.configId, id))).length
+      ? (await withRequestDbContext(authClaims, async (tx) =>
+          tx
+            .select({ id: configQuestionsTable.id })
+            .from(configQuestionsTable)
+            .where(eq(configQuestionsTable.configId, id))
+        )).length
       : 0;
     const questionGapCount = includeQuestionGaps
       ? Math.max(0, expectedQuestionCount - existingQuestionCount)

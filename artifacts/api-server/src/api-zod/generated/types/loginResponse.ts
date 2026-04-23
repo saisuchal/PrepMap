@@ -13,6 +13,7 @@ export interface LoginResponse {
   branch: string;
   year: string;
   role: LoginResponseRole;
+  accessToken?: string;
   mustResetPassword?: boolean;
   securityQuestionSet?: boolean;
   onboardingRequired?: boolean;

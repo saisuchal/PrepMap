@@ -1,8 +1,9 @@
-import { Router, type IRouter } from "express";
+import { Router, type IRouter, type Request } from "express";
 import { GetAdminStatsResponse } from "../api-zod";
-import { db, eventsTable, nodesTable, usersTable, configsTable } from "../db";
+import { db, eventsTable, nodesTable, usersTable, configsTable, withRequestDbContext } from "../db";
 import { eq, count, inArray } from "drizzle-orm";
 import { requireAdmin } from "../middleware/adminAuth";
+import type { AccessTokenPayload } from "../lib/jwt";
 
 const router: IRouter = Router();
 const QUESTION_BANK_EVENT_PREFIX = "__qb__:";
@@ -12,19 +13,23 @@ const isLearnerRole = (role: string | null | undefined) => {
   const normalized = (role || "").toLowerCase();
   return normalized === "student" || normalized === "super_student";
 };
+const getAdminClaims = (req: Request): AccessTokenPayload | null =>
+  ((req as any).authClaims ?? null) as AccessTokenPayload | null;
 
 router.get("/admin/stats", requireAdmin, async (req, res) => {
   try {
-    const stats = await db
-      .select({
-        subtopicId: nodesTable.id,
-        subtopicTitle: nodesTable.title,
-        eventCount: count(eventsTable.id),
-      })
-      .from(nodesTable)
-      .leftJoin(eventsTable, eq(nodesTable.id, eventsTable.subtopicId))
-      .where(eq(nodesTable.type, "subtopic"))
-      .groupBy(nodesTable.id, nodesTable.title);
+    const stats = await withRequestDbContext(getAdminClaims(req), async (tx) =>
+      tx
+        .select({
+          subtopicId: nodesTable.id,
+          subtopicTitle: nodesTable.title,
+          eventCount: count(eventsTable.id),
+        })
+        .from(nodesTable)
+        .leftJoin(eventsTable, eq(nodesTable.id, eventsTable.subtopicId))
+        .where(eq(nodesTable.type, "subtopic"))
+        .groupBy(nodesTable.id, nodesTable.title)
+    );
 
     const response = GetAdminStatsResponse.parse(
       stats.map((s) => ({
@@ -92,15 +97,17 @@ router.get("/admin/analytics/universities", requireAdmin, async (req, res) => {
     type ProgressKey = string;
     const progressMap = new Map<ProgressKey, Set<string>>();
     if (latestConfigIds.length > 0) {
-      const rows = await db
-        .select({
-          configId: eventsTable.configId,
-          userId: eventsTable.userId,
-          topicId: eventsTable.topicId,
-          subtopicId: eventsTable.subtopicId,
-        })
-        .from(eventsTable)
-        .where(inArray(eventsTable.configId, latestConfigIds));
+      const rows = await withRequestDbContext(getAdminClaims(req), async (tx) =>
+        tx
+          .select({
+            configId: eventsTable.configId,
+            userId: eventsTable.userId,
+            topicId: eventsTable.topicId,
+            subtopicId: eventsTable.subtopicId,
+          })
+          .from(eventsTable)
+          .where(inArray(eventsTable.configId, latestConfigIds))
+      );
 
       for (const row of rows) {
         if (isQuestionBankEvent(row.topicId, null)) continue;
@@ -239,15 +246,17 @@ router.get("/admin/analytics/exam-configs", requireAdmin, async (req, res) => {
 
     const progressMap = new Map<string, Set<string>>();
     if (selectedConfigIds.length > 0) {
-      const rows = await db
-        .select({
-          configId: eventsTable.configId,
-          userId: eventsTable.userId,
-          topicId: eventsTable.topicId,
-          subtopicId: eventsTable.subtopicId,
-        })
-        .from(eventsTable)
-        .where(inArray(eventsTable.configId, selectedConfigIds));
+      const rows = await withRequestDbContext(getAdminClaims(req), async (tx) =>
+        tx
+          .select({
+            configId: eventsTable.configId,
+            userId: eventsTable.userId,
+            topicId: eventsTable.topicId,
+            subtopicId: eventsTable.subtopicId,
+          })
+          .from(eventsTable)
+          .where(inArray(eventsTable.configId, selectedConfigIds))
+      );
 
       for (const row of rows) {
         if (isQuestionBankEvent(row.topicId, null)) continue;
@@ -315,9 +324,11 @@ router.get("/admin/analytics/exam-configs", requireAdmin, async (req, res) => {
 
 router.get("/admin/analytics/question-bank-interactions", requireAdmin, async (req, res) => {
   try {
-    const rows = await db
-      .select({ topicId: eventsTable.topicId, questionId: eventsTable.questionId })
-      .from(eventsTable);
+    const rows = await withRequestDbContext(getAdminClaims(req), async (tx) =>
+      tx
+        .select({ topicId: eventsTable.topicId, questionId: eventsTable.questionId })
+        .from(eventsTable)
+    );
 
     const questionBankInteractionCount = rows.reduce((acc, row) => (
       isQuestionBankEvent(row.topicId, row.questionId) ? acc + 1 : acc
@@ -332,14 +343,16 @@ router.get("/admin/analytics/question-bank-interactions", requireAdmin, async (r
 
 router.get("/admin/analytics/question-bank-interactions/breakdown", requireAdmin, async (req, res) => {
   try {
-    const rows = await db
-      .select({
-        configId: eventsTable.configId,
-        universityId: eventsTable.universityId,
-        topicId: eventsTable.topicId,
-        questionId: eventsTable.questionId,
-      })
-      .from(eventsTable);
+    const rows = await withRequestDbContext(getAdminClaims(req), async (tx) =>
+      tx
+        .select({
+          configId: eventsTable.configId,
+          universityId: eventsTable.universityId,
+          topicId: eventsTable.topicId,
+          questionId: eventsTable.questionId,
+        })
+        .from(eventsTable)
+    );
 
     const questionBankRows = rows.filter((row) => isQuestionBankEvent(row.topicId, row.questionId));
 
@@ -437,15 +450,17 @@ router.get("/admin/analytics/question-bank-interactions/live-config-summary", re
     const interactionCountByConfig = new Map<string, number>();
 
     if (liveConfigIds.length > 0) {
-      const rows = await db
-        .select({
-          configId: eventsTable.configId,
-          userId: eventsTable.userId,
-          topicId: eventsTable.topicId,
-          questionId: eventsTable.questionId,
-        })
-        .from(eventsTable)
-        .where(inArray(eventsTable.configId, liveConfigIds));
+      const rows = await withRequestDbContext(getAdminClaims(req), async (tx) =>
+        tx
+          .select({
+            configId: eventsTable.configId,
+            userId: eventsTable.userId,
+            topicId: eventsTable.topicId,
+            questionId: eventsTable.questionId,
+          })
+          .from(eventsTable)
+          .where(inArray(eventsTable.configId, liveConfigIds))
+      );
 
       for (const row of rows) {
         if (!isQuestionBankEvent(row.topicId, row.questionId)) continue;
@@ -531,16 +546,18 @@ router.get("/admin/analytics/configs/:configId/students", requireAdmin, async (r
     const questionBankInteractionsByUser = new Map<string, number>();
     const lastActiveMap = new Map<string, Date>();
     if (studentIds.length > 0) {
-      const rows = await db
-        .select({
-          userId: eventsTable.userId,
-          topicId: eventsTable.topicId,
-          subtopicId: eventsTable.subtopicId,
-          questionId: eventsTable.questionId,
-          timestamp: eventsTable.timestamp,
-        })
-        .from(eventsTable)
-        .where(eq(eventsTable.configId, configId));
+      const rows = await withRequestDbContext(getAdminClaims(req), async (tx) =>
+        tx
+          .select({
+            userId: eventsTable.userId,
+            topicId: eventsTable.topicId,
+            subtopicId: eventsTable.subtopicId,
+            questionId: eventsTable.questionId,
+            timestamp: eventsTable.timestamp,
+          })
+          .from(eventsTable)
+          .where(eq(eventsTable.configId, configId))
+      );
 
       for (const row of rows) {
         if (!studentIdSet.has(row.userId)) continue;
