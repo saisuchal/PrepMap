@@ -16,7 +16,7 @@ export default defineConfig({
   plugins: [
     react(),
     tailwindcss(),
-    runtimeErrorOverlay(),
+    ...(process.env.NODE_ENV !== "production" ? [runtimeErrorOverlay()] : []),
     ...(process.env.NODE_ENV !== "production" &&
     process.env.REPL_ID !== undefined
       ? [
@@ -42,6 +42,17 @@ export default defineConfig({
   build: {
     outDir: path.resolve(import.meta.dirname, "dist/public"),
     emptyOutDir: true,
+    sourcemap: false,
+    rollupOptions: {
+      onwarn(warning, warn) {
+        const message =
+          typeof warning === "string" ? warning : String((warning as any)?.message || "");
+        if (message.includes("Error when using sourcemap for reporting an error")) {
+          return;
+        }
+        warn(warning);
+      },
+    },
   },
   server: {
     port,

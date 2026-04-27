@@ -2,7 +2,6 @@ import { Switch, Route, Router as WouterRouter, Redirect } from "wouter";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { SpeedInsights } from "@vercel/speed-insights/react";
 
 import { Layout } from "@/components/layout";
 import { getStoredUser } from "@/lib/auth";
@@ -90,7 +89,6 @@ function App() {
           <AppRouter />
         </WouterRouter>
         <Toaster />
-        <SpeedInsights />
       </TooltipProvider>
     </QueryClientProvider>
   );
