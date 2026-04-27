@@ -160,7 +160,8 @@ router.post("/events", async (req, res) => {
     const auth = getJwtRequestAuth(req);
     const authUserId = auth?.userId || "";
     if (!authUserId) {
-      res.status(401).json({ error: "Authentication required. Provide a valid bearer token." });
+      // Emergency stabilization: avoid repeated 401 retry loops from clients/bots.
+      res.status(200).json({ success: true, skipped: true, reason: "unauthenticated" });
       return;
     }
 
@@ -224,7 +225,7 @@ router.post("/events", async (req, res) => {
     });
 
     if (result.status === "invalid_user") {
-      res.status(401).json({ error: "Invalid user." });
+      res.status(200).json({ success: true, skipped: true, reason: "invalid_user" });
       return;
     }
     if (result.status === "skipped") {
