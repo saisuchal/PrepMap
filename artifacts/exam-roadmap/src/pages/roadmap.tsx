@@ -668,7 +668,7 @@ export default function Roadmap() {
   const subject = searchParams.get("subject") || "Roadmap";
   const examParam = searchParams.get("exam") || "";
   const { data: metadata } = useGetAppMetadata();
-  const { data: configs } = useGetConfigs({}, { query: { enabled: !!configId } });
+  const { data: configs } = useGetConfigs({}, { query: { queryKey: ["configs", "roadmap", configId], enabled: !!configId } });
   const examTypes = metadata?.examTypes?.length ? metadata.examTypes : EXAM_TYPES;
   const universities = metadata?.universities?.length ? metadata.universities : UNIVERSITIES;
   const semesters = metadata?.semesters?.length ? metadata.semesters : SEMESTERS;
@@ -687,7 +687,7 @@ export default function Roadmap() {
   const subtitleMeta = [universityLabel, branchLabel, semesterLabel, examLabel].filter(Boolean).join(" | ");
 
   const { data: nodes, isLoading, isError } = useGetNodes({ configId: configId! }, {
-    query: { enabled: !!configId }
+    query: { queryKey: ["nodes", "roadmap", configId], enabled: !!configId }
   });
 
   const tree = useMemo(() => (nodes ? buildTree(nodes) : []), [nodes]);
@@ -2435,7 +2435,7 @@ function ContentModal({
   const isSubtopic = node.type === "subtopic";
 
   const { data: content, isLoading } = useGetSubtopicContent(node.id, {
-    query: { enabled: isSubtopic }
+    query: { queryKey: ["subtopic-content", node.id], enabled: isSubtopic }
   });
 
   const user = getStoredUser();
@@ -2528,7 +2528,7 @@ function ContentModal({
     exampleBlock: String((content as any)?.exampleBlock || ""),
     supportNote: String((content as any)?.supportNote || ""),
   });
-  const toOrder = (value: string | undefined) => {
+  const toOrder = (value: string | number | undefined) => {
     const n = Number(String(value || "").trim());
     return Number.isFinite(n) ? n : Number.MAX_SAFE_INTEGER;
   };

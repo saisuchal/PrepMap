@@ -237,7 +237,7 @@ router.get("/configs/:id/question-bank", async (req, res) => {
       }
     }
 
-    const configNodes = await withRequestDbContext(auth.claims, async (tx) =>
+    const configNodes = (await withRequestDbContext(auth.claims, async (tx) =>
       tx
         .select({
           id: nodesTable.id,
@@ -248,7 +248,13 @@ router.get("/configs/:id/question-bank", async (req, res) => {
         })
         .from(nodesTable)
         .where(eq(nodesTable.configId, id))
-    );
+    )) as Array<{
+      id: string;
+      title: string;
+      type: string;
+      parentId: string | null;
+      unitSubtopicId: string | null;
+    }>;
 
     const nodeById = new Map(configNodes.map((n) => [n.id, n]));
     const subtopicNodeByCanonicalId = new Map<string, string[]>();
@@ -259,7 +265,7 @@ router.get("/configs/:id/question-bank", async (req, res) => {
       subtopicNodeByCanonicalId.set(n.unitSubtopicId, list);
     }
 
-    const canonicalQuestions = await withRequestDbContext(auth.claims, async (tx) =>
+    const canonicalQuestions = (await withRequestDbContext(auth.claims, async (tx) =>
       tx
         .select({
           id: configQuestionsTable.id,
@@ -272,7 +278,15 @@ router.get("/configs/:id/question-bank", async (req, res) => {
         })
         .from(configQuestionsTable)
         .where(eq(configQuestionsTable.configId, id))
-    );
+    )) as Array<{
+      id: number;
+      markType: string;
+      question: string;
+      answer: string;
+      isStarred: boolean | null;
+      starSource: string | null;
+      unitSubtopicId: string | null;
+    }>;
 
     const questions = canonicalQuestions.map((q) => {
       let nodeId = "";

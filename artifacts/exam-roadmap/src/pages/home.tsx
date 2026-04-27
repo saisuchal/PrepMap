@@ -109,7 +109,7 @@ export default function Home() {
   }, [isStudent, selectedUni, universities, user?.universityId]);
 
   const { data: configs, isLoading } = useGetConfigs({ universityId: selectedUni }, {
-    query: { enabled: !!selectedUni }
+    query: { queryKey: ["configs", "home", selectedUni], enabled: !!selectedUni }
   });
 
   const availableSubjects = useMemo(() =>

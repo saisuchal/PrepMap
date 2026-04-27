@@ -885,7 +885,7 @@ router.post("/configs/:id/clone", requireAdmin, async (req, res) => {
                 .map((q) => String(q.unitSubtopicId || "").trim())
                 .filter(Boolean),
             ),
-          );
+          ) as string[];
           let validCanonicalIds = new Set<string>();
           if (requestedCanonicalIds.length > 0) {
             const existingCanonicalRows = await tx
@@ -2006,6 +2006,7 @@ async function performCheapImport(
     const pathMap = new Map<string, { nodeId: string; unitSubtopicId: string }>();
     let processedQuestions = 0;
     let unmappedQuestions = 0;
+    const authClaims = null as import("../lib/jwt").AccessTokenPayload | null;
     const persistQuestions = async (tx: any) => {
       for (let i = 0; i < questions.length; i++) {
         const q = questions[i];
@@ -2039,7 +2040,7 @@ async function performCheapImport(
 
     if (isQuestionsOnlyImport) {
       await withRequestDbContext(authClaims, async (tx) => {
-        const existingNodes = await tx
+        const existingNodes = (await tx
           .select({
             id: nodesTable.id,
             title: nodesTable.title,
@@ -2049,7 +2050,14 @@ async function performCheapImport(
             configId: nodesTable.configId,
           })
           .from(nodesTable)
-          .where(eq(nodesTable.configId, id));
+          .where(eq(nodesTable.configId, id))) as Array<{
+            id: string;
+            title: string;
+            type: string;
+            parentId: string | null;
+            unitSubtopicId: string | null;
+            configId: string;
+          }>;
 
         const nodeById = new Map(existingNodes.map((n) => [n.id, n]));
         for (const node of existingNodes) {

@@ -149,10 +149,14 @@ Copy and fill:
 Key required values:
 - `DATABASE_URL`
 - `PORT=4000`
+- `JWT_SECRET`
 - `SUPABASE_URL`
 - `SUPABASE_SERVICE_ROLE_KEY`
 - `SUPABASE_STORAGE_BUCKET`
 - AI settings (`AI_PROVIDER`, provider API key)
+
+Optional auth overrides (defaults used when unset):
+- `JWT_ACCESS_TTL_SECONDS=900` (15 minutes)
 
 3. Configure frontend env (optional overrides)
 
@@ -195,6 +199,8 @@ Set environment variables in Vercel matching backend `.env` requirements.
 
 - `DATABASE_URL`
 - `PORT`
+- `JWT_SECRET`
+- `JWT_ACCESS_TTL_SECONDS` (optional; default `900`)
 - `SUPABASE_URL`
 - `SUPABASE_SERVICE_ROLE_KEY`
 - `SUPABASE_STORAGE_BUCKET`

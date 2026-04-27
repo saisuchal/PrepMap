@@ -62,3 +62,8 @@ Thumbs.db
 **/.env.local
 !.env.example
 !**/.env.example
+
+# local data backups / exports (never deploy or commit)
+artifacts/api-server/backup_*.dump
+artifacts/api-server/exports/
+artifacts/api-server/artifacts/api-server/storage-backup/
