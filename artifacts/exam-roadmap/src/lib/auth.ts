@@ -1,19 +1,19 @@
 import type { LoginResponse } from "@/api-client";
 
 const AUTH_KEY = "prepmap_user";
-const LEGACY_AUTH_KEY = "gpmax_user";
 
 export type StoredUser = LoginResponse;
 
 export function getStoredUser(): StoredUser | null {
   try {
-    const stored = localStorage.getItem(AUTH_KEY) ?? localStorage.getItem(LEGACY_AUTH_KEY);
+    const stored = localStorage.getItem(AUTH_KEY);
     if (!stored) return null;
     const user = JSON.parse(stored);
-    // Migrate legacy key to new key lazily on first read.
-    localStorage.setItem(AUTH_KEY, JSON.stringify(user));
-    if (localStorage.getItem(LEGACY_AUTH_KEY)) {
-      localStorage.removeItem(LEGACY_AUTH_KEY);
+    const accessToken = String(user?.accessToken || "").trim();
+    const refreshToken = String(user?.refreshToken || "").trim();
+    if (!accessToken && !refreshToken) {
+      localStorage.removeItem(AUTH_KEY);
+      return null;
     }
     return user;
   } catch {
@@ -31,9 +31,14 @@ export function getStoredAccessToken(): string | null {
   return token || null;
 }
 
+export function getStoredRefreshToken(): string | null {
+  const user = getStoredUser();
+  const token = String(user?.refreshToken || "").trim();
+  return token || null;
+}
+
 export function removeStoredUser() {
   localStorage.removeItem(AUTH_KEY);
-  localStorage.removeItem(LEGACY_AUTH_KEY);
 }
 
 export function isAdmin(): boolean {

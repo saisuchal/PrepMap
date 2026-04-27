@@ -3,12 +3,25 @@ import { Link, useLocation } from "wouter";
 import { LogOut, Zap, User, Settings, Home } from "lucide-react";
 import { getStoredUser, removeStoredUser } from "@/lib/auth";
 import { Button } from "./ui/button";
+import { customFetch } from "@/api-client";
 
 export function Layout({ children }: { children: ReactNode }) {
   const [, setLocation] = useLocation();
   const user = getStoredUser();
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
+    const refreshToken = String(user?.refreshToken || "").trim();
+    try {
+      await customFetch("/api/auth/logout", {
+        method: "POST",
+        responseType: "json",
+        body: JSON.stringify({
+          refreshToken: refreshToken || undefined,
+        }),
+      });
+    } catch {
+      // local logout should still proceed even if server call fails
+    }
     removeStoredUser();
     setLocation("/login");
   };

@@ -29,6 +29,7 @@ export const LoginResponse = zod.object({
   year: zod.string(),
   role: zod.enum(["admin", "student", "super_student"]),
   accessToken: zod.string().optional(),
+  refreshToken: zod.string().optional(),
   mustResetPassword: zod.boolean().optional(),
   securityQuestionSet: zod.boolean().optional(),
   onboardingRequired: zod.boolean().optional(),

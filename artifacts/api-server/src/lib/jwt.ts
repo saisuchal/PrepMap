@@ -11,7 +11,7 @@ export type AccessTokenPayload = {
   exp: number;
 };
 
-const ACCESS_TOKEN_TTL_SECONDS = Number(process.env["JWT_ACCESS_TTL_SECONDS"] || "900");
+const ACCESS_TOKEN_TTL_SECONDS = Number(process.env["JWT_ACCESS_TTL_SECONDS"] || "86400");
 
 function getJwtSecret(): string {
   const secret = String(process.env["JWT_SECRET"] || "").trim();
@@ -49,7 +49,7 @@ export function issueAccessToken(claims: {
   const now = Math.floor(Date.now() / 1000);
   const ttl = Number.isFinite(ACCESS_TOKEN_TTL_SECONDS) && ACCESS_TOKEN_TTL_SECONDS > 0
     ? ACCESS_TOKEN_TTL_SECONDS
-    : 900;
+    : 86400;
 
   const payload: AccessTokenPayload = {
     sub: claims.userId,

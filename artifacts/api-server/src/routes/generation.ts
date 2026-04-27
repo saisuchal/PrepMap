@@ -1865,7 +1865,8 @@ router.post("/configs/:id/cheap/import", requireAdmin, async (req, res) => {
   try {
     const { id } = TriggerGenerationParams.parse(req.params);
     const userId = String((req as any).userId || "admin");
-    const result = await performCheapImport(id, req.body, userId, req.log);
+    const authClaims = ((req as any).authClaims ?? null) as import("../lib/jwt").AccessTokenPayload | null;
+    const result = await performCheapImport(id, req.body, userId, req.log, authClaims);
     res.json(result);
   } catch (error) {
     req.log.error({ err: error }, "Failed to import cheap lane B content");
@@ -1883,6 +1884,7 @@ router.post("/configs/:id/cheap/import/start", requireAdmin, async (req, res) =>
     }
 
     const userId = String((req as any).userId || "admin");
+    const authClaims = ((req as any).authClaims ?? null) as import("../lib/jwt").AccessTokenPayload | null;
     setCheapImportProgress(id, {
       status: "processing",
       stage: "validating",
@@ -1894,7 +1896,7 @@ router.post("/configs/:id/cheap/import/start", requireAdmin, async (req, res) =>
       saved: undefined,
     });
 
-    void performCheapImport(id, req.body, userId, req.log)
+    void performCheapImport(id, req.body, userId, req.log, authClaims)
       .then((result) => {
         setCheapImportProgress(id, {
           status: "complete",
@@ -1936,6 +1938,7 @@ async function performCheapImport(
   rawBody: unknown,
   userId: string,
   reqLog: any,
+  authClaims: import("../lib/jwt").AccessTokenPayload | null,
 ) {
   try {
     setCheapImportProgress(id, {
@@ -2003,8 +2006,6 @@ async function performCheapImport(
     const pathMap = new Map<string, { nodeId: string; unitSubtopicId: string }>();
     let processedQuestions = 0;
     let unmappedQuestions = 0;
-    const authClaims = ((req as any).authClaims ?? null) as import("../lib/jwt").AccessTokenPayload | null;
-
     const persistQuestions = async (tx: any) => {
       for (let i = 0; i < questions.length; i++) {
         const q = questions[i];

@@ -6,13 +6,95 @@ import {
   CompleteFirstLoginSetupBody,
   ForgotPasswordBySecurityBody,
 } from "../api-zod";
-import { db, usersTable } from "../db";
+import { authSessionsTable, db, usersTable } from "../db";
 import { eq } from "drizzle-orm";
 import bcrypt from "bcrypt";
 import { issueAccessToken } from "../lib/jwt";
+import crypto from "node:crypto";
+import { z } from "zod/v4";
+import { getJwtRequestAuth } from "../lib/requestAuth";
 
 const router: IRouter = Router();
 const normalizeSecurityAnswer = (value: string) => value.trim().toLowerCase();
+const REFRESH_INACTIVITY_TTL_SECONDS = Number(process.env["JWT_INACTIVITY_TTL_SECONDS"] || "604800");
+const REFRESH_MAX_LIFETIME_SECONDS = Number(process.env["JWT_REFRESH_MAX_LIFETIME_SECONDS"] || "2592000");
+const RefreshBody = z.object({
+  refreshToken: z.string().trim().min(20),
+});
+const LogoutBody = z.object({
+  refreshToken: z.string().trim().optional().nullable(),
+});
+
+function hashRefreshToken(token: string): string {
+  return crypto.createHash("sha256").update(token).digest("hex");
+}
+
+function generateRefreshToken(): string {
+  return crypto.randomBytes(48).toString("base64url");
+}
+
+function getRefreshInactivityMs(): number {
+  const ttl = Number.isFinite(REFRESH_INACTIVITY_TTL_SECONDS) && REFRESH_INACTIVITY_TTL_SECONDS > 0
+    ? REFRESH_INACTIVITY_TTL_SECONDS
+    : 604800;
+  return ttl * 1000;
+}
+
+function getRefreshLifetimeMs(): number {
+  const ttl = Number.isFinite(REFRESH_MAX_LIFETIME_SECONDS) && REFRESH_MAX_LIFETIME_SECONDS > 0
+    ? REFRESH_MAX_LIFETIME_SECONDS
+    : 2592000;
+  return ttl * 1000;
+}
+
+async function issueSessionTokens(user: {
+  id: string;
+  role: string;
+  universityId: string;
+  branch: string;
+  year: string;
+}) {
+  const now = new Date();
+  const expiresAt = new Date(now.getTime() + getRefreshLifetimeMs());
+  const refreshToken = generateRefreshToken();
+  const refreshTokenHash = hashRefreshToken(refreshToken);
+
+  await db.insert(authSessionsTable).values({
+    id: crypto.randomUUID(),
+    userId: user.id,
+    refreshTokenHash,
+    lastActivityAt: now,
+    expiresAt,
+    updatedAt: now,
+  });
+
+  const { token } = issueAccessToken({
+    userId: user.id,
+    role: user.role,
+    universityId: user.universityId,
+    branch: user.branch,
+    year: user.year,
+  });
+
+  return { accessToken: token, refreshToken };
+}
+
+function buildLoginLikeResponse(user: any, tokens: { accessToken: string; refreshToken: string }) {
+  return LoginResponse.parse({
+    id: user.id,
+    universityId: user.universityId,
+    branch: user.branch,
+    year: user.year,
+    role: user.role,
+    accessToken: tokens.accessToken,
+    refreshToken: tokens.refreshToken,
+    mustResetPassword: !!user.mustResetPassword,
+    securityQuestionSet: !!user.securityQuestion,
+    onboardingRequired:
+      (user.role === "student" || user.role === "super_student") &&
+      (!!user.mustResetPassword || !user.securityQuestion),
+  });
+}
 
 router.post("/auth/login", async (req, res) => {
   try {
@@ -40,27 +122,8 @@ router.post("/auth/login", async (req, res) => {
       .set({ lastSuccessfulLoginAt: new Date(), updatedAt: new Date() })
       .where(eq(usersTable.id, user.id));
 
-    const { token } = issueAccessToken({
-      userId: user.id,
-      role: user.role,
-      universityId: user.universityId,
-      branch: user.branch,
-      year: user.year,
-    });
-
-    const response = LoginResponse.parse({
-      id: user.id,
-      universityId: user.universityId,
-      branch: user.branch,
-      year: user.year,
-      role: user.role,
-      accessToken: token,
-      mustResetPassword: !!(user as any).mustResetPassword,
-      securityQuestionSet: !!(user as any).securityQuestion,
-      onboardingRequired:
-        (user.role === "student" || user.role === "super_student") &&
-        (!!(user as any).mustResetPassword || !(user as any).securityQuestion),
-    });
+    const tokens = await issueSessionTokens(user);
+    const response = buildLoginLikeResponse(user, tokens);
 
     res.json(response);
   } catch (error) {
@@ -100,6 +163,8 @@ router.post("/auth/reset-password", async (req, res) => {
         updatedAt: new Date(),
       })
       .where(eq(usersTable.id, body.collegeId));
+
+    await db.delete(authSessionsTable).where(eq(authSessionsTable.userId, body.collegeId));
 
     res.json({ success: true });
   } catch (error) {
@@ -142,6 +207,8 @@ router.post("/auth/complete-first-login-setup", async (req, res) => {
         updatedAt: new Date(),
       })
       .where(eq(usersTable.id, body.collegeId));
+
+    await db.delete(authSessionsTable).where(eq(authSessionsTable.userId, body.collegeId));
 
     res.json({ success: true });
   } catch (error) {
@@ -214,9 +281,92 @@ router.post("/auth/reset-password-with-security", async (req, res) => {
       })
       .where(eq(usersTable.id, body.collegeId));
 
+    await db.delete(authSessionsTable).where(eq(authSessionsTable.userId, body.collegeId));
+
     res.json({ success: true });
   } catch (error) {
     req.log.error({ err: error }, "Security-password reset failed");
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+router.post("/auth/refresh", async (req, res) => {
+  try {
+    const body = RefreshBody.parse(req.body);
+    const tokenHash = hashRefreshToken(body.refreshToken);
+    const [session] = await db
+      .select()
+      .from(authSessionsTable)
+      .where(eq(authSessionsTable.refreshTokenHash, tokenHash))
+      .limit(1);
+
+    if (!session) {
+      res.status(401).json({ error: "Invalid session." });
+      return;
+    }
+
+    const now = new Date();
+    const inactivityMs = now.getTime() - new Date(session.lastActivityAt).getTime();
+    if (new Date(session.expiresAt).getTime() <= now.getTime() || inactivityMs > getRefreshInactivityMs()) {
+      await db.delete(authSessionsTable).where(eq(authSessionsTable.id, session.id));
+      res.status(401).json({ error: "Session expired. Please login again." });
+      return;
+    }
+
+    const [user] = await db
+      .select()
+      .from(usersTable)
+      .where(eq(usersTable.id, session.userId))
+      .limit(1);
+    if (!user) {
+      await db.delete(authSessionsTable).where(eq(authSessionsTable.id, session.id));
+      res.status(401).json({ error: "Invalid session user." });
+      return;
+    }
+
+    const nextRefreshToken = generateRefreshToken();
+    const nextRefreshTokenHash = hashRefreshToken(nextRefreshToken);
+    await db
+      .update(authSessionsTable)
+      .set({
+        refreshTokenHash: nextRefreshTokenHash,
+        lastActivityAt: now,
+        updatedAt: now,
+      })
+      .where(eq(authSessionsTable.id, session.id));
+
+    const { token: accessToken } = issueAccessToken({
+      userId: user.id,
+      role: user.role,
+      universityId: user.universityId,
+      branch: user.branch,
+      year: user.year,
+    });
+
+    const response = buildLoginLikeResponse(user, { accessToken, refreshToken: nextRefreshToken });
+    res.json(response);
+  } catch (error) {
+    req.log.error({ err: error }, "Token refresh failed");
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+router.post("/auth/logout", async (req, res) => {
+  try {
+    const body = LogoutBody.safeParse(req.body);
+    const refreshToken = body.success ? String(body.data.refreshToken || "").trim() : "";
+    const auth = getJwtRequestAuth(req);
+
+    if (refreshToken) {
+      const refreshTokenHash = hashRefreshToken(refreshToken);
+      await db.delete(authSessionsTable).where(eq(authSessionsTable.refreshTokenHash, refreshTokenHash));
+    } else if (auth?.userId) {
+      await db.delete(authSessionsTable).where(eq(authSessionsTable.userId, auth.userId));
+    }
+
+    res.json({ success: true });
+  } catch (error) {
+    req.log.error({ err: error }, "Logout failed");
     res.status(500).json({ error: "Internal server error" });
   }
 });

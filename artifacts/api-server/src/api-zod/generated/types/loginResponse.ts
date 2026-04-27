@@ -14,6 +14,7 @@ export interface LoginResponse {
   year: string;
   role: LoginResponseRole;
   accessToken?: string;
+  refreshToken?: string;
   mustResetPassword?: boolean;
   securityQuestionSet?: boolean;
   onboardingRequired?: boolean;

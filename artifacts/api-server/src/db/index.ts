@@ -324,6 +324,33 @@ export async function initializeDatabase(): Promise<void> {
   `);
 
   await pool.query(`
+    CREATE TABLE IF NOT EXISTS public.auth_sessions (
+      id text PRIMARY KEY,
+      user_id text NOT NULL,
+      refresh_token_hash text NOT NULL,
+      created_at timestamp without time zone NOT NULL DEFAULT now(),
+      updated_at timestamp without time zone NOT NULL DEFAULT now(),
+      last_activity_at timestamp without time zone NOT NULL DEFAULT now(),
+      expires_at timestamp without time zone NOT NULL
+    );
+  `);
+
+  await pool.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS auth_sessions_refresh_token_hash_unique
+    ON public.auth_sessions (refresh_token_hash);
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS auth_sessions_user_id_idx
+    ON public.auth_sessions (user_id);
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS auth_sessions_expires_at_idx
+    ON public.auth_sessions (expires_at);
+  `);
+
+  await pool.query(`
     CREATE TABLE IF NOT EXISTS public.subjects (
       id text PRIMARY KEY,
       name text NOT NULL,

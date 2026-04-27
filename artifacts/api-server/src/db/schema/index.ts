@@ -1,4 +1,5 @@
 export * from "./users";
+export * from "./authSessions";
 export * from "./universities";
 export * from "./subjects";
 export * from "./unitLibrary";

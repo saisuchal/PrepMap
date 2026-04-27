@@ -17,6 +17,8 @@ const DEFAULT_JSON_ACCEPT = "application/json, application/problem+json";
 
 let _baseUrl: string | null = null;
 let _authTokenGetter: AuthTokenGetter | null = null;
+let _refreshInFlight: Promise<string | null> | null = null;
+const AUTH_STORAGE_KEY = "prepmap_user";
 
 /**
  * Set a base URL that is prepended to every relative request URL
@@ -39,6 +41,102 @@ export function setBaseUrl(url: string | null): void {
  */
 export function setAuthTokenGetter(getter: AuthTokenGetter | null): void {
   _authTokenGetter = getter;
+}
+
+function getStoredAuthUser(): any | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = window.localStorage.getItem(AUTH_STORAGE_KEY);
+    if (!raw) return null;
+    return JSON.parse(raw);
+  } catch {}
+  return null;
+}
+
+function setStoredAuthUser(user: any): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(user));
+  } catch {}
+}
+
+function clearStoredAuthUser(): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.removeItem(AUTH_STORAGE_KEY);
+  } catch {}
+}
+
+function getRefreshUrl(): string {
+  return _baseUrl ? `${_baseUrl}/api/auth/refresh` : "/api/auth/refresh";
+}
+
+function getLoginUrl(): string {
+  if (typeof window === "undefined") return "/login";
+  const base = String((import.meta as any)?.env?.BASE_URL || "/").replace(/\/?$/, "/");
+  return `${base}login`;
+}
+
+function shouldAttemptRefresh(url: string): boolean {
+  return !url.includes("/api/auth/");
+}
+
+function hasStoredSession(): boolean {
+  const user = getStoredAuthUser();
+  const accessToken = String(user?.accessToken || "").trim();
+  const refreshToken = String(user?.refreshToken || "").trim();
+  return Boolean(accessToken || refreshToken);
+}
+
+async function tryRefreshAccessToken(): Promise<string | null> {
+  if (_refreshInFlight) return _refreshInFlight;
+
+  _refreshInFlight = (async () => {
+    const user = getStoredAuthUser();
+    const refreshToken = String(user?.refreshToken || "").trim();
+    if (!refreshToken) {
+      clearStoredAuthUser();
+      return null;
+    }
+
+    try {
+      const res = await fetch(getRefreshUrl(), {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          accept: DEFAULT_JSON_ACCEPT,
+        },
+        body: JSON.stringify({ refreshToken }),
+      });
+      if (!res.ok) {
+        clearStoredAuthUser();
+        return null;
+      }
+      const data = await res.json();
+      const nextAccessToken = String(data?.accessToken || "").trim();
+      const nextRefreshToken = String(data?.refreshToken || "").trim();
+      if (!nextAccessToken || !nextRefreshToken) {
+        clearStoredAuthUser();
+        return null;
+      }
+      setStoredAuthUser({
+        ...(user || {}),
+        ...data,
+        accessToken: nextAccessToken,
+        refreshToken: nextRefreshToken,
+      });
+      return nextAccessToken;
+    } catch {
+      clearStoredAuthUser();
+      return null;
+    }
+  })();
+
+  try {
+    return await _refreshInFlight;
+  } finally {
+    _refreshInFlight = null;
+  }
 }
 
 function isRequest(input: RequestInfo | URL): input is Request {
@@ -355,23 +453,43 @@ export async function customFetch<T = unknown>(
     }
   }
 
-  if (typeof window !== "undefined" && !headers.has("x-user-id") && !headers.has("authorization")) {
-    try {
-      const stored =
-        window.localStorage.getItem("prepmap_user") ??
-        window.localStorage.getItem("gpmax_user");
-      if (stored) {
-        const user = JSON.parse(stored);
-        if (user?.id) {
-          headers.set("x-user-id", user.id);
-        }
-      }
-    } catch {}
-  }
-
   const requestInfo = { method, url: resolveUrl(input) };
 
-  const response = await fetch(input, { ...init, method, headers });
+  // Avoid noisy unauthorized API calls when the user has no local session.
+  if (
+    typeof window !== "undefined" &&
+    shouldAttemptRefresh(requestInfo.url) &&
+    !headers.has("authorization") &&
+    !hasStoredSession()
+  ) {
+    clearStoredAuthUser();
+    const loginUrl = getLoginUrl();
+    if (!window.location.pathname.endsWith("/login")) {
+      window.location.assign(loginUrl);
+    }
+    throw new Error("Unauthenticated: missing session token");
+  }
+
+  const baseRequestInit = { ...init, method };
+  let response = await fetch(input, { ...baseRequestInit, headers });
+
+  if (
+    response.status === 401 &&
+    shouldAttemptRefresh(requestInfo.url)
+  ) {
+    const refreshedAccessToken = await tryRefreshAccessToken();
+    if (refreshedAccessToken) {
+      const retryHeaders = mergeHeaders(headers);
+      retryHeaders.set("authorization", `Bearer ${refreshedAccessToken}`);
+      retryHeaders.delete("x-user-id");
+      response = await fetch(input, { ...baseRequestInit, headers: retryHeaders });
+    } else if (typeof window !== "undefined") {
+      const loginUrl = getLoginUrl();
+      if (!window.location.pathname.endsWith("/login")) {
+        window.location.assign(loginUrl);
+      }
+    }
+  }
 
   if (!response.ok) {
     const errorData = await parseErrorBody(response, method);
