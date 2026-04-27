@@ -19,6 +19,7 @@ let _baseUrl: string | null = null;
 let _authTokenGetter: AuthTokenGetter | null = null;
 let _refreshInFlight: Promise<string | null> | null = null;
 const AUTH_STORAGE_KEY = "prepmap_user";
+const EVENTS_TRACKING_BLOCKED_KEY = "events_tracking_blocked_401";
 
 /**
  * Set a base URL that is prepended to every relative request URL
@@ -79,6 +80,10 @@ function getLoginUrl(): string {
 
 function shouldAttemptRefresh(url: string): boolean {
   return !url.includes("/api/auth/");
+}
+
+function isEventsEndpoint(url: string): boolean {
+  return url.includes("/api/events");
 }
 
 function hasStoredSession(): boolean {
@@ -455,6 +460,12 @@ export async function customFetch<T = unknown>(
 
   const requestInfo = { method, url: resolveUrl(input) };
 
+  if (typeof window !== "undefined" && isEventsEndpoint(requestInfo.url)) {
+    if (window.sessionStorage.getItem(EVENTS_TRACKING_BLOCKED_KEY) === "true") {
+      throw new Error("Event tracking temporarily disabled after auth failure");
+    }
+  }
+
   // Avoid noisy unauthorized API calls when the user has no local session.
   if (
     typeof window !== "undefined" &&
@@ -484,6 +495,9 @@ export async function customFetch<T = unknown>(
       retryHeaders.delete("x-user-id");
       response = await fetch(input, { ...baseRequestInit, headers: retryHeaders });
     } else if (typeof window !== "undefined") {
+      if (isEventsEndpoint(requestInfo.url)) {
+        window.sessionStorage.setItem(EVENTS_TRACKING_BLOCKED_KEY, "true");
+      }
       const loginUrl = getLoginUrl();
       if (!window.location.pathname.endsWith("/login")) {
         window.location.assign(loginUrl);
@@ -492,6 +506,9 @@ export async function customFetch<T = unknown>(
   }
 
   if (!response.ok) {
+    if (typeof window !== "undefined" && response.status === 401 && isEventsEndpoint(requestInfo.url)) {
+      window.sessionStorage.setItem(EVENTS_TRACKING_BLOCKED_KEY, "true");
+    }
     const errorData = await parseErrorBody(response, method);
     throw new ApiError(response, errorData, requestInfo);
   }

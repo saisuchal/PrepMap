@@ -23,6 +23,9 @@ export function getStoredUser(): StoredUser | null {
 
 export function setStoredUser(user: StoredUser) {
   localStorage.setItem(AUTH_KEY, JSON.stringify(user));
+  try {
+    sessionStorage.removeItem("events_tracking_blocked_401");
+  } catch {}
 }
 
 export function getStoredAccessToken(): string | null {
@@ -39,6 +42,9 @@ export function getStoredRefreshToken(): string | null {
 
 export function removeStoredUser() {
   localStorage.removeItem(AUTH_KEY);
+  try {
+    sessionStorage.removeItem("events_tracking_blocked_401");
+  } catch {}
 }
 
 export function isAdmin(): boolean {

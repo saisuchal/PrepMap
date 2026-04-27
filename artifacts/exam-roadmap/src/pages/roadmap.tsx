@@ -1708,7 +1708,7 @@ export default function Roadmap() {
   return (
     <div className="flex flex-col h-[calc(100vh-4rem)]">
       <div className="px-4 sm:px-6 py-3 border-b border-border bg-card shrink-0">
-        <div className="relative flex items-start justify-between gap-3">
+        <div className="relative grid grid-cols-[auto_1fr_auto] items-center gap-3">
           <div className="flex items-center gap-3 min-w-0">
             <Button variant="ghost" size="icon" className="shrink-0" onClick={() => setLocation("/home")}>
               <ArrowLeft className="w-4 h-4" />
@@ -1721,19 +1721,84 @@ export default function Roadmap() {
               {subtitleMeta && <p className="text-xs text-muted-foreground truncate">{subtitleMeta}</p>}
             </div>
           </div>
-          {!isMobileViewport && (
-            <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 hidden lg:flex items-center gap-2">
+          <div className="flex items-center justify-center gap-2 min-w-0">
+            <div ref={globalSearchRef} className="relative w-[14rem] lg:w-[18rem] xl:w-[20rem]">
+              <div className="relative">
+                <Search className="w-4 h-4 text-muted-foreground absolute left-3 top-1/2 -translate-y-1/2" />
+                <input
+                  type="text"
+                  value={globalSearchQuery}
+                  onFocus={() => setIsGlobalSearchOpen(true)}
+                  onChange={(e) => {
+                    setGlobalSearchQuery(e.target.value);
+                    setIsGlobalSearchOpen(true);
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && globalSearchResults.length > 0) {
+                      e.preventDefault();
+                      handleGlobalSearchSelect(globalSearchResults[0]!.id);
+                    }
+                    if (e.key === "Escape") {
+                      setIsGlobalSearchOpen(false);
+                    }
+                  }}
+                  placeholder="Search units, topics, subtopics, or node id..."
+                  className="h-10 w-full rounded-lg border border-border bg-background pl-9 pr-3 text-sm text-foreground placeholder:text-muted-foreground outline-none focus:ring-2 focus:ring-primary/40"
+                />
+              </div>
+              {isGlobalSearchOpen && (
+                <div className="absolute left-0 right-0 top-full mt-2 z-50 rounded-xl border border-border bg-card shadow-xl max-h-80 overflow-y-auto">
+                  {globalSearchQuery.trim().length === 0 ? (
+                    <p className="px-3 py-2.5 text-xs text-muted-foreground">
+                      Type to search across all units, topics, and subtopics.
+                    </p>
+                  ) : globalSearchResults.length === 0 ? (
+                    <p className="px-3 py-2.5 text-xs text-muted-foreground">
+                      No matching roadmap nodes found.
+                    </p>
+                  ) : (
+                    <div className="py-1">
+                      {globalSearchResults.map((item) => (
+                        <button
+                          key={item.id}
+                          type="button"
+                          onClick={() => handleGlobalSearchSelect(item.id)}
+                          className="w-full px-3 py-2 text-left hover:bg-secondary/60 transition-colors border-b border-border/40 last:border-0"
+                        >
+                          <div className="flex items-center gap-2 min-w-0">
+                            <span className="text-sm font-semibold text-foreground truncate">{item.title}</span>
+                            <span
+                              className={`shrink-0 rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${
+                                item.type === "unit"
+                                  ? "bg-blue-100 text-blue-700"
+                                  : item.type === "topic"
+                                    ? "bg-violet-100 text-violet-700"
+                                    : "bg-emerald-100 text-emerald-700"
+                              }`}
+                            >
+                              {item.type}
+                            </span>
+                          </div>
+                          <p className="text-xs text-muted-foreground truncate">{item.path}</p>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+            {!isMobileViewport && (
               <Button
                 variant="default"
                 size="sm"
-                className="h-9 px-4 gap-2 bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm border border-emerald-700"
+                className="h-10 rounded-lg px-4 gap-2 text-sm font-medium bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm border border-emerald-700"
                 onClick={openQuestionBank}
               >
                 <MessageSquare className="w-3.5 h-3.5" />
                 Question Bank
               </Button>
-            </div>
-          )}
+            )}
+          </div>
           <div className="flex items-center gap-1 shrink-0">
             {isMobileViewport ? (
               <Button
@@ -1778,71 +1843,6 @@ export default function Roadmap() {
               </>
             )}
           </div>
-        </div>
-        <div ref={globalSearchRef} className="mt-3 max-w-2xl relative">
-          <div className="relative">
-            <Search className="w-4 h-4 text-muted-foreground absolute left-3 top-1/2 -translate-y-1/2" />
-            <input
-              type="text"
-              value={globalSearchQuery}
-              onFocus={() => setIsGlobalSearchOpen(true)}
-              onChange={(e) => {
-                setGlobalSearchQuery(e.target.value);
-                setIsGlobalSearchOpen(true);
-              }}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && globalSearchResults.length > 0) {
-                  e.preventDefault();
-                  handleGlobalSearchSelect(globalSearchResults[0]!.id);
-                }
-                if (e.key === "Escape") {
-                  setIsGlobalSearchOpen(false);
-                }
-              }}
-              placeholder="Search units, topics, subtopics, or node id..."
-              className="h-10 w-full rounded-lg border border-border bg-background pl-9 pr-3 text-sm text-foreground placeholder:text-muted-foreground outline-none focus:ring-2 focus:ring-primary/40"
-            />
-          </div>
-          {isGlobalSearchOpen && (
-            <div className="absolute left-0 right-0 top-full mt-2 z-50 rounded-xl border border-border bg-card shadow-xl max-h-80 overflow-y-auto">
-              {globalSearchQuery.trim().length === 0 ? (
-                <p className="px-3 py-2.5 text-xs text-muted-foreground">
-                  Type to search across all units, topics, and subtopics.
-                </p>
-              ) : globalSearchResults.length === 0 ? (
-                <p className="px-3 py-2.5 text-xs text-muted-foreground">
-                  No matching roadmap nodes found.
-                </p>
-              ) : (
-                <div className="py-1">
-                  {globalSearchResults.map((item) => (
-                    <button
-                      key={item.id}
-                      type="button"
-                      onClick={() => handleGlobalSearchSelect(item.id)}
-                      className="w-full px-3 py-2 text-left hover:bg-secondary/60 transition-colors border-b border-border/40 last:border-0"
-                    >
-                      <div className="flex items-center gap-2 min-w-0">
-                        <span className="text-sm font-semibold text-foreground truncate">{item.title}</span>
-                        <span
-                          className={`shrink-0 rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${
-                            item.type === "unit"
-                              ? "bg-blue-100 text-blue-700"
-                              : item.type === "topic"
-                                ? "bg-violet-100 text-violet-700"
-                                : "bg-emerald-100 text-emerald-700"
-                          }`}
-                        >
-                          {item.type}
-                        </span>
-                      </div>
-                      <p className="text-xs text-muted-foreground truncate">{item.path}</p>
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
         </div>
       </div>
 
