@@ -373,18 +373,39 @@ async function materializeConfigNodesFromSelectedUnitsCanonical(
   subjectId: string,
   unitIds: string[],
 ): Promise<void> {
-  const units = await tx
+  type UnitRow = {
+    id: string;
+    unitTitle: string;
+    topics: unknown;
+  };
+  type CanonicalRow = {
+    id: string;
+    unitLibraryId: string;
+    title: string;
+    type: string;
+    parentCanonicalNodeId: string | null;
+    explanation: string | null;
+    learningGoal: string | null;
+    exampleBlock: string | null;
+    supportNote: string | null;
+    prerequisiteTitles: string[] | null;
+    prerequisiteNodeIds: string[] | null;
+    nextRecommendedTitles: string[] | null;
+    nextRecommendedNodeIds: string[] | null;
+  };
+
+  const units = (await tx
     .select({
       id: unitLibraryTable.id,
       unitTitle: unitLibraryTable.unitTitle,
       topics: unitLibraryTable.topics,
     })
     .from(unitLibraryTable)
-    .where(inArray(unitLibraryTable.id, unitIds));
+    .where(inArray(unitLibraryTable.id, unitIds))) as UnitRow[];
   const unitById = new Map(units.map((u) => [u.id, u]));
-  const orderedUnits = unitIds.map((id) => unitById.get(id)).filter((u): u is NonNullable<typeof u> => !!u);
+  const orderedUnits = unitIds.map((id) => unitById.get(id)).filter((u): u is UnitRow => !!u);
 
-  const existingCanonicalRows = await tx
+  const existingCanonicalRows = (await tx
     .select({
       id: canonicalNodesTable.id,
       unitLibraryId: canonicalNodesTable.unitLibraryId,
@@ -401,18 +422,18 @@ async function materializeConfigNodesFromSelectedUnitsCanonical(
       nextRecommendedNodeIds: canonicalNodesTable.nextRecommendedNodeIds,
     })
     .from(canonicalNodesTable)
-    .where(inArray(canonicalNodesTable.unitLibraryId, unitIds));
+    .where(inArray(canonicalNodesTable.unitLibraryId, unitIds))) as CanonicalRow[];
 
   const existingById = new Map(existingCanonicalRows.map((r) => [r.id, r]));
-  const existingTopicByKey = new Map<string, (typeof existingCanonicalRows)[number]>();
-  const existingSubtopicByKey = new Map<string, (typeof existingCanonicalRows)[number]>();
+  const existingTopicByKey = new Map<string, CanonicalRow>();
+  const existingSubtopicByKey = new Map<string, CanonicalRow>();
   for (const row of existingCanonicalRows) {
     if (row.type === "topic") {
       existingTopicByKey.set(`${row.unitLibraryId}|${normalizeText(row.title)}`, row);
       continue;
     }
     if (row.type === "subtopic") {
-      const parent = row.parentCanonicalNodeId ? existingById.get(row.parentCanonicalNodeId) : null;
+      const parent = row.parentCanonicalNodeId ? existingById.get(row.parentCanonicalNodeId) ?? null : null;
       if (!parent || parent.type !== "topic") continue;
       existingSubtopicByKey.set(
         `${row.unitLibraryId}|${normalizeText(parent.title)}|${normalizeText(row.title)}`,

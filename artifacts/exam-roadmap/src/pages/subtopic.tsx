@@ -217,8 +217,8 @@ function QuestionBlock({
 }
 
 export default function Subtopic() {
-  const [, params] = useRoute("/subtopic/:id");
-  const id = params?.id;
+  const [, params] = useRoute<{ id: string }>("/subtopic/:id");
+  const id = params ? params.id : undefined;
   const [, setLocation] = useLocation();
   const user = getStoredUser();
   const observerRef = useRef<HTMLDivElement>(null);
@@ -232,7 +232,7 @@ export default function Subtopic() {
   const topicId = searchParams.get("topicId") || "";
   
   const { data: content, isLoading, isError } = useGetSubtopicContent(id || "", {
-    query: { enabled: !!id }
+    query: { queryKey: ["subtopic-content", id || ""], enabled: !!id }
   });
   
   const trackEventMutation = useTrackEvent();

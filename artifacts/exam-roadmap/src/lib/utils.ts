@@ -8,7 +8,7 @@ export function cn(...inputs: ClassValue[]) {
 
 export type TreeNode = Node & { children: TreeNode[] };
 
-function toNumericSortOrder(value: string | undefined): number {
+function toNumericSortOrder(value: string | number | undefined): number {
   const n = Number(String(value || "").trim());
   return Number.isFinite(n) ? n : Number.MAX_SAFE_INTEGER;
 }

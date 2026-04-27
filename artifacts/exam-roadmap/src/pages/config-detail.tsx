@@ -2081,9 +2081,9 @@ function ContentReviewSection({ configId }: { configId: string }) {
 }
 
 export default function ConfigDetail() {
-  const [, params] = useRoute("/admin/config/:id");
+  const [, params] = useRoute<{ id: string }>("/admin/config/:id");
   const [, setLocation] = useLocation();
-  const configId = params?.id ?? "";
+  const configId = params ? params.id : "";
   const queryParams = new URLSearchParams(typeof window !== "undefined" ? window.location.search : "");
   const backUniversityId = (queryParams.get("universityId") || "").trim();
   const backToConfigsPath = backUniversityId

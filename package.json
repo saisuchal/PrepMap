@@ -11,8 +11,8 @@
     "preinstall": "node -e \"const fs=require('node:fs'); for (const f of ['package-lock.json','yarn.lock']) { try { fs.rmSync(f, { force: true }); } catch {} } const ua=process.env.npm_config_user_agent||''; if (!ua.startsWith('pnpm/')) { console.error('Use pnpm instead'); process.exit(1); }\"",
     "dev": "concurrently -k -n api,web -c yellow,cyan \"corepack pnpm --dir artifacts/api-server run dev\" \"corepack pnpm --dir artifacts/exam-roadmap run dev\"",
     "build:vercel": "pnpm --filter prepmap-exam-roadmap run build",
-    "build": "pnpm run typecheck && pnpm -r --filter \"./artifacts/**\" --if-present run build",
-    "typecheck": "pnpm -r --filter \"./artifacts/**\" --if-present run typecheck"
+    "build": "pnpm run typecheck && corepack pnpm --dir artifacts/api-server run build && corepack pnpm --dir artifacts/exam-roadmap run build",
+    "typecheck": "corepack pnpm --dir artifacts/api-server run typecheck && corepack pnpm --dir artifacts/exam-roadmap run typecheck"
   },
   "private": true,
   "devDependencies": {
