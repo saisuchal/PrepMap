@@ -12,7 +12,7 @@ export const DEFAULT_UNIVERSITIES = [
   { id: "uni11", name: "Noida International University" },
   { id: "uni12", name: "S-VYASA Deemed to be University" },
   { id: "uni13", name: "Academy of Maritime Education and Training" },
-  { id: "uni14", name: "B.S. Abdur Rahman Crescent Institute of Science and Technology" },
+  { id: "uni14", name: "Crescent University" },
   { id: "uni15", name: "Sanjay Ghodawat University" },
   { id: "uni16", name: "Annamacharya University" },
   { id: "uni17", name: "Chalapathi Institute of Technology - Autonomous" },

@@ -419,16 +419,14 @@ router.get("/admin/analytics/question-bank-interactions/breakdown", requireAdmin
 
 router.get("/admin/analytics/question-bank-interactions/live-config-summary", requireAdmin, async (req, res) => {
   try {
-    const liveConfigs = await db
+    const configs = await db
       .select({
         id: configsTable.id,
         universityId: configsTable.universityId,
       })
-      .from(configsTable)
-      .where(eq(configsTable.status, "live"));
+      .from(configsTable);
 
-    const liveConfigIds = liveConfigs.map((cfg) => cfg.id);
-    const configById = new Map(liveConfigs.map((cfg) => [cfg.id, cfg]));
+    const configIds = configs.map((cfg) => cfg.id);
 
     const students = await db
       .select({
@@ -449,7 +447,7 @@ router.get("/admin/analytics/question-bank-interactions/live-config-summary", re
     const interactionSetsByConfig = new Map<string, Set<string>>();
     const interactionCountByConfig = new Map<string, number>();
 
-    if (liveConfigIds.length > 0) {
+    if (configIds.length > 0) {
       const rows = await withRequestDbContext(getAdminClaims(req), async (tx) =>
         tx
           .select({
@@ -459,7 +457,7 @@ router.get("/admin/analytics/question-bank-interactions/live-config-summary", re
             questionId: eventsTable.questionId,
           })
           .from(eventsTable)
-          .where(inArray(eventsTable.configId, liveConfigIds))
+          .where(inArray(eventsTable.configId, configIds))
       );
 
       for (const row of rows) {
@@ -472,7 +470,7 @@ router.get("/admin/analytics/question-bank-interactions/live-config-summary", re
       }
     }
 
-    const rows = liveConfigs.map((cfg) => {
+    const rows = configs.map((cfg) => {
       const totalStudents = studentsByUniversity.get(cfg.universityId)?.size ?? 0;
       const uniqueStudents = interactionSetsByConfig.get(cfg.id)?.size ?? 0;
       const totalInteractions = interactionCountByConfig.get(cfg.id) ?? 0;
@@ -489,7 +487,7 @@ router.get("/admin/analytics/question-bank-interactions/live-config-summary", re
 
     res.json({ rows });
   } catch (error) {
-    req.log.error({ err: error }, "Failed to fetch live config QB interaction summary");
+    req.log.error({ err: error }, "Failed to fetch config QB interaction summary");
     res.status(500).json({ error: "Internal server error" });
   }
 });

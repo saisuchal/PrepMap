@@ -667,6 +667,8 @@ export default function Roadmap() {
   const configId = searchParams.get("configId");
   const subject = searchParams.get("subject") || "Roadmap";
   const examParam = searchParams.get("exam") || "";
+  const returnToParam = (searchParams.get("returnTo") || "").trim();
+  const backPath = returnToParam || "/home";
   const { data: metadata } = useGetAppMetadata();
   const { data: configs } = useGetConfigs({}, { query: { queryKey: ["configs", "roadmap", configId], enabled: !!configId } });
   const examTypes = metadata?.examTypes?.length ? metadata.examTypes : EXAM_TYPES;
@@ -1221,24 +1223,25 @@ export default function Roadmap() {
     const minX = Math.min(...unitNodes.map((n) => n.x));
     const maxX = Math.max(...unitNodes.map((n) => n.x + n.w));
     const sortedColumns = Array.from(new Set(unitNodes.map((n) => n.x))).sort((a, b) => a - b);
-
-    if (sortedColumns.length <= Math.ceil(COLLAPSED_GRID_VISIBLE_COLUMNS)) {
-      return { minX, maxX, minY, maxY };
-    }
-
     const fullColumns = Math.max(1, Math.floor(COLLAPSED_GRID_VISIBLE_COLUMNS));
     const fractionalColumn = Math.max(0, COLLAPSED_GRID_VISIBLE_COLUMNS - fullColumns);
     const firstColumnX = sortedColumns[0] ?? minX;
-    const fullEndColumnX = sortedColumns[Math.max(0, fullColumns - 1)] ?? firstColumnX;
     const sampleUnitWidth = unitNodes.find((n) => n.x === firstColumnX)?.w ?? NODE_W;
-    let previewMaxX = fullEndColumnX + sampleUnitWidth;
+    const sampleColumnStep =
+      sortedColumns.length > 1
+        ? Math.max(sampleUnitWidth, sortedColumns[1]! - sortedColumns[0]!)
+        : sampleUnitWidth + 56;
+    const virtualPreviewMaxX =
+      firstColumnX + fullColumns * sampleColumnStep + sampleUnitWidth * fractionalColumn;
 
-    const nextColumnX = sortedColumns[fullColumns];
-    if (fractionalColumn > 0 && Number.isFinite(nextColumnX)) {
-      previewMaxX = nextColumnX + sampleUnitWidth * fractionalColumn;
-    }
+    // Keep a consistent 3.5-column frame even when there are fewer real columns.
+    // If there are more real columns, we still preview only up to the 3.5-column window.
+    const boundedPreviewMaxX =
+      sortedColumns.length <= Math.ceil(COLLAPSED_GRID_VISIBLE_COLUMNS)
+        ? Math.max(maxX, virtualPreviewMaxX)
+        : Math.min(maxX, virtualPreviewMaxX);
 
-    return { minX, maxX: Math.min(maxX, previewMaxX), minY, maxY };
+    return { minX: firstColumnX, maxX: boundedPreviewMaxX, minY, maxY };
   }, [areAllUnitsCollapsed, allNodes]);
 
   useEffect(() => {
@@ -1700,7 +1703,7 @@ export default function Roadmap() {
     return (
       <div className="text-center py-20">
         <p className="text-muted-foreground mb-4">No configuration selected.</p>
-        <Button onClick={() => setLocation("/home")}>Go Back</Button>
+        <Button onClick={() => setLocation(backPath)}>Go Back</Button>
       </div>
     );
   }
@@ -1710,7 +1713,7 @@ export default function Roadmap() {
       <div className="px-4 sm:px-6 py-3 border-b border-border bg-card shrink-0">
         <div className="relative grid grid-cols-[auto_1fr_auto] items-center gap-3">
           <div className="flex items-center gap-3 min-w-0">
-            <Button variant="ghost" size="icon" className="shrink-0" onClick={() => setLocation("/home")}>
+            <Button variant="ghost" size="icon" className="shrink-0" onClick={() => setLocation(backPath)}>
               <ArrowLeft className="w-4 h-4" />
             </Button>
             <div className="min-w-0">
@@ -3033,6 +3036,7 @@ function QuestionBankModal({
     answer: string;
     subtopicId: string;
   } | null>(null);
+  const [qbSectionFilter, setQbSectionFilter] = useState<"all" | "foundational" | "applied">("all");
   const [highlightedQuestionId, setHighlightedQuestionId] = useState<number | null>(null);
   const resumeAppliedRef = useRef(false);
   const user = getStoredUser();
@@ -3053,6 +3057,7 @@ function QuestionBankModal({
   useEffect(() => {
     resumeAppliedRef.current = false;
     setHighlightedQuestionId(null);
+    setQbSectionFilter("all");
   }, [configId]);
 
   useEffect(() => {
@@ -3154,7 +3159,8 @@ function QuestionBankModal({
         transition={{ type: "spring", damping: 25, stiffness: 300 }}
         className="relative bg-card rounded-t-2xl sm:rounded-2xl w-full sm:max-w-4xl h-[92dvh] sm:h-auto max-h-[92dvh] sm:max-h-[88vh] min-h-[55vh] flex flex-col shadow-2xl border border-border overflow-hidden pb-[max(env(safe-area-inset-bottom),0.5rem)]"
       >
-        <div className="flex items-center justify-between px-5 sm:px-6 py-4 border-b border-border shrink-0 bg-blue-50">
+        <div className="px-5 sm:px-6 py-4 border-b border-border shrink-0 bg-blue-50">
+          <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
             <h2 className="font-display font-bold text-foreground truncate text-base sm:text-lg flex items-center gap-2">
               <MessageSquare className="w-4 h-4 text-blue-600" />
@@ -3164,9 +3170,68 @@ function QuestionBankModal({
               {data ? `${validQuestions.length} total questions` : "Loading questions..."}
             </p>
           </div>
-          <Button variant="ghost" size="icon" onClick={onClose} className="h-8 w-8">
-            <X className="w-4 h-4" />
-          </Button>
+          <div className="flex items-center gap-2 shrink-0">
+            {selectedQuestion === null && validQuestions.length > 0 && (
+              <div className="hidden sm:flex items-center gap-2">
+                <Button
+                  variant={qbSectionFilter === "all" ? "default" : "outline"}
+                  size="sm"
+                  className="h-8"
+                  onClick={() => setQbSectionFilter("all")}
+                >
+                  All ({validQuestions.length})
+                </Button>
+                <Button
+                  variant={qbSectionFilter === "foundational" ? "default" : "outline"}
+                  size="sm"
+                  className="h-8"
+                  onClick={() => setQbSectionFilter("foundational")}
+                >
+                  Foundational ({foundational.length})
+                </Button>
+                <Button
+                  variant={qbSectionFilter === "applied" ? "default" : "outline"}
+                  size="sm"
+                  className="h-8"
+                  onClick={() => setQbSectionFilter("applied")}
+                >
+                  Applied ({applied.length})
+                </Button>
+              </div>
+            )}
+            <Button variant="ghost" size="icon" onClick={onClose} className="h-8 w-8">
+              <X className="w-4 h-4" />
+            </Button>
+          </div>
+          </div>
+          {selectedQuestion === null && validQuestions.length > 0 && (
+            <div className="mt-3 flex flex-wrap items-center gap-2 sm:hidden">
+              <Button
+                variant={qbSectionFilter === "all" ? "default" : "outline"}
+                size="sm"
+                className="h-8"
+                onClick={() => setQbSectionFilter("all")}
+              >
+                All ({validQuestions.length})
+              </Button>
+              <Button
+                variant={qbSectionFilter === "foundational" ? "default" : "outline"}
+                size="sm"
+                className="h-8"
+                onClick={() => setQbSectionFilter("foundational")}
+              >
+                Foundational ({foundational.length})
+              </Button>
+              <Button
+                variant={qbSectionFilter === "applied" ? "default" : "outline"}
+                size="sm"
+                className="h-8"
+                onClick={() => setQbSectionFilter("applied")}
+              >
+                Applied ({applied.length})
+              </Button>
+            </div>
+          )}
         </div>
 
         <div className="flex-1 overflow-y-auto p-5 sm:p-6 space-y-6">
@@ -3265,69 +3330,75 @@ function QuestionBankModal({
             </div>
           ) : validQuestions.length ? (
             <>
-              {foundational.length > 0 && (
+              {(qbSectionFilter === "all" || qbSectionFilter === "foundational") && (
                 <section className="space-y-3">
-                  <h3 className="text-sm font-bold text-foreground uppercase tracking-wider">Foundational Questions</h3>
-                  {foundational.map((q) => (
-                    <QuestionBankCard
-                      key={q.id}
-                      onOpenDetail={() => {
-                        setSelectedQuestion({
-                          id: q.id,
-                          number: foundationalNumberById.get(q.id) ?? 0,
-                          label: "Foundational",
-                          starred: !!q.isStarred,
-                          codeStyle: detectCodeStyle(q.answer),
-                          question: q.question,
-                          context: formatQuestionContext(q.unitTitle, q.topicTitle, q.subtopicTitle),
-                          answer: q.answer,
-                          subtopicId: q.subtopicId,
-                        });
-                      }}
-                      cardId={`qb-card-modal-${q.id}`}
-                      highlighted={highlightedQuestionId === q.id}
-                      questionNumber={foundationalNumberById.get(q.id) ?? 0}
-                      interacted={hasQuestionInteraction(q.id)}
-                      label="Foundational"
-                      starred={!!q.isStarred}
-                      codeStyle={detectCodeStyle(q.answer)}
-                      question={q.question}
-                      context={formatQuestionContext(q.unitTitle, q.topicTitle, q.subtopicTitle)}
-                    />
-                  ))}
+                  {foundational.length === 0 ? (
+                    <p className="text-sm text-muted-foreground">No foundational questions yet.</p>
+                  ) : (
+                    foundational.map((q) => (
+                      <QuestionBankCard
+                        key={q.id}
+                        onOpenDetail={() => {
+                          setSelectedQuestion({
+                            id: q.id,
+                            number: foundationalNumberById.get(q.id) ?? 0,
+                            label: "Foundational",
+                            starred: !!q.isStarred,
+                            codeStyle: detectCodeStyle(q.answer),
+                            question: q.question,
+                            context: formatQuestionContext(q.unitTitle, q.topicTitle, q.subtopicTitle),
+                            answer: q.answer,
+                            subtopicId: q.subtopicId,
+                          });
+                        }}
+                        cardId={`qb-card-modal-${q.id}`}
+                        highlighted={highlightedQuestionId === q.id}
+                        questionNumber={foundationalNumberById.get(q.id) ?? 0}
+                        interacted={hasQuestionInteraction(q.id)}
+                        label="Foundational"
+                        starred={!!q.isStarred}
+                        codeStyle={detectCodeStyle(q.answer)}
+                        question={q.question}
+                        context={formatQuestionContext(q.unitTitle, q.topicTitle, q.subtopicTitle)}
+                      />
+                    ))
+                  )}
                 </section>
               )}
 
-              {applied.length > 0 && (
+              {(qbSectionFilter === "all" || qbSectionFilter === "applied") && (
                 <section className="space-y-3">
-                  <h3 className="text-sm font-bold text-foreground uppercase tracking-wider">Applied Questions</h3>
-                  {applied.map((q) => (
-                    <QuestionBankCard
-                      key={q.id}
-                      onOpenDetail={() => {
-                        setSelectedQuestion({
-                          id: q.id,
-                          number: appliedNumberById.get(q.id) ?? 0,
-                          label: "Applied",
-                          starred: !!q.isStarred,
-                          codeStyle: detectCodeStyle(q.answer),
-                          question: q.question,
-                          context: formatQuestionContext(q.unitTitle, q.topicTitle, q.subtopicTitle),
-                          answer: q.answer,
-                          subtopicId: q.subtopicId,
-                        });
-                      }}
-                      cardId={`qb-card-modal-${q.id}`}
-                      highlighted={highlightedQuestionId === q.id}
-                      questionNumber={appliedNumberById.get(q.id) ?? 0}
-                      interacted={hasQuestionInteraction(q.id)}
-                      label="Applied"
-                      starred={!!q.isStarred}
-                      codeStyle={detectCodeStyle(q.answer)}
-                      question={q.question}
-                      context={formatQuestionContext(q.unitTitle, q.topicTitle, q.subtopicTitle)}
-                    />
-                  ))}
+                  {applied.length === 0 ? (
+                    <p className="text-sm text-muted-foreground">No applied questions yet.</p>
+                  ) : (
+                    applied.map((q) => (
+                      <QuestionBankCard
+                        key={q.id}
+                        onOpenDetail={() => {
+                          setSelectedQuestion({
+                            id: q.id,
+                            number: appliedNumberById.get(q.id) ?? 0,
+                            label: "Applied",
+                            starred: !!q.isStarred,
+                            codeStyle: detectCodeStyle(q.answer),
+                            question: q.question,
+                            context: formatQuestionContext(q.unitTitle, q.topicTitle, q.subtopicTitle),
+                            answer: q.answer,
+                            subtopicId: q.subtopicId,
+                          });
+                        }}
+                        cardId={`qb-card-modal-${q.id}`}
+                        highlighted={highlightedQuestionId === q.id}
+                        questionNumber={appliedNumberById.get(q.id) ?? 0}
+                        interacted={hasQuestionInteraction(q.id)}
+                        label="Applied"
+                        starred={!!q.isStarred}
+                        codeStyle={detectCodeStyle(q.answer)}
+                        question={q.question}
+                        context={formatQuestionContext(q.unitTitle, q.topicTitle, q.subtopicTitle)}
+                      />
+                    ))
+                  )}
                 </section>
               )}
             </>
@@ -3437,6 +3508,7 @@ function QuestionBankPane({
     answer: string;
     subtopicId: string;
   } | null>(null);
+  const [qbSectionFilter, setQbSectionFilter] = useState<"all" | "foundational" | "applied">("all");
   const [highlightedQuestionId, setHighlightedQuestionId] = useState<number | null>(null);
   const resumeAppliedRef = useRef(false);
   const user = getStoredUser();
@@ -3456,6 +3528,7 @@ function QuestionBankPane({
   useEffect(() => {
     resumeAppliedRef.current = false;
     setHighlightedQuestionId(null);
+    setQbSectionFilter("all");
   }, [configId]);
 
   useEffect(() => {
@@ -3527,7 +3600,8 @@ function QuestionBankPane({
 
   return (
     <div className="h-full flex flex-col border border-border bg-card overflow-hidden">
-      <div className="flex items-center justify-between px-5 py-4 border-b border-border shrink-0 bg-blue-50">
+        <div className="px-5 py-4 border-b border-border shrink-0 bg-blue-50">
+        <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <h2 className="font-display font-bold text-foreground truncate text-base flex items-center gap-2">
             <MessageSquare className="w-4 h-4 text-blue-600" />
@@ -3537,9 +3611,68 @@ function QuestionBankPane({
             {data ? `${validQuestions.length} total questions` : "Loading questions..."}
           </p>
         </div>
-        <Button variant="ghost" size="icon" onClick={onClose} className="h-8 w-8">
-          <X className="w-4 h-4" />
-        </Button>
+        <div className="flex items-center gap-2 shrink-0">
+          {selectedQuestion === null && validQuestions.length > 0 && (
+            <div className="hidden sm:flex items-center gap-2">
+              <Button
+                variant={qbSectionFilter === "all" ? "default" : "outline"}
+                size="sm"
+                className="h-8"
+                onClick={() => setQbSectionFilter("all")}
+              >
+                All ({validQuestions.length})
+              </Button>
+              <Button
+                variant={qbSectionFilter === "foundational" ? "default" : "outline"}
+                size="sm"
+                className="h-8"
+                onClick={() => setQbSectionFilter("foundational")}
+              >
+                Foundational ({foundational.length})
+              </Button>
+              <Button
+                variant={qbSectionFilter === "applied" ? "default" : "outline"}
+                size="sm"
+                className="h-8"
+                onClick={() => setQbSectionFilter("applied")}
+              >
+                Applied ({applied.length})
+              </Button>
+            </div>
+          )}
+          <Button variant="ghost" size="icon" onClick={onClose} className="h-8 w-8">
+            <X className="w-4 h-4" />
+          </Button>
+        </div>
+        </div>
+        {selectedQuestion === null && validQuestions.length > 0 && (
+          <div className="mt-3 flex flex-wrap items-center gap-2 sm:hidden">
+            <Button
+              variant={qbSectionFilter === "all" ? "default" : "outline"}
+              size="sm"
+              className="h-8"
+              onClick={() => setQbSectionFilter("all")}
+            >
+              All ({validQuestions.length})
+            </Button>
+            <Button
+              variant={qbSectionFilter === "foundational" ? "default" : "outline"}
+              size="sm"
+              className="h-8"
+              onClick={() => setQbSectionFilter("foundational")}
+            >
+              Foundational ({foundational.length})
+            </Button>
+            <Button
+              variant={qbSectionFilter === "applied" ? "default" : "outline"}
+              size="sm"
+              className="h-8"
+              onClick={() => setQbSectionFilter("applied")}
+            >
+              Applied ({applied.length})
+            </Button>
+          </div>
+        )}
       </div>
 
       <div className="flex-1 overflow-y-auto p-5 space-y-6">
@@ -3596,14 +3729,15 @@ function QuestionBankPane({
           </div>
         ) : validQuestions.length ? (
           <>
-            {foundational.length > 0 && (
+            {(qbSectionFilter === "all" || qbSectionFilter === "foundational") && (
               <section className="space-y-3">
-                <h3 className="text-sm font-bold text-foreground uppercase tracking-wider">Foundational Questions</h3>
-                {foundational.map((q) => (
-                  <QuestionBankCard
-                    key={q.id}
-                    onOpenDetail={() =>
-                      {
+                {foundational.length === 0 ? (
+                  <p className="text-sm text-muted-foreground">No foundational questions yet.</p>
+                ) : (
+                  foundational.map((q) => (
+                    <QuestionBankCard
+                      key={q.id}
+                      onOpenDetail={() => {
                         setSelectedQuestion({
                           id: q.id,
                           number: foundationalNumberById.get(q.id) ?? 0,
@@ -3615,30 +3749,30 @@ function QuestionBankPane({
                           answer: q.answer,
                           subtopicId: q.subtopicId,
                         });
-                      }
-                    
-                    }
-                    cardId={`qb-card-pane-${q.id}`}
-                    highlighted={highlightedQuestionId === q.id}
-                    questionNumber={foundationalNumberById.get(q.id) ?? 0}
-                    interacted={hasQuestionInteraction(q.id)}
-                    label="Foundational"
-                    starred={!!q.isStarred}
-                    codeStyle={detectCodeStyle(q.answer)}
-                    question={q.question}
-                    context={formatQuestionContext(q.unitTitle, q.topicTitle, q.subtopicTitle)}
-                  />
-                ))}
+                      }}
+                      cardId={`qb-card-pane-${q.id}`}
+                      highlighted={highlightedQuestionId === q.id}
+                      questionNumber={foundationalNumberById.get(q.id) ?? 0}
+                      interacted={hasQuestionInteraction(q.id)}
+                      label="Foundational"
+                      starred={!!q.isStarred}
+                      codeStyle={detectCodeStyle(q.answer)}
+                      question={q.question}
+                      context={formatQuestionContext(q.unitTitle, q.topicTitle, q.subtopicTitle)}
+                    />
+                  ))
+                )}
               </section>
             )}
-            {applied.length > 0 && (
+            {(qbSectionFilter === "all" || qbSectionFilter === "applied") && (
               <section className="space-y-3">
-                <h3 className="text-sm font-bold text-foreground uppercase tracking-wider">Applied Questions</h3>
-                {applied.map((q) => (
-                  <QuestionBankCard
-                    key={q.id}
-                    onOpenDetail={() =>
-                      {
+                {applied.length === 0 ? (
+                  <p className="text-sm text-muted-foreground">No applied questions yet.</p>
+                ) : (
+                  applied.map((q) => (
+                    <QuestionBankCard
+                      key={q.id}
+                      onOpenDetail={() => {
                         setSelectedQuestion({
                           id: q.id,
                           number: appliedNumberById.get(q.id) ?? 0,
@@ -3650,19 +3784,19 @@ function QuestionBankPane({
                           answer: q.answer,
                           subtopicId: q.subtopicId,
                         });
-                      }
-                    }
-                    cardId={`qb-card-pane-${q.id}`}
-                    highlighted={highlightedQuestionId === q.id}
-                    questionNumber={appliedNumberById.get(q.id) ?? 0}
-                    interacted={hasQuestionInteraction(q.id)}
-                    label="Applied"
-                    starred={!!q.isStarred}
-                    codeStyle={detectCodeStyle(q.answer)}
-                    question={q.question}
-                    context={formatQuestionContext(q.unitTitle, q.topicTitle, q.subtopicTitle)}
-                  />
-                ))}
+                      }}
+                      cardId={`qb-card-pane-${q.id}`}
+                      highlighted={highlightedQuestionId === q.id}
+                      questionNumber={appliedNumberById.get(q.id) ?? 0}
+                      interacted={hasQuestionInteraction(q.id)}
+                      label="Applied"
+                      starred={!!q.isStarred}
+                      codeStyle={detectCodeStyle(q.answer)}
+                      question={q.question}
+                      context={formatQuestionContext(q.unitTitle, q.topicTitle, q.subtopicTitle)}
+                    />
+                  ))
+                )}
               </section>
             )}
           </>

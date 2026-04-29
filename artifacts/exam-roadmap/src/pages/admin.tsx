@@ -19,7 +19,7 @@ import { UNIVERSITIES, EXAM_TYPES, COMMON_BRANCH, SEMESTERS } from "@/lib/consta
 import { useLocation } from "wouter";
 import {
   BarChart3, Users, Plus, Settings, FileText,
-  CheckCircle2, Clock, ChevronRight, Search, Ban, Eye,
+  CheckCircle2, Clock, ChevronRight, ChevronLeft, Search, Ban, Eye, SlidersHorizontal, ArrowUpDown,
   Copy,
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
@@ -45,6 +45,8 @@ import {
 import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { useToast } from "@/hooks/use-toast";
 
 function CreateConfigDialog({ onCreated }: { onCreated: () => void }) {
@@ -695,13 +697,15 @@ function ConfigsTab() {
               <Button
                 variant="outline"
                 size="sm"
+                className="gap-2"
                 onClick={() => {
                   setSelectedUniversityId(null);
                   setSearch("");
                   setLocation("/admin");
                 }}
               >
-                {"< Back to Universities"}
+                <ChevronLeft className="w-4 h-4" />
+                <span>Back to Universities</span>
               </Button>
               <span
                 className="max-w-[14rem] sm:max-w-[24rem] truncate text-lg sm:text-xl font-bold uppercase tracking-wide text-foreground"
@@ -932,12 +936,12 @@ function ConfigsTab() {
                             variant="outline"
                             size="sm"
                             className="h-7 text-xs gap-1.5"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setLocation(
-                                `/roadmap?configId=${encodeURIComponent(config.id)}&subject=${encodeURIComponent(config.subject)}&exam=${encodeURIComponent(config.exam)}`
-                              );
-                            }}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setLocation(
+                                `/roadmap?configId=${encodeURIComponent(config.id)}&subject=${encodeURIComponent(config.subject)}&exam=${encodeURIComponent(config.exam)}&returnTo=${encodeURIComponent(`/admin?universityId=${config.universityId}`)}`
+                                );
+                              }}
                           >
                             <Eye className="w-3.5 h-3.5" />
                             Preview
@@ -1282,7 +1286,6 @@ function AnalyticsTab() {
   const uniLabel = (id: string) => universities.find((u) => u.id === id)?.name ?? id;
   const semesterLabel = (id: string) => semesters.find((s) => s.id === id)?.name ?? id;
   const examLabel = (id: string) => examTypes.find((e) => e.id === id)?.name ?? id;
-  const semExamLabel = (semesterId: string, examId: string) => `${semesterLabel(semesterId)} - ${examLabel(examId)}`;
   const {
     data: allConfigs,
     isLoading: configsLoading,
@@ -1291,10 +1294,7 @@ function AnalyticsTab() {
   } = useGetConfigs({}, { query: { queryKey: ["configs", "all"] } });
   const { data: liveConfigQbSummary } = useGetLiveConfigQuestionBankInteractionSummary();
   const { data: universityAnalytics } = useGetUniversityAnalytics();
-  const liveConfigs = useMemo(
-    () => (allConfigs ?? []).filter((cfg) => cfg.status === "live"),
-    [allConfigs]
-  );
+  const allConfigsSafe = useMemo(() => allConfigs ?? [], [allConfigs]);
   const studentCountByUniversity = useMemo(() => {
     const map = new Map<string, number>();
     for (const row of universityAnalytics ?? []) {
@@ -1306,15 +1306,111 @@ function AnalyticsTab() {
     () =>
       universities.map((u) => ({
         universityId: u.id,
-        liveConfigs: liveConfigs.filter((cfg) => cfg.universityId === u.id),
+        configs: allConfigsSafe.filter((cfg) => cfg.universityId === u.id),
       })),
-    [universities, liveConfigs]
+    [universities, allConfigsSafe]
   );
   const [selectedUniversityId, setSelectedUniversityId] = useState<string | null>(null);
   const [selectedConfigId, setSelectedConfigId] = useState<string | null>(null);
   const selectedUniversityRow = universityRows.find((row) => row.universityId === selectedUniversityId) ?? null;
-  const selectedUniversityConfigs = selectedUniversityRow?.liveConfigs ?? [];
+  const selectedUniversityConfigs = selectedUniversityRow?.configs ?? [];
   const selectedConfig = selectedUniversityConfigs.find((cfg) => cfg.id === selectedConfigId) ?? null;
+  const semesterOrderMap = useMemo(() => {
+    const map = new Map<string, number>();
+    semesters.forEach((s, idx) => map.set(s.id, idx));
+    return map;
+  }, [semesters]);
+  const examOrderMap = useMemo(() => {
+    const map = new Map<string, number>();
+    examTypes.forEach((e, idx) => map.set(e.id, idx));
+    return map;
+  }, [examTypes]);
+  const statusOrderMap = useMemo(
+    () => new Map<string, number>([["live", 0], ["draft", 1], ["disabled", 2], ["deleted", 3]]),
+    []
+  );
+  const [expandedSemesters, setExpandedSemesters] = useState<Record<string, boolean>>({});
+  const [expandedExams, setExpandedExams] = useState<Record<string, boolean>>({});
+
+  const groupedSelectedUniversityConfigs = useMemo(() => {
+    const semMap = new Map<
+      string,
+      {
+        semesterId: string;
+        exams: Map<
+          string,
+          {
+            examId: string;
+            statuses: Map<string, typeof selectedUniversityConfigs>;
+          }
+        >;
+      }
+    >();
+
+    for (const cfg of selectedUniversityConfigs) {
+      const semesterId = cfg.year || "other";
+      const examId = cfg.exam || "other";
+      const status = String(cfg.status || "unknown").toLowerCase();
+      if (!semMap.has(semesterId)) {
+        semMap.set(semesterId, { semesterId, exams: new Map() });
+      }
+      const semEntry = semMap.get(semesterId)!;
+      if (!semEntry.exams.has(examId)) {
+        semEntry.exams.set(examId, { examId, statuses: new Map() });
+      }
+      const examEntry = semEntry.exams.get(examId)!;
+      const existing = examEntry.statuses.get(status) ?? [];
+      examEntry.statuses.set(status, [...existing, cfg]);
+    }
+
+    const sems = Array.from(semMap.values())
+      .map((sem) => {
+        const exams = Array.from(sem.exams.values())
+          .map((exam) => {
+            const statuses = Array.from(exam.statuses.entries())
+              .map(([status, configs]) => ({
+                status,
+                configs: [...configs].sort((a, b) => a.subject.localeCompare(b.subject) || a.id.localeCompare(b.id)),
+              }))
+              .sort(
+                (a, b) =>
+                  (statusOrderMap.get(a.status) ?? 99) - (statusOrderMap.get(b.status) ?? 99) ||
+                  a.status.localeCompare(b.status)
+              );
+            return { examId: exam.examId, statuses };
+          })
+          .sort(
+            (a, b) =>
+              (examOrderMap.get(a.examId) ?? 99) - (examOrderMap.get(b.examId) ?? 99) ||
+              a.examId.localeCompare(b.examId)
+          );
+        return { semesterId: sem.semesterId, exams };
+      })
+      .sort(
+        (a, b) =>
+          (semesterOrderMap.get(a.semesterId) ?? 99) - (semesterOrderMap.get(b.semesterId) ?? 99) ||
+          a.semesterId.localeCompare(b.semesterId)
+      );
+
+    return sems;
+  }, [selectedUniversityConfigs, statusOrderMap, examOrderMap, semesterOrderMap]);
+
+  const statusLabel = (status: string) => {
+    switch (status) {
+      case "live":
+        return "Live";
+      case "draft":
+        return "Draft";
+      case "disabled":
+        return "Disabled";
+      case "deleted":
+        return "Deleted";
+      default:
+        return status.charAt(0).toUpperCase() + status.slice(1);
+    }
+  };
+
+  const totalConfigsForSelectedUniversity = selectedUniversityConfigs.length;
   const qbSummaryByConfig = useMemo(() => {
     const map = new Map<string, {
       totalStudents: number;
@@ -1337,9 +1433,14 @@ function AnalyticsTab() {
   );
   const { data: selectedConfigQuestionBank } = useGetQuestionBank(selectedConfigId);
   const ratingOrder = ["Poor", "Average", "Good"] as const;
+  const ratingTileOrder = ["Good", "Average", "Poor"] as const;
   type RatingBucket = (typeof ratingOrder)[number];
+  type StudentSortKey = "student" | "subtopicCoverage" | "qbInteractions" | "lastActive";
+  type SortDirection = "asc" | "desc";
   const [subtopicRatingFilter, setSubtopicRatingFilter] = useState<"all" | RatingBucket>("all");
   const [qbRatingFilter, setQbRatingFilter] = useState<"all" | RatingBucket>("all");
+  const [studentSortKey, setStudentSortKey] = useState<StudentSortKey>("student");
+  const [sortDirection, setSortDirection] = useState<SortDirection>("asc");
   const ratingSummaryClasses: Record<RatingBucket, string> = {
     Poor: "border-rose-200 bg-rose-50 text-rose-700",
     Average: "border-amber-200 bg-amber-50 text-amber-700",
@@ -1395,29 +1496,51 @@ function AnalyticsTab() {
       Good: toPercent(selectedConfigQbRatingCounts.Good),
     };
   }, [studentProgress, selectedConfigQbRatingCounts]);
+  const getQbPercent = (s: {
+    questionBankInteractions?: number;
+  }) => {
+    const totalQuestions = selectedConfigQuestionBank?.total ?? 0;
+    const rawQbInteractions = s.questionBankInteractions ?? 0;
+    const normalizedQbInteractions =
+      totalQuestions > 0 ? Math.min(rawQbInteractions, totalQuestions) : 0;
+    return totalQuestions > 0 ? Math.round((normalizedQbInteractions / totalQuestions) * 100) : 0;
+  };
   const filteredStudents = useMemo(() => {
     if (!studentProgress) return [];
-
-    const totalQuestions = selectedConfigQuestionBank?.total ?? 0;
-    return studentProgress.students.filter((s) => {
-      const subtopicPercent = Math.round(s.progressPercent);
-      const subtopicRating = getMetricRating(subtopicPercent);
-      const rawQbInteractions = s.questionBankInteractions ?? 0;
-      const normalizedQbInteractions =
-        totalQuestions > 0 ? Math.min(rawQbInteractions, totalQuestions) : 0;
-      const qbPercent =
-        totalQuestions > 0 ? Math.round((normalizedQbInteractions / totalQuestions) * 100) : 0;
-      const qbRating = getMetricRating(qbPercent);
-
-      if (subtopicRatingFilter !== "all" && subtopicRating !== subtopicRatingFilter) return false;
-      if (qbRatingFilter !== "all" && qbRating !== qbRatingFilter) return false;
-      return true;
-    });
-  }, [studentProgress, selectedConfigQuestionBank, subtopicRatingFilter, qbRatingFilter]);
+    return studentProgress.students
+      .filter((s) => {
+        const subtopicPercent = Math.round(s.progressPercent);
+        const subtopicRating = getMetricRating(subtopicPercent);
+        if (subtopicRatingFilter !== "all" && subtopicRating !== subtopicRatingFilter) return false;
+        const qbRating = getMetricRating(getQbPercent(s));
+        if (qbRatingFilter !== "all" && qbRating !== qbRatingFilter) return false;
+        return true;
+      })
+      .sort((a, b) => {
+        if (studentSortKey === "student") {
+          const cmp = a.userId.localeCompare(b.userId);
+          return sortDirection === "asc" ? cmp : -cmp;
+        }
+        if (studentSortKey === "subtopicCoverage") {
+          const cmp = Math.round(a.progressPercent) - Math.round(b.progressPercent) || a.userId.localeCompare(b.userId);
+          return sortDirection === "asc" ? cmp : -cmp;
+        }
+        if (studentSortKey === "qbInteractions") {
+          const cmp = getQbPercent(a) - getQbPercent(b) || a.userId.localeCompare(b.userId);
+          return sortDirection === "asc" ? cmp : -cmp;
+        }
+        const aTs = a.lastActiveAt ? new Date(a.lastActiveAt).getTime() : 0;
+        const bTs = b.lastActiveAt ? new Date(b.lastActiveAt).getTime() : 0;
+        const cmp = aTs - bTs || a.userId.localeCompare(b.userId);
+        return sortDirection === "asc" ? cmp : -cmp;
+      });
+  }, [studentProgress, qbRatingFilter, selectedConfigQuestionBank, studentSortKey, sortDirection]);
 
   useEffect(() => {
     setSubtopicRatingFilter("all");
     setQbRatingFilter("all");
+    setStudentSortKey("student");
+    setSortDirection("asc");
   }, [selectedConfigId]);
 
   return (
@@ -1471,19 +1594,19 @@ function AnalyticsTab() {
                         </span>
                       </td>
                       <td className="px-6 py-4 text-right">
-                        <span className="font-display font-bold text-foreground">{row.liveConfigs.length}</span>
+                        <span className="font-display font-bold text-foreground">{row.configs.length}</span>
                       </td>
                       <td className="px-6 py-4 text-right">
                         <Button
                           variant="outline"
                           size="sm"
-                          disabled={row.liveConfigs.length === 0}
+                          disabled={row.configs.length === 0}
                           onClick={() => {
                             setSelectedUniversityId(row.universityId);
                             setSelectedConfigId(null);
                           }}
                         >
-                          Show All Live Configs
+                          Show All Configs
                         </Button>
                       </td>
                     </motion.tr>
@@ -1506,23 +1629,53 @@ function AnalyticsTab() {
       >
         <DialogContent className="flex flex-col w-[75vw] max-w-[75vw] h-[90vh] overflow-hidden p-0 gap-0">
           <DialogHeader className="shrink-0 border-b border-border px-6 py-5 pr-12">
-            <DialogTitle>
-              {selectedConfig
-                ? `Student Progress - ${uniLabel(selectedUniversityId || "")} / ${selectedConfig.subject}`
-                : `Live Configs - ${uniLabel(selectedUniversityId || "")}`}
-            </DialogTitle>
+            {selectedConfig ? (
+              <div className="flex items-center gap-3">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-8 w-8 p-0 shrink-0"
+                  onClick={() => setSelectedConfigId(null)}
+                  aria-label="Back to live configs"
+                >
+                  <ChevronLeft className="h-4 w-4" />
+                </Button>
+                <div className="space-y-0.5">
+                  <DialogTitle className="text-xs font-semibold uppercase tracking-[0.14em] text-muted-foreground">
+                    Student Progress
+                  </DialogTitle>
+                  <p className="text-base font-semibold text-foreground">
+                    {`${uniLabel(selectedUniversityId || "")} | ${selectedConfig.subject} | ${semesterLabel(selectedConfig.year)} | ${examLabel(selectedConfig.exam)}`}
+                  </p>
+                </div>
+              </div>
+            ) : (
+              <div className="space-y-0.5">
+                <DialogTitle className="text-xs font-semibold uppercase tracking-[0.14em] text-muted-foreground">
+                  Configs
+                </DialogTitle>
+                <p className="text-base font-semibold text-foreground">
+                  {uniLabel(selectedUniversityId || "")}
+                </p>
+              </div>
+            )}
           </DialogHeader>
 
           <div className="flex-1 min-h-0 overflow-hidden px-6 py-4">
           {!selectedConfig ? (
             <div className="h-full min-h-0 flex flex-col">
+              {/* <div className="shrink-0 text-sm text-muted-foreground">
+                Total configs: <span className="font-semibold text-foreground">{totalConfigsForSelectedUniversity}</span>
+              </div> */}
               <div className="min-h-0 flex-1 overflow-auto border border-border rounded-xl">
               <table className="w-full min-w-[860px] text-left border-collapse">
                 <thead className="sticky top-0 bg-card">
                   <tr className="border-b border-border text-xs uppercase tracking-wider text-muted-foreground">
+                    <th className="px-4 py-3 font-semibold">Group</th>
                     <th className="px-4 py-3 font-semibold">Subject</th>
                     <th className="px-4 py-3 font-semibold">Semester</th>
                     <th className="px-4 py-3 font-semibold">Exam</th>
+                    <th className="px-4 py-3 font-semibold">Status</th>
                     <th className="px-4 py-3 font-semibold">Branch</th>
                     <th className="px-4 py-3 font-semibold text-right">QB Reach</th>
                     <th className="px-4 py-3 font-semibold text-right sticky right-0 bg-card z-20 border-l border-border">
@@ -1531,40 +1684,96 @@ function AnalyticsTab() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-border/50 text-sm">
-                  {selectedUniversityConfigs.length === 0 ? (
+                  {groupedSelectedUniversityConfigs.length === 0 ? (
                     <tr>
-                      <td colSpan={6} className="px-4 py-8 text-center text-muted-foreground">
-                        No live configs found for this university.
+                      <td colSpan={8} className="px-4 py-8 text-center text-muted-foreground">
+                        No configs found for this university.
                       </td>
                     </tr>
                   ) : (
-                    selectedUniversityConfigs.map((cfg) => {
-                      const qb = qbSummaryByConfig.get(cfg.id);
-                      const percent = Math.round(qb?.interactionPercent ?? 0);
-                      const uniqueStudents = qb?.uniqueStudents ?? 0;
-                      return (
-                        <tr key={cfg.id}>
-                          <td className="px-4 py-3 font-medium text-foreground">{cfg.subject}</td>
-                          <td className="px-4 py-3 text-foreground">{semesterLabel(cfg.year)}</td>
-                          <td className="px-4 py-3 text-foreground">{examLabel(cfg.exam)}</td>
-                          <td className="px-4 py-3 text-foreground">{cfg.branch}</td>
-                          <td className="px-4 py-3 text-right">
-                            <div className="inline-flex items-center gap-2">
-                              <span className="font-semibold text-foreground">{percent}%</span>
-                              <span className="text-xs text-muted-foreground">({uniqueStudents})</span>
-                            </div>
-                          </td>
-                          <td className="px-4 py-3 text-right sticky right-0 bg-card border-l border-border">
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              onClick={() => setSelectedConfigId(cfg.id)}
-                            >
-                              Student Progress
-                            </Button>
-                          </td>
-                        </tr>
+                    groupedSelectedUniversityConfigs.flatMap((semGroup) => {
+                      const semKey = semGroup.semesterId;
+                      const semOpen = expandedSemesters[semKey] ?? true;
+                      const semTotal = semGroup.exams.reduce(
+                        (acc, exam) => acc + exam.statuses.reduce((sAcc, st) => sAcc + st.configs.length, 0),
+                        0
                       );
+                      const semRows = [
+                        <tr key={`sem-${semKey}`} className="bg-muted/35">
+                          <td className="px-4 py-3 font-semibold text-foreground" colSpan={8}>
+                            <button
+                              type="button"
+                              className="inline-flex items-center gap-2"
+                              onClick={() =>
+                                setExpandedSemesters((prev) => ({ ...prev, [semKey]: !semOpen }))
+                              }
+                            >
+                              <ChevronRight className={`w-4 h-4 transition-transform ${semOpen ? "rotate-90" : ""}`} />
+                              <span>Semester: {semesterLabel(semGroup.semesterId)}</span>
+                              <Badge variant="secondary">{semTotal}</Badge>
+                            </button>
+                          </td>
+                        </tr>,
+                      ];
+                      if (!semOpen) return semRows;
+
+                      for (const examGroup of semGroup.exams) {
+                        const examKey = `${semKey}::${examGroup.examId}`;
+                        const examOpen = expandedExams[examKey] ?? true;
+                        const examTotal = examGroup.statuses.reduce((acc, st) => acc + st.configs.length, 0);
+                        semRows.push(
+                          <tr key={`exam-${examKey}`} className="bg-muted/20">
+                            <td className="px-4 py-3 pl-8 font-medium text-foreground" colSpan={8}>
+                              <button
+                                type="button"
+                                className="inline-flex items-center gap-2"
+                                onClick={() =>
+                                  setExpandedExams((prev) => ({ ...prev, [examKey]: !examOpen }))
+                                }
+                              >
+                                <ChevronRight className={`w-4 h-4 transition-transform ${examOpen ? "rotate-90" : ""}`} />
+                                <span>Exam: {examLabel(examGroup.examId)}</span>
+                                <Badge variant="outline">{examTotal}</Badge>
+                              </button>
+                            </td>
+                          </tr>
+                        );
+                        if (!examOpen) continue;
+
+                        for (const statusGroup of examGroup.statuses) {
+                          for (const cfg of statusGroup.configs) {
+                            const qb = qbSummaryByConfig.get(cfg.id);
+                            const percent = Math.round(qb?.interactionPercent ?? 0);
+                            const uniqueStudents = qb?.uniqueStudents ?? 0;
+                            semRows.push(
+                              <tr key={cfg.id}>
+                                <td className="px-4 py-3 pl-12 text-muted-foreground">{statusLabel(statusGroup.status)}</td>
+                                <td className="px-4 py-3 font-medium text-foreground">{cfg.subject}</td>
+                                <td className="px-4 py-3 text-foreground">{semesterLabel(cfg.year)}</td>
+                                <td className="px-4 py-3 text-foreground">{examLabel(cfg.exam)}</td>
+                                <td className="px-4 py-3 text-foreground">
+                                  <Badge variant={cfg.status === "live" ? "default" : "outline"}>
+                                    {statusLabel(cfg.status)}
+                                  </Badge>
+                                </td>
+                                <td className="px-4 py-3 text-foreground">{cfg.branch}</td>
+                                <td className="px-4 py-3 text-right">
+                                  <div className="inline-flex items-center gap-2">
+                                    <span className="font-semibold text-foreground">{percent}%</span>
+                                    <span className="text-xs text-muted-foreground">({uniqueStudents})</span>
+                                  </div>
+                                </td>
+                                <td className="px-4 py-3 text-right sticky right-0 bg-card border-l border-border">
+                                  <Button variant="outline" size="sm" onClick={() => setSelectedConfigId(cfg.id)}>
+                                    Student Progress
+                                  </Button>
+                                </td>
+                              </tr>
+                            );
+                          }
+                        }
+                      }
+                      return semRows;
                     })
                   )}
                 </tbody>
@@ -1573,12 +1782,6 @@ function AnalyticsTab() {
             </div>
           ) : (
             <div className="h-full min-h-0 flex flex-col gap-3">
-              <Button
-                variant="ghost"
-                size="sm"
-                className="h-8 shrink-0 w-fit"
-                onClick={() => setSelectedConfigId(null)}
-              >{"< Back to Live Configs"}</Button>
               {studentsLoading ? (
                 <div className="py-8 text-center text-muted-foreground">Loading students...</div>
               ) : !studentProgress ? (
@@ -1586,191 +1789,259 @@ function AnalyticsTab() {
               ) : (
                 <div className="min-h-0 flex-1 flex flex-col gap-3">
                   <div className="space-y-3 shrink-0">
-                    <div className="grid gap-2 md:grid-cols-[160px_1fr] md:items-center">
-                      <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                        Sub-topic Ratings
-                      </span>
-                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-                        {ratingOrder.map((rating) => (
-                          <div
-                            key={`subtopic-${rating}`}
-                            className={`rounded-lg border px-3 py-2 ${ratingSummaryClasses[rating]}`}
-                          >
-                            <div className="text-[11px] font-semibold uppercase tracking-wide">{rating}</div>
-                            <div className="mt-1 flex items-baseline justify-between">
-                              <span className="text-base font-bold tabular-nums">
-                                {selectedConfigSubtopicRatingCounts[rating]}
-                              </span>
-                              <span className="text-xs font-semibold tabular-nums">
-                                {selectedConfigSubtopicRatingPercents[rating]}%
-                              </span>
+                    <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
+                      <div className="rounded-xl border border-border bg-card/70 p-3">
+                        <div className="mb-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                          Sub-topic Ratings
+                        </div>
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                          {ratingTileOrder.map((rating) => (
+                            <div
+                              key={`subtopic-${rating}`}
+                              className={`rounded-lg border px-3 py-2 ${ratingSummaryClasses[rating]}`}
+                            >
+                              <div className="text-[11px] font-semibold uppercase tracking-wide text-center">{rating}</div>
+                              <div className="mt-1 flex items-baseline justify-center gap-2 text-center">
+                                <span className="text-lg font-bold tabular-nums">
+                                  {selectedConfigSubtopicRatingPercents[rating]}%
+                                </span>
+                                <span className="text-xs font-semibold tabular-nums opacity-90">
+                                  {selectedConfigSubtopicRatingCounts[rating]}
+                                </span>
+                              </div>
                             </div>
-                          </div>
-                        ))}
+                          ))}
+                        </div>
                       </div>
-                    </div>
-                    <div className="grid gap-2 md:grid-cols-[160px_1fr] md:items-center">
-                      <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                        QB Ratings
-                      </span>
-                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-                        {ratingOrder.map((rating) => (
-                          <div
-                            key={`qb-${rating}`}
-                            className={`rounded-lg border px-3 py-2 ${ratingSummaryClasses[rating]}`}
-                          >
-                            <div className="text-[11px] font-semibold uppercase tracking-wide">{rating}</div>
-                            <div className="mt-1 flex items-baseline justify-between">
-                              <span className="text-base font-bold tabular-nums">
-                                {selectedConfigQbRatingCounts[rating]}
-                              </span>
-                              <span className="text-xs font-semibold tabular-nums">
-                                {selectedConfigQbRatingPercents[rating]}%
-                              </span>
+                      <div className="rounded-xl border border-border bg-card/70 p-3">
+                        <div className="mb-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                          QB Ratings
+                        </div>
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                          {ratingTileOrder.map((rating) => (
+                            <div
+                              key={`qb-${rating}`}
+                              className={`rounded-lg border px-3 py-2 ${ratingSummaryClasses[rating]}`}
+                            >
+                              <div className="text-[11px] font-semibold uppercase tracking-wide text-center">{rating}</div>
+                              <div className="mt-1 flex items-baseline justify-center gap-2 text-center">
+                                <span className="text-lg font-bold tabular-nums">
+                                  {selectedConfigQbRatingPercents[rating]}%
+                                </span>
+                                <span className="text-xs font-semibold tabular-nums opacity-90">
+                                  {selectedConfigQbRatingCounts[rating]}
+                                </span>
+                              </div>
                             </div>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                    <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-                      <div className="space-y-1">
-                        <Label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                          Sub-topic Rating Filter
-                        </Label>
-                        <Select
-                          value={subtopicRatingFilter}
-                          onValueChange={(value) =>
-                            setSubtopicRatingFilter(value as "all" | RatingBucket)
-                          }
-                        >
-                          <SelectTrigger>
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="all">All</SelectItem>
-                            {ratingOrder.map((rating) => (
-                              <SelectItem key={`subtopic-filter-${rating}`} value={rating}>
-                                {rating}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                      </div>
-                      <div className="space-y-1">
-                        <Label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                          QB Rating Filter
-                        </Label>
-                        <Select
-                          value={qbRatingFilter}
-                          onValueChange={(value) =>
-                            setQbRatingFilter(value as "all" | RatingBucket)
-                          }
-                        >
-                          <SelectTrigger>
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="all">All</SelectItem>
-                            {ratingOrder.map((rating) => (
-                              <SelectItem key={`qb-filter-${rating}`} value={rating}>
-                                {rating}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
+                          ))}
+                        </div>
                       </div>
                     </div>
                   </div>
-                <div className="min-h-0 flex-1 overflow-y-auto overflow-x-auto border border-border rounded-xl">
-                  <table className="w-full text-left border-collapse">
-                    <thead className="sticky top-0 bg-card">
-                      <tr className="border-b border-border text-xs uppercase tracking-wider text-muted-foreground">
-                        <th className="px-4 py-3 font-semibold">Student</th>
-                        <th className="px-4 py-3 font-semibold">Semester</th>
-                        <th className="px-4 py-3 font-semibold">Branch</th>
-                        <th className="px-4 py-3 font-semibold text-right">Sub-topic Coverage</th>
-                        <th className="px-4 py-3 font-semibold text-right">Sub-topic Rating</th>
-                        <th className="px-4 py-3 font-semibold text-right">QB Interactions</th>
-                        <th className="px-4 py-3 font-semibold text-right">QB Rating</th>
-                        <th className="px-4 py-3 font-semibold text-right">Last Active</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-border/50 text-sm">
-                      {filteredStudents.length === 0 ? (
-                        <tr>
-                          <td colSpan={8} className="px-4 py-8 text-center text-muted-foreground">
-                            No students match the selected rating filters.
-                          </td>
+                <div className="min-h-0 flex-1 flex flex-col">
+                  <div className="border border-border rounded-xl min-h-0 flex-1 overflow-hidden flex flex-col">
+                    <div className="shrink-0 px-4 py-3 border-b border-border bg-secondary/20 flex items-center justify-between gap-3">
+                      <span className="text-sm font-semibold text-foreground">Student Performance</span>
+                      <div className="flex items-center gap-2">
+                        <Popover>
+                          <PopoverTrigger asChild>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="h-8 px-2.5"
+                              aria-label="Open sorting"
+                            >
+                              <ArrowUpDown className="h-4 w-4" />
+                            </Button>
+                          </PopoverTrigger>
+                          <PopoverContent align="end" className="w-64 space-y-2 p-3">
+                            <Label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                              Sort By
+                            </Label>
+                            <Select
+                              value={studentSortKey}
+                              onValueChange={(value) => setStudentSortKey(value as StudentSortKey)}
+                            >
+                              <SelectTrigger>
+                                <SelectValue />
+                              </SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="student">Student</SelectItem>
+                                <SelectItem value="subtopicCoverage">Sub-topic Coverage</SelectItem>
+                                <SelectItem value="qbInteractions">QB Interactions</SelectItem>
+                                <SelectItem value="lastActive">Last Active</SelectItem>
+                              </SelectContent>
+                            </Select>
+                            <Label className="pt-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                              Direction
+                            </Label>
+                            <RadioGroup
+                              value={sortDirection}
+                              onValueChange={(value) => setSortDirection(value as SortDirection)}
+                              className="gap-2"
+                            >
+                              <label className="flex items-center gap-2 text-sm text-foreground cursor-pointer">
+                                <RadioGroupItem value="asc" id="sort-direction-asc" />
+                                <span>Low to High</span>
+                              </label>
+                              <label className="flex items-center gap-2 text-sm text-foreground cursor-pointer">
+                                <RadioGroupItem value="desc" id="sort-direction-desc" />
+                                <span>High to Low</span>
+                              </label>
+                            </RadioGroup>
+                          </PopoverContent>
+                        </Popover>
+                        <Popover>
+                          <PopoverTrigger asChild>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="h-8 px-2.5"
+                              aria-label="Open filters"
+                            >
+                              <SlidersHorizontal className="h-4 w-4" />
+                            </Button>
+                          </PopoverTrigger>
+                          <PopoverContent align="end" className="w-72 space-y-3 p-3">
+                            <div className="space-y-1">
+                              <Label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                                Sub-topic Rating Filter
+                              </Label>
+                              <Select
+                                value={subtopicRatingFilter}
+                                onValueChange={(value) =>
+                                  setSubtopicRatingFilter(value as "all" | RatingBucket)
+                                }
+                              >
+                                <SelectTrigger>
+                                  <SelectValue />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  <SelectItem value="all">All</SelectItem>
+                                  {ratingOrder.map((rating) => (
+                                    <SelectItem key={`subtopic-filter-${rating}`} value={rating}>
+                                      {rating}
+                                    </SelectItem>
+                                  ))}
+                                </SelectContent>
+                              </Select>
+                            </div>
+                            <div className="space-y-1">
+                              <Label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                                QB Rating Filter
+                              </Label>
+                              <Select
+                                value={qbRatingFilter}
+                                onValueChange={(value) =>
+                                  setQbRatingFilter(value as "all" | RatingBucket)
+                                }
+                              >
+                                <SelectTrigger>
+                                  <SelectValue />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  <SelectItem value="all">All</SelectItem>
+                                  {ratingOrder.map((rating) => (
+                                    <SelectItem key={`qb-filter-${rating}`} value={rating}>
+                                      {rating}
+                                    </SelectItem>
+                                  ))}
+                                </SelectContent>
+                              </Select>
+                            </div>
+                          </PopoverContent>
+                        </Popover>
+                      </div>
+                    </div>
+                    <div className="min-h-0 flex-1 overflow-auto">
+                    <table className="w-full text-left border-collapse">
+                      <thead className="sticky top-0 z-20 bg-card">
+                        <tr className="border-b border-border text-xs uppercase tracking-wider text-muted-foreground">
+                          <th className="px-4 py-3 text-center">Student</th>
+                          <th className="px-4 py-3 font-semibold text-center">Semester</th>
+                          <th className="px-4 py-3 font-semibold text-center">Branch</th>
+                          <th className="px-4 py-3 font-semibold text-center">Sub-topic Coverage</th>
+                          <th className="px-4 py-3 font-semibold text-center">QB Interactions</th>
+                          <th className="px-4 py-3 font-semibold text-center">Sub-topic Rating</th>
+                          <th className="px-4 py-3 font-semibold text-center">QB Rating</th>
+                          <th className="px-4 py-3 font-semibold text-center">Last Active</th>
                         </tr>
-                      ) : (
-                        filteredStudents.map((s) => {
-                        const pct = Math.round(s.progressPercent);
-                        const totalQuestions = selectedConfigQuestionBank?.total ?? 0;
-                        const rawQbInteractions = s.questionBankInteractions ?? 0;
-                        const normalizedQbInteractions =
-                          totalQuestions > 0 ? Math.min(rawQbInteractions, totalQuestions) : 0;
-                        const qbPct =
-                          totalQuestions > 0
-                            ? Math.round((normalizedQbInteractions / totalQuestions) * 100)
-                            : 0;
-                        const subtopicRating = getMetricRating(pct);
-                        const qbRating = getMetricRating(qbPct);
-                        return (
-                          <tr key={s.userId}>
-                            <td className="px-4 py-3 font-medium text-foreground">{s.userId}</td>
-                            <td className="px-4 py-3 text-foreground">{semesterLabel(s.year)}</td>
-                            <td className="px-4 py-3 text-foreground">{s.branch}</td>
-                            <td className="px-4 py-3 text-right">
-                              <div className="inline-flex items-center gap-2">
-                                <span className="text-xs text-muted-foreground">
-                                  {s.doneSubtopics}/{s.totalSubtopics}
-                                </span>
-                                <span className="font-semibold text-foreground">{pct}%</span>
-                              </div>
-                            </td>
-                            <td className="px-4 py-3 text-right">
-                              <span
-                                className={
-                                  subtopicRating === "Good"
-                                    ? "inline-flex items-center rounded-md border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-xs font-semibold text-emerald-700"
-                                    : subtopicRating === "Average"
-                                    ? "inline-flex items-center rounded-md border border-amber-200 bg-amber-50 px-2 py-0.5 text-xs font-semibold text-amber-700"
-                                    : "inline-flex items-center rounded-md border border-rose-200 bg-rose-50 px-2 py-0.5 text-xs font-semibold text-rose-700"
-                                }
-                              >
-                                {subtopicRating}
-                              </span>
-                            </td>
-                            <td className="px-4 py-3 text-right">
-                              <div className="inline-flex items-center gap-2">
-                                <span className="text-xs text-muted-foreground">
-                                  {normalizedQbInteractions}/{totalQuestions}
-                                </span>
-                                <span className="font-semibold text-foreground">{qbPct}%</span>
-                              </div>
-                            </td>
-                            <td className="px-4 py-3 text-right">
-                              <span
-                                className={
-                                  qbRating === "Good"
-                                    ? "inline-flex items-center rounded-md border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-xs font-semibold text-emerald-700"
-                                    : qbRating === "Average"
-                                    ? "inline-flex items-center rounded-md border border-amber-200 bg-amber-50 px-2 py-0.5 text-xs font-semibold text-amber-700"
-                                    : "inline-flex items-center rounded-md border border-rose-200 bg-rose-50 px-2 py-0.5 text-xs font-semibold text-rose-700"
-                                }
-                              >
-                                {qbRating}
-                              </span>
-                            </td>
-                            <td className="px-4 py-3 text-right text-muted-foreground">
-                              {s.lastActiveAt ? new Date(s.lastActiveAt).toLocaleDateString() : "-"}
+                      </thead>
+                      <tbody className="divide-y divide-border/50 text-sm">
+                        {filteredStudents.length === 0 ? (
+                          <tr>
+                            <td colSpan={8} className="px-4 py-8 text-center text-muted-foreground">
+                              No students match the selected filters.
                             </td>
                           </tr>
-                        );
-                      })
-                      )}
-                    </tbody>
-                  </table>
+                        ) : (
+                          filteredStudents.map((s) => {
+                            const pct = Math.round(s.progressPercent);
+                            const totalQuestions = selectedConfigQuestionBank?.total ?? 0;
+                            const rawQbInteractions = s.questionBankInteractions ?? 0;
+                            const normalizedQbInteractions =
+                              totalQuestions > 0 ? Math.min(rawQbInteractions, totalQuestions) : 0;
+                            const qbPct = getQbPercent(s);
+                            const subtopicRating = getMetricRating(pct);
+                            const qbRating = getMetricRating(qbPct);
+                            return (
+                              <tr key={s.userId}>
+                                <td className="px-4 py-3 font-medium text-foreground">{s.userId}</td>
+                                <td className="px-4 py-3 text-foreground">{semesterLabel(s.year)}</td>
+                                <td className="px-4 py-3 text-foreground">{s.branch}</td>
+                                <td className="px-4 py-3 text-right">
+                                  <div className="inline-flex items-center gap-2">
+                                    <span className="text-xs text-muted-foreground">
+                                      {s.doneSubtopics}/{s.totalSubtopics}
+                                    </span>
+                                    <span className="font-semibold text-foreground">{pct}%</span>
+                                  </div>
+                                </td>
+                                <td className="px-4 py-3 text-right">
+                                  <div className="inline-flex items-center gap-2">
+                                    <span className="text-xs text-muted-foreground">
+                                      {normalizedQbInteractions}/{totalQuestions}
+                                    </span>
+                                    <span className="font-semibold text-foreground">{qbPct}%</span>
+                                  </div>
+                                </td>
+                                <td className="px-4 py-3 text-right">
+                                  <span
+                                    className={
+                                      subtopicRating === "Good"
+                                        ? "inline-flex items-center rounded-md border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-xs font-semibold text-emerald-700"
+                                        : subtopicRating === "Average"
+                                        ? "inline-flex items-center rounded-md border border-amber-200 bg-amber-50 px-2 py-0.5 text-xs font-semibold text-amber-700"
+                                        : "inline-flex items-center rounded-md border border-rose-200 bg-rose-50 px-2 py-0.5 text-xs font-semibold text-rose-700"
+                                    }
+                                  >
+                                    {subtopicRating}
+                                  </span>
+                                </td>
+                                <td className="px-4 py-3 text-right">
+                                  <span
+                                    className={
+                                      qbRating === "Good"
+                                        ? "inline-flex items-center rounded-md border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-xs font-semibold text-emerald-700"
+                                        : qbRating === "Average"
+                                        ? "inline-flex items-center rounded-md border border-amber-200 bg-amber-50 px-2 py-0.5 text-xs font-semibold text-amber-700"
+                                        : "inline-flex items-center rounded-md border border-rose-200 bg-rose-50 px-2 py-0.5 text-xs font-semibold text-rose-700"
+                                    }
+                                  >
+                                    {qbRating}
+                                  </span>
+                                </td>
+                                <td className="px-4 py-3 text-right text-muted-foreground">
+                                  {s.lastActiveAt ? new Date(s.lastActiveAt).toLocaleDateString() : "-"}
+                                </td>
+                              </tr>
+                            );
+                          })
+                        )}
+                      </tbody>
+                    </table>
+                    </div>
+                  </div>
                 </div>
                 </div>
               )}
@@ -1784,18 +2055,6 @@ function AnalyticsTab() {
 }
 
 export default function Admin() {
-  const [adminLocation] = useLocation();
-  const [isUniversityScoped, setIsUniversityScoped] = useState<boolean>(() => {
-    if (typeof window === "undefined") return false;
-    const params = new URLSearchParams(window.location.search);
-    return Boolean((params.get("universityId") || "").trim());
-  });
-
-  useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    setIsUniversityScoped(Boolean((params.get("universityId") || "").trim()));
-  }, [adminLocation]);
-
   return (
     <div className="w-full max-w-6xl mx-auto pt-4 pb-20 px-4 sm:px-6 lg:px-8">
       <div className="mb-8">
@@ -1809,16 +2068,14 @@ export default function Admin() {
       </div>
 
       <Tabs defaultValue="configs">
-        {!isUniversityScoped && (
-          <TabsList className="mb-6">
-            <TabsTrigger value="configs" className="gap-2">
-              <FileText className="w-4 h-4" /> Configs
-            </TabsTrigger>
-            <TabsTrigger value="analytics" className="gap-2">
-              <BarChart3 className="w-4 h-4" /> Analytics
-            </TabsTrigger>
-          </TabsList>
-        )}
+        <TabsList className="mb-6">
+          <TabsTrigger value="configs" className="gap-2">
+            <FileText className="w-4 h-4" /> Configs
+          </TabsTrigger>
+          <TabsTrigger value="analytics" className="gap-2">
+            <BarChart3 className="w-4 h-4" /> Analytics
+          </TabsTrigger>
+        </TabsList>
 
         <TabsContent value="configs">
           <ConfigsTab />
