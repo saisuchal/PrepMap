@@ -395,5 +395,60 @@ router.put("/configs/:configId/question-bank/questions/:questionId/star", requir
   }
 });
 
+router.put("/configs/:configId/question-bank/questions/:questionId", requireAdmin, async (req, res) => {
+  try {
+    const configId = String(req.params.configId || "").trim();
+    const questionId = Number(req.params.questionId);
+    const question = String(req.body?.question || "").trim();
+    const answer = String(req.body?.answer || "").trim();
+    const authClaims = ((req as any).authClaims ?? null) as import("../lib/jwt").AccessTokenPayload | null;
+
+    if (!configId || !Number.isFinite(questionId)) {
+      res.status(400).json({ error: "Invalid configId or questionId" });
+      return;
+    }
+    if (!question || !answer) {
+      res.status(400).json({ error: "Question and answer are required" });
+      return;
+    }
+
+    const [existing] = await withRequestDbContext(authClaims, async (tx) =>
+      tx
+        .select({
+          id: configQuestionsTable.id,
+          configId: configQuestionsTable.configId,
+        })
+        .from(configQuestionsTable)
+        .where(eq(configQuestionsTable.id, questionId))
+        .limit(1)
+    );
+
+    if (!existing) {
+      res.status(404).json({ error: "Question not found" });
+      return;
+    }
+    if (existing.configId !== configId) {
+      res.status(400).json({ error: "Question does not belong to this config" });
+      return;
+    }
+
+    await withRequestDbContext(authClaims, async (tx) =>
+      tx
+        .update(configQuestionsTable)
+        .set({
+          question,
+          answer,
+          updatedAt: new Date(),
+        })
+        .where(eq(configQuestionsTable.id, questionId))
+    );
+
+    res.json({ success: true });
+  } catch (error) {
+    req.log.error({ err: error }, "Failed to update question text");
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
 export default router;
 

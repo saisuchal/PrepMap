@@ -1,9 +1,10 @@
 ﻿import { useState, useMemo, useRef, useEffect, useCallback } from "react";
 import { useLocation } from "wouter";
 import { motion, AnimatePresence } from "framer-motion";
+import { useQueryClient } from "@tanstack/react-query";
 import {
   ArrowLeft, Layers, BookOpen, FileText, MessageSquare,
-  CheckCircle2, AlertCircle, ZoomIn, ZoomOut, X, List, Plus, Minus, Star, ChevronLeft, ChevronRight, Lightbulb, Info, PenLine, Search
+  CheckCircle2, AlertCircle, ZoomIn, ZoomOut, X, List, Plus, Minus, Star, ChevronLeft, ChevronRight, Lightbulb, Info, PenLine, Pencil, Search
 } from "lucide-react";
 import {
   useGetAppMetadata,
@@ -13,12 +14,16 @@ import {
   useGetNodes,
   useGetQuestionBank,
   useGetSubtopicContent,
+  useUpdateSubtopicContent,
+  useUpdateQuestionBankQuestion,
   useTrackEvent,
 } from "@/api-client";
 import { buildTree, type TreeNode } from "@/lib/utils";
 import { getStoredUser } from "@/lib/auth";
-import { parseStructuredExplanation, repairBrokenFormulaBullets } from "@/lib/text-format";
+import { parseStructuredExplanation, repairBrokenFormulaBullets, type StructuredExplanationParts } from "@/lib/text-format";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { EXAM_TYPES, SEMESTERS, UNIVERSITIES } from "@/lib/constants";
 
 const NODE_COLORS = {
@@ -385,20 +390,53 @@ function highlightCode(code: string, language: string): string {
 
 function renderInlineCodeText(raw: string) {
   const parts = raw.split(/(`[^`\n]+`)/g);
-  return parts.map((part, idx) => {
+  const out: React.ReactNode[] = [];
+  let keyIndex = 0;
+
+  for (const part of parts) {
+    if (!part) continue;
     if (/^`[^`\n]+`$/.test(part)) {
       const code = part.slice(1, -1);
-      return (
+      out.push(
         <code
-          key={`ic-${idx}`}
+          key={`ic-${keyIndex++}`}
           className="rounded bg-slate-200/70 text-slate-900 px-1 py-0.5 text-[0.9em] font-mono"
         >
           {code}
         </code>
       );
+      continue;
     }
-    return <span key={`tx-${idx}`}>{part}</span>;
-  });
+
+    const boldSegments = part.split(/(\*\*[^*\n][\s\S]*?\*\*)/g);
+    for (const seg of boldSegments) {
+      if (!seg) continue;
+      if (/^\*\*[^*\n][\s\S]*\*\*$/.test(seg)) {
+        out.push(<strong key={`bd-${keyIndex++}`}>{seg.slice(2, -2)}</strong>);
+      } else {
+        out.push(<span key={`tx-${keyIndex++}`}>{seg}</span>);
+      }
+    }
+  }
+
+  return out;
+}
+
+function buildStructuredExplanationText(parts: StructuredExplanationParts): string {
+  const sections: string[] = [];
+  if (String(parts.learningGoal || "").trim()) {
+    sections.push(`Learning Goal:\n${String(parts.learningGoal).trim()}`);
+  }
+  if (String(parts.coreExplanation || "").trim()) {
+    sections.push(`Core Idea:\n${String(parts.coreExplanation).trim()}`);
+  }
+  if (String(parts.exampleBlock || "").trim()) {
+    sections.push(`Quick Example:\n${String(parts.exampleBlock).trim()}`);
+  }
+  if (String(parts.supportNote || "").trim()) {
+    sections.push(`Helpful Note:\n${String(parts.supportNote).trim()}`);
+  }
+  return sections.join("\n\n").trim();
 }
 
 function AnswerRenderer({ answer }: { answer: string }) {
@@ -2442,11 +2480,17 @@ function ContentModal({
   });
 
   const user = getStoredUser();
+  const isAdminViewer = (user?.role || "").toLowerCase() === "admin";
+  const queryClient = useQueryClient();
+  const updateSubtopicContentMutation = useUpdateSubtopicContent();
   const trackSessionKey =
     isSubtopic && user?.id
       ? getSubtopicTrackSessionKey(configId, user.id, node.id)
       : "";
   const trackEventMutation = useTrackEvent();
+  const [isEditingExplanation, setIsEditingExplanation] = useState(false);
+  const [explanationDraft, setExplanationDraft] = useState("");
+  const [showExplanationPreview, setShowExplanationPreview] = useState(false);
   const [isTracked, setIsTracked] = useState(
     isSubtopic && !!trackSessionKey ? !!sessionStorage.getItem(trackSessionKey) : false
   );
@@ -2598,6 +2642,55 @@ function ContentModal({
   const subtopicPathNextTitles = nextTitle ? [nextTitle] : [];
   const subtopicPathNextIds = nextNodeId ? [nextNodeId] : [];
 
+  const currentExplanationDraft = buildStructuredExplanationText(
+    isSubtopic ? subtopicParts : topicParts
+  );
+  const editPreviewParts = parseStructuredExplanation(explanationDraft);
+
+  useEffect(() => {
+    setIsEditingExplanation(false);
+    setShowExplanationPreview(false);
+    setExplanationDraft(currentExplanationDraft);
+  }, [node.id, currentExplanationDraft]);
+
+  const handleSaveExplanation = () => {
+    const normalizedExplanation = String(explanationDraft || "")
+      .replace(/\\r\\n/g, "\n")
+      .replace(/\\n/g, "\n")
+      .replace(/\r\n/g, "\n")
+      .replace(/\n{3,}/g, "\n\n")
+      .replace(/[ \t]+\n/g, "\n")
+      .trim();
+    const preservedQuestions =
+      isSubtopic && content?.questions
+        ? content.questions.map((q) => ({
+            id: q.id,
+            markType: q.markType as "Foundational" | "Applied",
+            question: q.question,
+            answer: q.answer,
+            isStarred: q.isStarred ?? false,
+            starSource: q.starSource ?? "none",
+          }))
+        : [];
+    updateSubtopicContentMutation.mutate(
+      {
+        id: node.id,
+        data: {
+          explanation: normalizedExplanation,
+          questions: preservedQuestions,
+        },
+      },
+      {
+        onSuccess: () => {
+          setIsEditingExplanation(false);
+          setShowExplanationPreview(false);
+          queryClient.invalidateQueries({ queryKey: ["subtopic-content", node.id] });
+          queryClient.invalidateQueries({ queryKey: ["config-question-bank", configId] });
+        },
+      }
+    );
+  };
+
   if (embedded) {
     return (
       <div className="h-full flex flex-col border border-border bg-card overflow-hidden">
@@ -2639,6 +2732,36 @@ function ContentModal({
                 <CheckCircle2 className="w-3 h-3" /> Done
               </span>
             )}
+            {isAdminViewer && (
+              <>
+                {!isEditingExplanation ? (
+                  <Button variant="ghost" size="sm" className="h-8 text-xs" onClick={() => setIsEditingExplanation(true)}>
+                    <Pencil className="w-3 h-3 mr-1" /> Edit
+                  </Button>
+                ) : (
+                  <>
+                    <Button variant="outline" size="sm" className="h-8 text-xs" onClick={() => setShowExplanationPreview((p) => !p)}>
+                      Preview
+                    </Button>
+                    <Button size="sm" className="h-8 text-xs" onClick={handleSaveExplanation} disabled={updateSubtopicContentMutation.isPending}>
+                      Save
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-8 text-xs"
+                      onClick={() => {
+                        setIsEditingExplanation(false);
+                        setShowExplanationPreview(false);
+                        setExplanationDraft(currentExplanationDraft);
+                      }}
+                    >
+                      Cancel
+                    </Button>
+                  </>
+                )}
+              </>
+            )}
             <Button variant="ghost" size="icon" onClick={onClose} className="h-8 w-8">
               <X className="w-4 h-4" />
             </Button>
@@ -2656,24 +2779,56 @@ function ContentModal({
                 isNodeCompleted={isNodeCompleted}
                 onNavigate={onNavigate}
               />
-              <LearningGoalBlock learningGoal={topicParts.learningGoal} />
-              <div className="px-4">
-                <div className="prose prose-sm prose-slate max-w-none prose-p:text-foreground/70">
-                  <div className="flex items-center gap-2 mb-2">
-                    <PenLine className="w-3.5 h-3.5 text-primary" />
-                    <h3 className="text-sm font-bold text-foreground uppercase tracking-wider">Core Idea</h3>
-                  </div>
-                  {topicParts.coreExplanation ? (
-                    <div className="text-foreground/70 font-medium">
-                      <AnswerRenderer answer={topicParts.coreExplanation} />
+              {isAdminViewer && isEditingExplanation && (
+                <section className="rounded-xl border border-border bg-secondary/20 p-4 space-y-3">
+                  <Textarea
+                    value={explanationDraft}
+                    onChange={(e) => setExplanationDraft(e.target.value)}
+                    rows={16}
+                    className="text-sm bg-background font-mono"
+                  />
+                  {showExplanationPreview && (
+                    <div className="space-y-4 rounded-lg border border-border bg-background p-3">
+                      <LearningGoalBlock learningGoal={editPreviewParts.learningGoal} />
+                      <div className="prose prose-sm prose-slate max-w-none prose-p:text-foreground/70">
+                        <div className="flex items-center gap-2 mb-2">
+                          <PenLine className="w-3.5 h-3.5 text-primary" />
+                          <h3 className="text-sm font-bold text-foreground uppercase tracking-wider">Core Idea</h3>
+                        </div>
+                        <div className="text-foreground/70 font-medium">
+                          <AnswerRenderer answer={editPreviewParts.coreExplanation} />
+                        </div>
+                      </div>
+                      <ExampleBlock text={editPreviewParts.exampleBlock} />
+                      <SupportNoteBlock text={editPreviewParts.supportNote} />
                     </div>
-                  ) : (
-                    <p className="text-muted-foreground italic">No explanation available for this topic.</p>
                   )}
-                </div>
-              </div>
-              <ExampleBlock text={topicParts.exampleBlock} />
-              <SupportNoteBlock text={topicParts.supportNote} />
+                </section>
+              )}
+              {!isEditingExplanation && (
+                <>
+                  <LearningGoalBlock learningGoal={topicParts.learningGoal} />
+                  <div className="px-4">
+                    <div className="prose prose-sm prose-slate max-w-none prose-p:text-foreground/70">
+                      <div className="flex items-center justify-between gap-2 mb-2">
+                        <div className="flex items-center gap-2">
+                        <PenLine className="w-3.5 h-3.5 text-primary" />
+                        <h3 className="text-sm font-bold text-foreground uppercase tracking-wider">Core Idea</h3>
+                        </div>
+                      </div>
+                      {topicParts.coreExplanation ? (
+                        <div className="text-foreground/70 font-medium">
+                          <AnswerRenderer answer={topicParts.coreExplanation} />
+                        </div>
+                      ) : (
+                        <p className="text-muted-foreground italic">No explanation available for this topic.</p>
+                      )}
+                    </div>
+                  </div>
+                  <ExampleBlock text={topicParts.exampleBlock} />
+                  <SupportNoteBlock text={topicParts.supportNote} />
+                </>
+              )}
               <div className="flex items-center justify-between gap-3">
                 <ChainNavButton
                   label="Previous"
@@ -2704,6 +2859,32 @@ function ContentModal({
                 <>
                   <section>
                     <div className="space-y-6">
+                      {isAdminViewer && isEditingExplanation && (
+                        <section className="rounded-xl border border-border bg-secondary/20 p-4 space-y-3">
+                          <Textarea
+                            value={explanationDraft}
+                            onChange={(e) => setExplanationDraft(e.target.value)}
+                            rows={16}
+                            className="text-sm bg-background font-mono"
+                          />
+                          {showExplanationPreview && (
+                            <div className="space-y-4 rounded-lg border border-border bg-background p-3">
+                              <LearningGoalBlock learningGoal={editPreviewParts.learningGoal} />
+                              <div className="prose prose-sm prose-slate max-w-none prose-p:text-foreground/70">
+                                <div className="flex items-center gap-2 mb-2">
+                                  <PenLine className="w-3.5 h-3.5 text-primary" />
+                                  <h3 className="text-sm font-bold text-foreground uppercase tracking-wider">Core Idea</h3>
+                                </div>
+                                <div className="text-foreground/70 font-medium">
+                                  <AnswerRenderer answer={editPreviewParts.coreExplanation} />
+                                </div>
+                              </div>
+                              <ExampleBlock text={editPreviewParts.exampleBlock} />
+                              <SupportNoteBlock text={editPreviewParts.supportNote} />
+                            </div>
+                          )}
+                        </section>
+                      )}
                       <PathNavBlock
                         prerequisiteTitles={subtopicPathPrereqTitles}
                         nextRecommendedTitles={subtopicPathNextTitles}
@@ -2712,22 +2893,32 @@ function ContentModal({
                         isNodeCompleted={isNodeCompleted}
                         onNavigate={onNavigate}
                       />
-                      <LearningGoalBlock learningGoal={subtopicParts.learningGoal} />
+                      {!isEditingExplanation && (
+                        <LearningGoalBlock learningGoal={subtopicParts.learningGoal} />
+                      )}
                     </div>
-                    <div className="px-4">
-                      <div className="prose prose-sm prose-slate max-w-none mt-4 prose-p:text-foreground/70">
-                        <div className="flex items-center gap-2 mb-2">
-                          <PenLine className="w-3.5 h-3.5 text-primary" />
-                          <h3 className="text-sm font-bold text-foreground uppercase tracking-wider">Core Idea</h3>
-                        </div>
-                        <div className="text-foreground/70 font-medium">
-                          <AnswerRenderer answer={subtopicParts.coreExplanation} />
+                    {!isEditingExplanation && (
+                      <div className="px-4">
+                        <div className="prose prose-sm prose-slate max-w-none mt-4 prose-p:text-foreground/70">
+                          <div className="flex items-center justify-between gap-2 mb-2">
+                            <div className="flex items-center gap-2">
+                            <PenLine className="w-3.5 h-3.5 text-primary" />
+                            <h3 className="text-sm font-bold text-foreground uppercase tracking-wider">Core Idea</h3>
+                            </div>
+                          </div>
+                          <div className="text-foreground/70 font-medium">
+                            <AnswerRenderer answer={subtopicParts.coreExplanation} />
+                          </div>
                         </div>
                       </div>
-                    </div>
+                    )}
                   </section>
-                  <ExampleBlock text={subtopicParts.exampleBlock} />
-                  <SupportNoteBlock text={subtopicParts.supportNote} />
+                  {!isEditingExplanation && (
+                    <>
+                      <ExampleBlock text={subtopicParts.exampleBlock} />
+                      <SupportNoteBlock text={subtopicParts.supportNote} />
+                    </>
+                  )}
                   <div className="flex items-center justify-between gap-3">
                     <ChainNavButton
                       title={prerequisiteTitle}
@@ -2809,6 +3000,36 @@ function ContentModal({
                 <CheckCircle2 className="w-3 h-3" /> Done
               </span>
             )}
+            {isAdminViewer && (
+              <>
+                {!isEditingExplanation ? (
+                  <Button variant="ghost" size="sm" className="h-8 text-xs" onClick={() => setIsEditingExplanation(true)}>
+                    <Pencil className="w-3 h-3 mr-1" /> Edit
+                  </Button>
+                ) : (
+                  <>
+                    <Button variant="outline" size="sm" className="h-8 text-xs" onClick={() => setShowExplanationPreview((p) => !p)}>
+                      Preview
+                    </Button>
+                    <Button size="sm" className="h-8 text-xs" onClick={handleSaveExplanation} disabled={updateSubtopicContentMutation.isPending}>
+                      Save
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-8 text-xs"
+                      onClick={() => {
+                        setIsEditingExplanation(false);
+                        setShowExplanationPreview(false);
+                        setExplanationDraft(currentExplanationDraft);
+                      }}
+                    >
+                      Cancel
+                    </Button>
+                  </>
+                )}
+              </>
+            )}
             <Button variant="ghost" size="icon" onClick={onClose} className="h-8 w-8">
               <X className="w-4 h-4" />
             </Button>
@@ -2818,7 +3039,6 @@ function ContentModal({
         <div ref={scrollRef} className="flex-1 overflow-y-auto p-5 sm:p-6 space-y-6">
           {isTopic && (
             <>
-              <LearningGoalBlock learningGoal={topicParts.learningGoal} />
               <PathNavBlock
                 prerequisiteTitles={node.prerequisiteTitles}
                 nextRecommendedTitles={node.nextRecommendedTitles}
@@ -2827,15 +3047,50 @@ function ContentModal({
                 isNodeCompleted={isNodeCompleted}
                 onNavigate={onNavigate}
               />
-              <div className="prose prose-sm sm:prose-base prose-slate max-w-none">
-                {topicParts.coreExplanation ? (
-                  <AnswerRenderer answer={topicParts.coreExplanation} />
-                ) : (
-                  <p className="text-muted-foreground italic">No explanation available for this topic.</p>
-                )}
-              </div>
-              <ExampleBlock text={topicParts.exampleBlock} />
-              <SupportNoteBlock text={topicParts.supportNote} />
+              {isAdminViewer && isEditingExplanation && (
+                <section className="rounded-xl border border-border bg-secondary/20 p-4 space-y-3">
+                  <Textarea
+                    value={explanationDraft}
+                    onChange={(e) => setExplanationDraft(e.target.value)}
+                    rows={16}
+                    className="text-sm bg-background font-mono"
+                  />
+                  {showExplanationPreview && (
+                    <div className="space-y-4 rounded-lg border border-border bg-background p-3">
+                      <LearningGoalBlock learningGoal={editPreviewParts.learningGoal} />
+                      <div className="prose prose-sm prose-slate max-w-none prose-p:text-foreground/70">
+                        <div className="flex items-center gap-2 mb-2">
+                          <PenLine className="w-3.5 h-3.5 text-primary" />
+                          <h3 className="text-sm font-bold text-foreground uppercase tracking-wider">Core Idea</h3>
+                        </div>
+                        <AnswerRenderer answer={editPreviewParts.coreExplanation} />
+                      </div>
+                      <ExampleBlock text={editPreviewParts.exampleBlock} />
+                      <SupportNoteBlock text={editPreviewParts.supportNote} />
+                    </div>
+                  )}
+                </section>
+              )}
+              {!isEditingExplanation && (
+                <>
+                  <LearningGoalBlock learningGoal={topicParts.learningGoal} />
+                  <div className="prose prose-sm sm:prose-base prose-slate max-w-none">
+                    <div className="flex items-center justify-between gap-2 mb-2">
+                      <div className="flex items-center gap-2">
+                        <PenLine className="w-3.5 h-3.5 text-primary" />
+                        <h3 className="text-sm font-bold text-foreground uppercase tracking-wider">Core Idea</h3>
+                      </div>
+                    </div>
+                    {topicParts.coreExplanation ? (
+                      <AnswerRenderer answer={topicParts.coreExplanation} />
+                    ) : (
+                      <p className="text-muted-foreground italic">No explanation available for this topic.</p>
+                    )}
+                  </div>
+                  <ExampleBlock text={topicParts.exampleBlock} />
+                  <SupportNoteBlock text={topicParts.supportNote} />
+                </>
+              )}
               <div className="flex items-center justify-between gap-3">
                 <ChainNavButton
                   label="Previous"
@@ -2865,10 +3120,30 @@ function ContentModal({
               ) : content ? (
                 <>
                   <section>
-                    <div className="flex items-center gap-2 mb-3">
-                      <BookOpen className="w-4 h-4 text-primary" />
-                      <h3 className="text-sm font-bold text-foreground uppercase tracking-wider">Core Idea</h3>
-                    </div>
+                    {isAdminViewer && isEditingExplanation && (
+                      <section className="rounded-xl border border-border bg-secondary/20 p-4 space-y-3">
+                        <Textarea
+                          value={explanationDraft}
+                          onChange={(e) => setExplanationDraft(e.target.value)}
+                          rows={16}
+                          className="text-sm bg-background font-mono"
+                        />
+                        {showExplanationPreview && (
+                          <div className="space-y-4 rounded-lg border border-border bg-background p-3">
+                            <LearningGoalBlock learningGoal={editPreviewParts.learningGoal} />
+                            <div className="prose prose-sm prose-slate max-w-none prose-p:text-foreground/70">
+                              <div className="flex items-center gap-2 mb-2">
+                                <PenLine className="w-3.5 h-3.5 text-primary" />
+                                <h3 className="text-sm font-bold text-foreground uppercase tracking-wider">Core Idea</h3>
+                              </div>
+                              <AnswerRenderer answer={editPreviewParts.coreExplanation} />
+                            </div>
+                            <ExampleBlock text={editPreviewParts.exampleBlock} />
+                            <SupportNoteBlock text={editPreviewParts.supportNote} />
+                          </div>
+                        )}
+                      </section>
+                    )}
                     <div className="space-y-6">
                       <PathNavBlock
                         prerequisiteTitles={subtopicPathPrereqTitles}
@@ -2878,16 +3153,24 @@ function ContentModal({
                         isNodeCompleted={isNodeCompleted}
                         onNavigate={onNavigate}
                       />
-                      <LearningGoalBlock learningGoal={subtopicParts.learningGoal} />
+                      {!isEditingExplanation && (
+                        <LearningGoalBlock learningGoal={subtopicParts.learningGoal} />
+                      )}
                     </div>
-                    <div className="prose prose-sm prose-slate max-w-none bg-secondary/30 rounded-xl p-4 border border-border">
-                      <div className="font-medium">
-                        <AnswerRenderer answer={subtopicParts.coreExplanation} />
+                    {!isEditingExplanation && (
+                      <div className="prose prose-sm prose-slate max-w-none bg-secondary/30 rounded-xl p-4 border border-border">
+                        <div className="font-medium">
+                          <AnswerRenderer answer={subtopicParts.coreExplanation} />
+                        </div>
                       </div>
-                    </div>
+                    )}
                   </section>
-                  <ExampleBlock text={subtopicParts.exampleBlock} />
-                  <SupportNoteBlock text={subtopicParts.supportNote} />
+                  {!isEditingExplanation && (
+                    <>
+                      <ExampleBlock text={subtopicParts.exampleBlock} />
+                      <SupportNoteBlock text={subtopicParts.supportNote} />
+                    </>
+                  )}
                   <div className="flex items-center justify-between gap-3">
                     <ChainNavButton
                       title={prerequisiteTitle}
@@ -2928,7 +3211,7 @@ function QuestionCard({ label, question, answer }: { label: string; question: st
           <span className="shrink-0 px-2 py-0.5 rounded-md bg-primary/10 text-primary text-[10px] font-bold uppercase tracking-wider">
             {label}
           </span>
-          <p className="text-sm font-semibold text-foreground leading-snug">{question}</p>
+          <p className="text-sm font-semibold text-foreground leading-snug">{renderInlineCodeText(question)}</p>
         </div>
       </div>
       <div className="p-4">
@@ -3040,9 +3323,16 @@ function QuestionBankModal({
   const [highlightedQuestionId, setHighlightedQuestionId] = useState<number | null>(null);
   const resumeAppliedRef = useRef(false);
   const user = getStoredUser();
+  const isAdminViewer = (user?.role || "").toLowerCase() === "admin";
+  const queryClient = useQueryClient();
   const trackEventMutation = useTrackEvent();
+  const updateQuestionBankQuestionMutation = useUpdateQuestionBankQuestion();
   const answerTimersRef = useRef<Map<number, ReturnType<typeof setTimeout>>>(new Map());
   const [questionInteractionVersion, setQuestionInteractionVersion] = useState(0);
+  const [expandedEditMode, setExpandedEditMode] = useState(false);
+  const [expandedEditPreview, setExpandedEditPreview] = useState(false);
+  const [expandedQuestionDraft, setExpandedQuestionDraft] = useState("");
+  const [expandedAnswerDraft, setExpandedAnswerDraft] = useState("");
 
   const questionSessionKey = useCallback(
     (questionId: number) => `tracked_qb_${configId}_${questionId}`,
@@ -3140,6 +3430,35 @@ function QuestionBankModal({
       clearQuestionInteractionTrack(selectedQuestion.id);
     };
   }, [selectedQuestion]);
+  useEffect(() => {
+    if (!selectedQuestion) {
+      setExpandedEditMode(false);
+      setExpandedEditPreview(false);
+      setExpandedQuestionDraft("");
+      setExpandedAnswerDraft("");
+      return;
+    }
+    setExpandedQuestionDraft(selectedQuestion.question);
+    setExpandedAnswerDraft(selectedQuestion.answer);
+  }, [selectedQuestion]);
+
+  const saveQuestionEdit = async (
+    q: { id: number },
+    next: { question: string; answer: string },
+  ) => {
+    await updateQuestionBankQuestionMutation.mutateAsync({
+      configId,
+      questionId: q.id,
+      question: next.question,
+      answer: next.answer,
+    });
+    await queryClient.invalidateQueries({ queryKey: ["config-question-bank", configId] });
+    setSelectedQuestion((prev) =>
+      prev && prev.id === q.id
+        ? { ...prev, question: next.question, answer: next.answer }
+        : prev
+    );
+  };
 
   return (
     <motion.div
@@ -3176,7 +3495,7 @@ function QuestionBankModal({
                 <Button
                   variant={qbSectionFilter === "all" ? "default" : "outline"}
                   size="sm"
-                  className="h-8"
+                  className="h-8 text-xs font-medium"
                   onClick={() => setQbSectionFilter("all")}
                 >
                   All ({validQuestions.length})
@@ -3184,7 +3503,7 @@ function QuestionBankModal({
                 <Button
                   variant={qbSectionFilter === "foundational" ? "default" : "outline"}
                   size="sm"
-                  className="h-8"
+                  className="h-8 text-xs font-medium"
                   onClick={() => setQbSectionFilter("foundational")}
                 >
                   Foundational ({foundational.length})
@@ -3192,7 +3511,7 @@ function QuestionBankModal({
                 <Button
                   variant={qbSectionFilter === "applied" ? "default" : "outline"}
                   size="sm"
-                  className="h-8"
+                  className="h-8 text-xs font-medium"
                   onClick={() => setQbSectionFilter("applied")}
                 >
                   Applied ({applied.length})
@@ -3209,7 +3528,7 @@ function QuestionBankModal({
               <Button
                 variant={qbSectionFilter === "all" ? "default" : "outline"}
                 size="sm"
-                className="h-8"
+                className="h-8 text-xs font-medium"
                 onClick={() => setQbSectionFilter("all")}
               >
                 All ({validQuestions.length})
@@ -3217,7 +3536,7 @@ function QuestionBankModal({
               <Button
                 variant={qbSectionFilter === "foundational" ? "default" : "outline"}
                 size="sm"
-                className="h-8"
+                className="h-8 text-xs font-medium"
                 onClick={() => setQbSectionFilter("foundational")}
               >
                 Foundational ({foundational.length})
@@ -3225,7 +3544,7 @@ function QuestionBankModal({
               <Button
                 variant={qbSectionFilter === "applied" ? "default" : "outline"}
                 size="sm"
-                className="h-8"
+                className="h-8 text-xs font-medium"
                 onClick={() => setQbSectionFilter("applied")}
               >
                 Applied ({applied.length})
@@ -3274,11 +3593,16 @@ function QuestionBankModal({
                           aria-label="Starred question"
                         />
                       )}
+                      {isAdminViewer && (
+                        <Button variant="ghost" size="sm" className="ml-auto h-7 text-xs" onClick={() => setExpandedEditMode(true)}>
+                          <Pencil className="w-3 h-3 mr-1" /> Edit
+                        </Button>
+                      )}
                     </div>
                     <div className="w-full rounded-lg border border-blue-100 bg-white/70 p-3">
-                      <p className="text-sm font-semibold text-foreground leading-snug">{selectedQuestion.question}</p>
+                      <p className="text-sm font-semibold text-foreground leading-snug">{renderInlineCodeText(selectedQuestion.question)}</p>
                       {selectedQuestion.context && (
-                        <p className="text-xs text-muted-foreground mt-1 break-words">{selectedQuestion.context}</p>
+                        <p className="text-xs text-muted-foreground mt-1 break-words">{renderInlineCodeText(selectedQuestion.context)}</p>
                       )}
                     </div>
                   </div>
@@ -3304,15 +3628,64 @@ function QuestionBankModal({
                       />
                     )}
                     <div className="min-w-0">
-                      <p className="text-sm font-semibold text-foreground leading-snug">{selectedQuestion.question}</p>
+                      <p className="text-sm font-semibold text-foreground leading-snug">{renderInlineCodeText(selectedQuestion.question)}</p>
                       {selectedQuestion.context && (
-                        <p className="text-xs text-muted-foreground mt-1 break-words">{selectedQuestion.context}</p>
+                        <p className="text-xs text-muted-foreground mt-1 break-words">{renderInlineCodeText(selectedQuestion.context)}</p>
                       )}
                     </div>
+                    {isAdminViewer && (
+                      <Button variant="ghost" size="sm" className="ml-auto h-7 text-xs shrink-0" onClick={() => setExpandedEditMode(true)}>
+                        <Pencil className="w-3 h-3 mr-1" /> Edit
+                      </Button>
+                    )}
                   </div>
                 </div>
                 <div className="p-4">
-                  <AnswerRenderer answer={selectedQuestion.answer} />
+                  {isAdminViewer && expandedEditMode ? (
+                    <div className="space-y-3">
+                      <Input value={expandedQuestionDraft} onChange={(e) => setExpandedQuestionDraft(e.target.value)} className="text-sm" />
+                      <Textarea value={expandedAnswerDraft} onChange={(e) => setExpandedAnswerDraft(e.target.value)} rows={8} className="text-sm font-mono" />
+                      {expandedEditPreview && (
+                        <div className="rounded-lg border border-border bg-secondary/20 p-3">
+                          <AnswerRenderer answer={expandedAnswerDraft} />
+                        </div>
+                      )}
+                      <div className="flex items-center justify-end gap-2">
+                        <Button variant="outline" size="sm" className="h-8 text-xs" onClick={() => setExpandedEditPreview((p) => !p)}>
+                          Preview
+                        </Button>
+                        <Button
+                          size="sm"
+                          className="h-8 text-xs"
+                          onClick={async () => {
+                            await saveQuestionEdit(
+                              { id: selectedQuestion.id },
+                              { question: expandedQuestionDraft, answer: expandedAnswerDraft }
+                            );
+                            setExpandedEditMode(false);
+                            setExpandedEditPreview(false);
+                          }}
+                        >
+                          Save
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-8 text-xs"
+                          onClick={() => {
+                            setExpandedEditMode(false);
+                            setExpandedEditPreview(false);
+                            setExpandedQuestionDraft(selectedQuestion.question);
+                            setExpandedAnswerDraft(selectedQuestion.answer);
+                          }}
+                        >
+                          Cancel
+                        </Button>
+                      </div>
+                    </div>
+                  ) : (
+                    <AnswerRenderer answer={selectedQuestion.answer} />
+                  )}
                 </div>
               </div>
             </section>
@@ -3336,8 +3709,8 @@ function QuestionBankModal({
                     <p className="text-sm text-muted-foreground">No foundational questions yet.</p>
                   ) : (
                     foundational.map((q) => (
-                      <QuestionBankCard
-                        key={q.id}
+                        <QuestionBankCard
+                          key={q.id}
                         onOpenDetail={() => {
                           setSelectedQuestion({
                             id: q.id,
@@ -3357,10 +3730,11 @@ function QuestionBankModal({
                         interacted={hasQuestionInteraction(q.id)}
                         label="Foundational"
                         starred={!!q.isStarred}
-                        codeStyle={detectCodeStyle(q.answer)}
-                        question={q.question}
-                        context={formatQuestionContext(q.unitTitle, q.topicTitle, q.subtopicTitle)}
-                      />
+                          codeStyle={detectCodeStyle(q.answer)}
+                          question={q.question}
+                          answer={q.answer}
+                          context={formatQuestionContext(q.unitTitle, q.topicTitle, q.subtopicTitle)}
+                        />
                     ))
                   )}
                 </section>
@@ -3372,8 +3746,8 @@ function QuestionBankModal({
                     <p className="text-sm text-muted-foreground">No applied questions yet.</p>
                   ) : (
                     applied.map((q) => (
-                      <QuestionBankCard
-                        key={q.id}
+                        <QuestionBankCard
+                          key={q.id}
                         onOpenDetail={() => {
                           setSelectedQuestion({
                             id: q.id,
@@ -3393,10 +3767,11 @@ function QuestionBankModal({
                         interacted={hasQuestionInteraction(q.id)}
                         label="Applied"
                         starred={!!q.isStarred}
-                        codeStyle={detectCodeStyle(q.answer)}
-                        question={q.question}
-                        context={formatQuestionContext(q.unitTitle, q.topicTitle, q.subtopicTitle)}
-                      />
+                          codeStyle={detectCodeStyle(q.answer)}
+                          question={q.question}
+                          answer={q.answer}
+                          context={formatQuestionContext(q.unitTitle, q.topicTitle, q.subtopicTitle)}
+                        />
                     ))
                   )}
                 </section>
@@ -3512,9 +3887,16 @@ function QuestionBankPane({
   const [highlightedQuestionId, setHighlightedQuestionId] = useState<number | null>(null);
   const resumeAppliedRef = useRef(false);
   const user = getStoredUser();
+  const isAdminViewer = (user?.role || "").toLowerCase() === "admin";
+  const queryClient = useQueryClient();
   const trackEventMutation = useTrackEvent();
+  const updateQuestionBankQuestionMutation = useUpdateQuestionBankQuestion();
   const answerTimersRef = useRef<Map<number, ReturnType<typeof setTimeout>>>(new Map());
   const [questionInteractionVersion, setQuestionInteractionVersion] = useState(0);
+  const [expandedEditMode, setExpandedEditMode] = useState(false);
+  const [expandedEditPreview, setExpandedEditPreview] = useState(false);
+  const [expandedQuestionDraft, setExpandedQuestionDraft] = useState("");
+  const [expandedAnswerDraft, setExpandedAnswerDraft] = useState("");
 
   const questionSessionKey = useCallback(
     (questionId: number) => `tracked_qb_${configId}_${questionId}`,
@@ -3597,6 +3979,35 @@ function QuestionBankPane({
       }
     };
   }, [selectedQuestion, configId, examParam, questionSessionKey, trackEventMutation, user]);
+  useEffect(() => {
+    if (!selectedQuestion) {
+      setExpandedEditMode(false);
+      setExpandedEditPreview(false);
+      setExpandedQuestionDraft("");
+      setExpandedAnswerDraft("");
+      return;
+    }
+    setExpandedQuestionDraft(selectedQuestion.question);
+    setExpandedAnswerDraft(selectedQuestion.answer);
+  }, [selectedQuestion]);
+
+  const saveQuestionEdit = async (
+    q: { id: number },
+    next: { question: string; answer: string },
+  ) => {
+    await updateQuestionBankQuestionMutation.mutateAsync({
+      configId,
+      questionId: q.id,
+      question: next.question,
+      answer: next.answer,
+    });
+    await queryClient.invalidateQueries({ queryKey: ["config-question-bank", configId] });
+    setSelectedQuestion((prev) =>
+      prev && prev.id === q.id
+        ? { ...prev, question: next.question, answer: next.answer }
+        : prev
+    );
+  };
 
   return (
     <div className="h-full flex flex-col border border-border bg-card overflow-hidden">
@@ -3617,7 +4028,7 @@ function QuestionBankPane({
               <Button
                 variant={qbSectionFilter === "all" ? "default" : "outline"}
                 size="sm"
-                className="h-8"
+                className="h-8 text-xs font-medium"
                 onClick={() => setQbSectionFilter("all")}
               >
                 All ({validQuestions.length})
@@ -3625,7 +4036,7 @@ function QuestionBankPane({
               <Button
                 variant={qbSectionFilter === "foundational" ? "default" : "outline"}
                 size="sm"
-                className="h-8"
+                className="h-8 text-xs font-medium"
                 onClick={() => setQbSectionFilter("foundational")}
               >
                 Foundational ({foundational.length})
@@ -3633,7 +4044,7 @@ function QuestionBankPane({
               <Button
                 variant={qbSectionFilter === "applied" ? "default" : "outline"}
                 size="sm"
-                className="h-8"
+                className="h-8 text-xs font-medium"
                 onClick={() => setQbSectionFilter("applied")}
               >
                 Applied ({applied.length})
@@ -3650,7 +4061,7 @@ function QuestionBankPane({
             <Button
               variant={qbSectionFilter === "all" ? "default" : "outline"}
               size="sm"
-              className="h-8"
+              className="h-8 text-xs font-medium"
               onClick={() => setQbSectionFilter("all")}
             >
               All ({validQuestions.length})
@@ -3658,7 +4069,7 @@ function QuestionBankPane({
             <Button
               variant={qbSectionFilter === "foundational" ? "default" : "outline"}
               size="sm"
-              className="h-8"
+              className="h-8 text-xs font-medium"
               onClick={() => setQbSectionFilter("foundational")}
             >
               Foundational ({foundational.length})
@@ -3666,7 +4077,7 @@ function QuestionBankPane({
             <Button
               variant={qbSectionFilter === "applied" ? "default" : "outline"}
               size="sm"
-              className="h-8"
+              className="h-8 text-xs font-medium"
               onClick={() => setQbSectionFilter("applied")}
             >
               Applied ({applied.length})
@@ -3703,16 +4114,65 @@ function QuestionBankPane({
                   {selectedQuestion.starred && (
                     <Star className="shrink-0 w-3.5 h-3.5 mt-0.5 text-amber-500 fill-amber-400" aria-label="Starred question" />
                   )}
+                  {isAdminViewer && (
+                    <Button variant="ghost" size="sm" className="ml-auto h-7 text-xs" onClick={() => setExpandedEditMode(true)}>
+                      <Pencil className="w-3 h-3 mr-1" /> Edit
+                    </Button>
+                  )}
                 </div>
               </div>
               <div className="p-4 border-b border-blue-100 bg-white/70">
-                <p className="text-sm font-semibold text-foreground leading-snug">{selectedQuestion.question}</p>
+                <p className="text-sm font-semibold text-foreground leading-snug">{renderInlineCodeText(selectedQuestion.question)}</p>
                 {selectedQuestion.context && (
-                  <p className="text-xs text-muted-foreground mt-1 break-words">{selectedQuestion.context}</p>
+                  <p className="text-xs text-muted-foreground mt-1 break-words">{renderInlineCodeText(selectedQuestion.context)}</p>
                 )}
               </div>
               <div className="p-4">
-                <AnswerRenderer answer={selectedQuestion.answer} />
+                {isAdminViewer && expandedEditMode ? (
+                  <div className="space-y-3">
+                    <Input value={expandedQuestionDraft} onChange={(e) => setExpandedQuestionDraft(e.target.value)} className="text-sm" />
+                    <Textarea value={expandedAnswerDraft} onChange={(e) => setExpandedAnswerDraft(e.target.value)} rows={8} className="text-sm font-mono" />
+                    {expandedEditPreview && (
+                      <div className="rounded-lg border border-border bg-secondary/20 p-3">
+                        <AnswerRenderer answer={expandedAnswerDraft} />
+                      </div>
+                    )}
+                    <div className="flex items-center justify-end gap-2">
+                      <Button variant="outline" size="sm" className="h-8 text-xs" onClick={() => setExpandedEditPreview((p) => !p)}>
+                        Preview
+                      </Button>
+                      <Button
+                        size="sm"
+                        className="h-8 text-xs"
+                        onClick={async () => {
+                          await saveQuestionEdit(
+                            { id: selectedQuestion.id },
+                            { question: expandedQuestionDraft, answer: expandedAnswerDraft }
+                          );
+                          setExpandedEditMode(false);
+                          setExpandedEditPreview(false);
+                        }}
+                      >
+                        Save
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-8 text-xs"
+                        onClick={() => {
+                          setExpandedEditMode(false);
+                          setExpandedEditPreview(false);
+                          setExpandedQuestionDraft(selectedQuestion.question);
+                          setExpandedAnswerDraft(selectedQuestion.answer);
+                        }}
+                      >
+                        Cancel
+                      </Button>
+                    </div>
+                  </div>
+                ) : (
+                  <AnswerRenderer answer={selectedQuestion.answer} />
+                )}
               </div>
             </div>
           </section>
@@ -3758,6 +4218,7 @@ function QuestionBankPane({
                       starred={!!q.isStarred}
                       codeStyle={detectCodeStyle(q.answer)}
                       question={q.question}
+                      answer={q.answer}
                       context={formatQuestionContext(q.unitTitle, q.topicTitle, q.subtopicTitle)}
                     />
                   ))
@@ -3793,6 +4254,7 @@ function QuestionBankPane({
                       starred={!!q.isStarred}
                       codeStyle={detectCodeStyle(q.answer)}
                       question={q.question}
+                      answer={q.answer}
                       context={formatQuestionContext(q.unitTitle, q.topicTitle, q.subtopicTitle)}
                     />
                   ))
@@ -3820,6 +4282,7 @@ function QuestionBankCard({
   starred,
   codeStyle,
   question,
+  answer,
   context,
   onOpenDetail,
 }: {
@@ -3831,11 +4294,13 @@ function QuestionBankCard({
   starred?: boolean;
   codeStyle: CodeStyle;
   question: string;
+  answer: string;
   context: string;
   onOpenDetail: () => void;
 }) {
   const codeBadge = codeStyleBadgeText(codeStyle);
   const hasContext = String(context || "").trim().length > 0;
+
   return (
     <div
       id={cardId}
@@ -3874,8 +4339,8 @@ function QuestionBankCard({
       </div>
 
       <div className="px-4 py-3 border-b border-blue-100 bg-white/70">
-        <p className="text-sm font-semibold text-foreground leading-snug">{question}</p>
-        {hasContext && <p className="text-xs text-muted-foreground mt-1 break-words">{context}</p>}
+        <p className="text-[13px] font-medium text-foreground leading-snug">{renderInlineCodeText(question)}</p>
+        {hasContext && <p className="text-[11px] text-muted-foreground mt-1 break-words">{renderInlineCodeText(context)}</p>}
       </div>
 
       <div className="px-4 py-3">

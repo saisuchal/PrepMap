@@ -29,6 +29,43 @@ export const useDeleteConfig = <
   });
 };
 
+export const updateQuestionBankQuestion = async (
+  configId: string,
+  questionId: number,
+  payload: { question: string; answer: string },
+  options?: RequestInit,
+) => {
+  return customFetch<SuccessResponse>(`/api/configs/${encodeURIComponent(configId)}/question-bank/questions/${questionId}`, {
+    ...options,
+    method: "PUT",
+    body: JSON.stringify(payload),
+  });
+};
+
+export const useUpdateQuestionBankQuestion = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(
+  options?: UseMutationOptions<
+    SuccessResponse,
+    TError,
+    { configId: string; questionId: number; question: string; answer: string },
+    TContext
+  >,
+) => {
+  return useMutation<
+    SuccessResponse,
+    TError,
+    { configId: string; questionId: number; question: string; answer: string },
+    TContext
+  >({
+    mutationKey: ["updateQuestionBankQuestion"],
+    mutationFn: ({ configId, questionId, question, answer }) =>
+      updateQuestionBankQuestion(configId, questionId, { question, answer }),
+    ...options,
+  });
+};
+
 export interface UniversityAnalyticsRow {
   universityId: string;
   totalStudents: number;

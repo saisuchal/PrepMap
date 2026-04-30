@@ -314,11 +314,6 @@ router.put("/subtopics/:id", requireAdmin, async (req, res) => {
       return;
     }
 
-    if (!content.unitSubtopicId) {
-      res.status(400).json({ error: "Subtopic content is not mapped to canonical tables." });
-      return;
-    }
-
     const canonicalNodeId = String(content.canonicalNodeId || "").trim();
     if (canonicalNodeId) {
       await db
@@ -338,30 +333,32 @@ router.put("/subtopics/:id", requireAdmin, async (req, res) => {
       })
       .where(eq(nodesTable.id, id));
 
-    await withRequestDbContext(authClaims, async (tx) => {
-      await tx
-        .delete(configQuestionsTable)
-        .where(
-          and(
-            eq(configQuestionsTable.configId, content.configId),
-            eq(configQuestionsTable.unitSubtopicId, content.unitSubtopicId),
-          ),
-        );
+    if (content.unitSubtopicId) {
+      await withRequestDbContext(authClaims, async (tx) => {
+        await tx
+          .delete(configQuestionsTable)
+          .where(
+            and(
+              eq(configQuestionsTable.configId, content.configId),
+              eq(configQuestionsTable.unitSubtopicId, content.unitSubtopicId),
+            ),
+          );
 
-      if (body.questions.length > 0) {
-        await tx.insert(configQuestionsTable).values(
-          body.questions.map((q) => ({
-            configId: content.configId,
-            unitSubtopicId: content.unitSubtopicId!,
-            markType: q.markType,
-            question: q.question,
-            answer: q.answer,
-            isStarred: q.isStarred ?? false,
-            starSource: q.starSource ?? (q.isStarred ? "manual" : "none"),
-          })),
-        );
-      }
-    });
+        if (body.questions.length > 0) {
+          await tx.insert(configQuestionsTable).values(
+            body.questions.map((q) => ({
+              configId: content.configId,
+              unitSubtopicId: content.unitSubtopicId!,
+              markType: q.markType,
+              question: q.question,
+              answer: q.answer,
+              isStarred: q.isStarred ?? false,
+              starSource: q.starSource ?? (q.isStarred ? "manual" : "none"),
+            })),
+          );
+        }
+      });
+    }
 
     res.json({ success: true });
   } catch (error) {
