@@ -110,60 +110,58 @@ function PathNavBlock({
   const hasNext = nextItems.length > 0;
 
   return (
-    <section className="grid gap-4 sm:grid-cols-2 sm:items-start">
+    <section className="grid grid-cols-2 items-start gap-2">
       <div className="min-w-0">
         {hasPrereq ? (
-          <div className="flex flex-wrap gap-2">
+          <div className="flex flex-wrap justify-start gap-2">
             {prereqs.map((item) => (
               <Button
                 key={item}
                 type="button"
+                data-nav-chip="v2"
                 variant="outline"
                 onClick={() => onNavigate?.(String(prerequisiteNodeIds?.[0] || ""))}
                 disabled={!String(prerequisiteNodeIds?.[0] || "").trim()}
                 title={String(prerequisiteNodeIds?.[0] || "").trim() ? `Open ${item}` : undefined}
-                className="relative h-9 rounded-full border-border bg-background px-4 text-sm font-medium transition-colors hover:border-primary/40 hover:bg-primary/5"
+                className="relative inline-flex h-9 max-w-full min-w-0 items-center rounded-full border border-blue-200 bg-white px-4 text-sm font-medium leading-5 antialiased text-slate-800 transition-colors hover:border-blue-300 hover:bg-blue-50/40 focus-visible:ring-0 focus-visible:ring-offset-0"
               >
                 {isNodeCompleted?.(String(prerequisiteNodeIds?.[0] || "")) ? (
                   <span className="absolute -top-1 -right-1 rounded-full bg-white p-0.5 border border-green-200">
                     <CheckCircle2 className="w-3.5 h-3.5 text-green-600" />
                   </span>
                 ) : null}
-                <ChevronLeft className="w-4 h-4 mr-2 text-primary/70" />
-                {item}
+                <ChevronLeft className="w-4 h-4 mr-2 shrink-0 text-primary/70" />
+                <span className="min-w-0 truncate leading-5">{item}</span>
               </Button>
             ))}
           </div>
-        ) : (
-          <div className="h-9" />
-        )}
+        ) : null}
       </div>
-      <div className="min-w-0 sm:flex sm:justify-end">
+      <div className="min-w-0">
         {hasNext ? (
-          <div className="flex flex-wrap gap-2 sm:justify-end">
+          <div className="flex flex-wrap justify-end gap-2">
             {nextItems.map((item) => (
               <Button
                 key={item}
                 type="button"
+                data-nav-chip="v2"
                 variant="outline"
                 onClick={() => onNavigate?.(String(nextRecommendedNodeIds?.[0] || ""))}
                 disabled={!String(nextRecommendedNodeIds?.[0] || "").trim()}
                 title={String(nextRecommendedNodeIds?.[0] || "").trim() ? `Open ${item}` : undefined}
-                className="relative h-9 rounded-full border-primary/25 bg-primary/5 px-4 text-sm font-medium transition-colors hover:border-primary/50 hover:bg-primary/10"
+                className="relative inline-flex h-9 max-w-full min-w-0 items-center rounded-full border border-blue-200 bg-white px-4 text-sm font-medium leading-5 antialiased text-slate-800 transition-colors hover:border-blue-300 hover:bg-blue-50/40 focus-visible:ring-0 focus-visible:ring-offset-0"
               >
                 {isNodeCompleted?.(String(nextRecommendedNodeIds?.[0] || "")) ? (
                   <span className="absolute -top-1 -left-1 rounded-full bg-white p-0.5 border border-green-200">
                     <CheckCircle2 className="w-3.5 h-3.5 text-green-600" />
                   </span>
                 ) : null}
-                {item}
-                <ChevronRight className="w-4 h-4 ml-2 text-primary/70" />
+                <span className="min-w-0 truncate leading-5">{item}</span>
+                <ChevronRight className="w-4 h-4 ml-2 shrink-0 text-primary/70" />
               </Button>
             ))}
           </div>
-        ) : (
-          <div className="h-9" />
-        )}
+        ) : null}
       </div>
     </section>
   );
@@ -200,49 +198,6 @@ function SupportNoteBlock({ text }: { text?: string | null }) {
         <AnswerRenderer answer={repairBrokenFormulaBullets(value)} />
       </div>
     </section>
-  );
-}
-
-function ChainNavButton({
-  title,
-  onClick,
-  done = false,
-  align = "start",
-}: {
-  label?: string;
-  title?: string | null;
-  onClick: () => void;
-  done?: boolean;
-  align?: "start" | "end";
-}) {
-  const value = String(title || "").trim();
-  return (
-    <div className={align === "end" ? "flex justify-end" : "flex justify-start"}>
-      {value ? (
-        <Button
-          variant="outline"
-          onClick={onClick}
-          className={
-            align === "end"
-              ? "relative h-9 rounded-full border-primary/25 bg-primary/5 px-4 text-xs sm:text-sm font-medium transition-colors hover:border-primary/50 hover:bg-primary/10"
-              : "relative h-9 rounded-full border-border bg-background px-4 text-xs sm:text-sm font-medium transition-colors hover:border-primary/40 hover:bg-primary/5"
-          }
-        >
-          {done ? (
-            <span className={align === "end"
-              ? "absolute -top-1 -left-1 rounded-full bg-white p-0.5 border border-green-200"
-              : "absolute -top-1 -right-1 rounded-full bg-white p-0.5 border border-green-200"}>
-              <CheckCircle2 className="w-3.5 h-3.5 text-green-600" />
-            </span>
-          ) : null}
-          {align === "end" ? null : <ChevronLeft className="w-4 h-4 mr-2 text-primary/70" />}
-          {value}
-          {align === "end" ? <ChevronRight className="w-4 h-4 ml-2 text-primary/70" /> : null}
-        </Button>
-      ) : (
-        <div className="h-9" />
-      )}
-    </div>
   );
 }
 
@@ -1841,21 +1796,21 @@ export default function Roadmap() {
   return (
     <div className="flex flex-col h-[calc(100vh-4rem)]">
       <div className="px-4 sm:px-6 py-3 border-b border-border bg-card shrink-0">
-        <div className="relative grid grid-cols-[auto_1fr_auto] items-center gap-3">
-          <div className="flex items-center gap-3 min-w-0">
+        <div className="relative grid grid-cols-[auto_1fr_auto] items-center gap-2 sm:gap-3">
+          <div className="flex items-center gap-2 sm:gap-3 min-w-0">
             <Button variant="ghost" size="icon" className="shrink-0" onClick={() => setLocation(backPath)}>
               <ArrowLeft className="w-4 h-4" />
             </Button>
             <div className="min-w-0">
-              <h1 className="text-lg sm:text-xl font-display font-bold text-foreground truncate flex items-center gap-2">
+              <h1 className="text-base sm:text-xl font-display font-bold text-foreground truncate flex items-center gap-1.5 sm:gap-2">
                 <Layers className="w-5 h-5 text-primary shrink-0" />
                 {subject}
               </h1>
-              {subtitleMeta && <p className="text-xs text-muted-foreground truncate">{subtitleMeta}</p>}
+              {subtitleMeta && <p className="text-[11px] sm:text-xs text-muted-foreground truncate">{subtitleMeta}</p>}
             </div>
           </div>
-          <div className="flex items-center justify-center gap-2 min-w-0">
-            <div ref={globalSearchRef} className="relative w-[14rem] lg:w-[18rem] xl:w-[20rem]">
+          <div ref={globalSearchRef} className="flex items-center justify-center gap-2 min-w-0">
+            <div className="relative hidden md:block w-[14rem] lg:w-[18rem] xl:w-[20rem]">
               <div className="relative">
                 <Search className="w-4 h-4 text-muted-foreground absolute left-3 top-1/2 -translate-y-1/2" />
                 <input
@@ -1920,6 +1875,83 @@ export default function Roadmap() {
                 </div>
               )}
             </div>
+            {isMobileViewport && (
+              <div className="relative">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="h-8 w-8 rounded-full border-border/70 bg-background/90 p-0 shadow-sm"
+                  onClick={() => setIsGlobalSearchOpen((prev) => !prev)}
+                  aria-label="Search roadmap nodes"
+                  title="Search roadmap nodes"
+                >
+                  <Search className="w-4 h-4 text-slate-600" />
+                </Button>
+                {isGlobalSearchOpen && (
+                  <div className="absolute right-0 top-full mt-2 z-50 w-[min(92vw,22rem)] rounded-xl border border-border bg-card shadow-xl max-h-[65vh] overflow-y-auto">
+                    <div className="p-2 border-b border-border/70">
+                      <div className="relative">
+                        <Search className="w-4 h-4 text-muted-foreground absolute left-3 top-1/2 -translate-y-1/2" />
+                        <input
+                          type="text"
+                          value={globalSearchQuery}
+                          autoFocus
+                          onChange={(e) => setGlobalSearchQuery(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter" && globalSearchResults.length > 0) {
+                              e.preventDefault();
+                              handleGlobalSearchSelect(globalSearchResults[0]!.id);
+                            }
+                            if (e.key === "Escape") {
+                              setIsGlobalSearchOpen(false);
+                            }
+                          }}
+                          placeholder="Search units, topics, subtopics..."
+                          className="h-9 w-full rounded-lg border border-border bg-background pl-9 pr-3 text-sm text-foreground placeholder:text-muted-foreground outline-none focus:ring-2 focus:ring-primary/40"
+                        />
+                      </div>
+                    </div>
+                    {globalSearchQuery.trim().length === 0 ? (
+                      <p className="px-3 py-2.5 text-xs text-muted-foreground">
+                        Type to search across all units, topics, and subtopics.
+                      </p>
+                    ) : globalSearchResults.length === 0 ? (
+                      <p className="px-3 py-2.5 text-xs text-muted-foreground">
+                        No matching roadmap nodes found.
+                      </p>
+                    ) : (
+                      <div className="py-1">
+                        {globalSearchResults.map((item) => (
+                          <button
+                            key={item.id}
+                            type="button"
+                            onClick={() => handleGlobalSearchSelect(item.id)}
+                            className="w-full px-3 py-2 text-left hover:bg-secondary/60 transition-colors border-b border-border/40 last:border-0"
+                          >
+                            <div className="flex items-center gap-2 min-w-0">
+                              <span className="text-sm font-semibold text-foreground truncate">{item.title}</span>
+                              <span
+                                className={`shrink-0 rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${
+                                  item.type === "unit"
+                                    ? "bg-blue-100 text-blue-700"
+                                    : item.type === "topic"
+                                      ? "bg-violet-100 text-violet-700"
+                                      : "bg-emerald-100 text-emerald-700"
+                                }`}
+                              >
+                                {item.type}
+                              </span>
+                            </div>
+                            <p className="text-xs text-muted-foreground truncate">{item.path}</p>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
             {!isMobileViewport && (
               <Button
                 variant="default"
@@ -1933,17 +1965,7 @@ export default function Roadmap() {
             )}
           </div>
           <div className="flex items-center gap-1 shrink-0">
-            {isMobileViewport ? (
-              <Button
-                variant="default"
-                size="sm"
-                className="h-8 px-3 gap-1.5"
-                onClick={() => setViewMode("map")}
-              >
-                <List className="w-3.5 h-3.5" />
-                List
-              </Button>
-            ) : (
+            {isMobileViewport ? null : (
               <>
                 <Button
                   variant={viewMode === "list" ? "default" : "outline"}
@@ -2777,8 +2799,6 @@ function ContentModal({
   const prerequisiteNodeId = isTopic ? topicPrereqNodeId : subtopicPrereqNodeId;
   const nextTitle = isTopic ? topicNextTitle : subtopicNextTitle;
   const nextNodeId = isTopic ? topicNextNodeId : subtopicNextNodeId;
-  const prerequisiteDone = isNodeCompleted?.(prerequisiteNodeId) ?? false;
-  const nextDone = isNodeCompleted?.(nextNodeId) ?? false;
   const showExploreAction = isTopic && !!firstSubtopicId;
   const subtopicPathPrereqTitles = prerequisiteTitle ? [prerequisiteTitle] : [];
   const subtopicPathPrereqIds = prerequisiteNodeId ? [prerequisiteNodeId] : [];
@@ -2961,21 +2981,14 @@ function ContentModal({
                   <SupportNoteBlock text={topicParts.supportNote} />
                 </>
               )}
-              <div className="flex items-center justify-between gap-3">
-                <ChainNavButton
-                  label="Previous"
-                  title={prerequisiteTitle}
-                  done={prerequisiteDone}
-                  onClick={() => onNavigate(prerequisiteNodeId)}
-                />
-                <ChainNavButton
-                  label="Next"
-                  title={nextTitle}
-                  done={nextDone}
-                  onClick={() => onNavigate(nextNodeId)}
-                  align="end"
-                />
-              </div>
+              <PathNavBlock
+                prerequisiteTitles={prerequisiteTitle ? [prerequisiteTitle] : []}
+                nextRecommendedTitles={nextTitle ? [nextTitle] : []}
+                prerequisiteNodeIds={prerequisiteNodeId ? [prerequisiteNodeId] : []}
+                nextRecommendedNodeIds={nextNodeId ? [nextNodeId] : []}
+                isNodeCompleted={isNodeCompleted}
+                onNavigate={onNavigate}
+              />
             </>
           )}
 
@@ -3051,19 +3064,14 @@ function ContentModal({
                       <SupportNoteBlock text={subtopicParts.supportNote} />
                     </>
                   )}
-                  <div className="flex items-center justify-between gap-3">
-                    <ChainNavButton
-                      title={prerequisiteTitle}
-                      done={prerequisiteDone}
-                      onClick={() => onNavigate(prerequisiteNodeId)}
-                    />
-                    <ChainNavButton
-                      title={nextTitle}
-                      done={nextDone}
-                      onClick={() => onNavigate(nextNodeId)}
-                      align="end"
-                    />
-                  </div>
+                  <PathNavBlock
+                    prerequisiteTitles={prerequisiteTitle ? [prerequisiteTitle] : []}
+                    nextRecommendedTitles={nextTitle ? [nextTitle] : []}
+                    prerequisiteNodeIds={prerequisiteNodeId ? [prerequisiteNodeId] : []}
+                    nextRecommendedNodeIds={nextNodeId ? [nextNodeId] : []}
+                    isNodeCompleted={isNodeCompleted}
+                    onNavigate={onNavigate}
+                  />
                 </>
               ) : (
                 <div className="text-center py-8">
@@ -3221,21 +3229,14 @@ function ContentModal({
                   <SupportNoteBlock text={topicParts.supportNote} />
                 </>
               )}
-              <div className="flex items-center justify-between gap-3">
-                <ChainNavButton
-                  label="Previous"
-                  title={prerequisiteTitle}
-                  done={prerequisiteDone}
-                  onClick={() => onNavigate(prerequisiteNodeId)}
-                />
-                <ChainNavButton
-                  label="Next"
-                  title={nextTitle}
-                  done={nextDone}
-                  onClick={() => onNavigate(nextNodeId)}
-                  align="end"
-                />
-              </div>
+              <PathNavBlock
+                prerequisiteTitles={prerequisiteTitle ? [prerequisiteTitle] : []}
+                nextRecommendedTitles={nextTitle ? [nextTitle] : []}
+                prerequisiteNodeIds={prerequisiteNodeId ? [prerequisiteNodeId] : []}
+                nextRecommendedNodeIds={nextNodeId ? [nextNodeId] : []}
+                isNodeCompleted={isNodeCompleted}
+                onNavigate={onNavigate}
+              />
             </>
           )}
 
@@ -3301,19 +3302,14 @@ function ContentModal({
                       <SupportNoteBlock text={subtopicParts.supportNote} />
                     </>
                   )}
-                  <div className="flex items-center justify-between gap-3">
-                    <ChainNavButton
-                      title={prerequisiteTitle}
-                      done={prerequisiteDone}
-                      onClick={() => onNavigate(prerequisiteNodeId)}
-                    />
-                    <ChainNavButton
-                      title={nextTitle}
-                      done={nextDone}
-                      onClick={() => onNavigate(nextNodeId)}
-                      align="end"
-                    />
-                  </div>
+                  <PathNavBlock
+                    prerequisiteTitles={prerequisiteTitle ? [prerequisiteTitle] : []}
+                    nextRecommendedTitles={nextTitle ? [nextTitle] : []}
+                    prerequisiteNodeIds={prerequisiteNodeId ? [prerequisiteNodeId] : []}
+                    nextRecommendedNodeIds={nextNodeId ? [nextNodeId] : []}
+                    isNodeCompleted={isNodeCompleted}
+                    onNavigate={onNavigate}
+                  />
 
                   <div className="h-6 w-full flex items-center justify-center">
                     <div className="w-1/2 h-px bg-gradient-to-r from-transparent via-border to-transparent" />

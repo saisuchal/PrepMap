@@ -45,50 +45,48 @@ function PathNavBlock({
   const hasNext = nextItems.length > 0;
 
   return (
-    <section className="grid gap-4 sm:grid-cols-2 sm:items-start">
+    <section className="grid grid-cols-2 items-start gap-2">
       <div className="min-w-0">
         {hasPrereq ? (
-          <div className="flex flex-wrap gap-2">
+          <div className="flex flex-wrap justify-start gap-2">
             {prereqs.map((item) => (
               <Button
                 key={item}
+                data-nav-chip="v2"
                 type="button"
                 variant="outline"
                 onClick={() => onNavigate?.(String(prerequisiteNodeIds?.[0] || ""))}
                 disabled={!String(prerequisiteNodeIds?.[0] || "").trim()}
                 title={String(prerequisiteNodeIds?.[0] || "").trim() ? `Open ${item}` : undefined}
-                className="h-9 rounded-full border-border bg-background px-4 text-sm font-medium transition-colors hover:border-primary/40 hover:bg-primary/5"
+                className="relative inline-flex h-9 max-w-full min-w-0 items-center rounded-full border border-blue-200 bg-white px-4 text-sm font-medium leading-5 antialiased text-slate-800 transition-colors hover:border-blue-300 hover:bg-blue-50/40 focus-visible:ring-0 focus-visible:ring-offset-0"
               >
-                <ChevronLeft className="w-4 h-4 mr-2 text-primary/70" />
-                {item}
+                <ChevronLeft className="w-4 h-4 mr-2 shrink-0 text-primary/70" />
+                <span className="min-w-0 truncate leading-5">{item}</span>
               </Button>
             ))}
           </div>
-        ) : (
-          <div className="h-9" />
-        )}
+        ) : null}
       </div>
-      <div className="min-w-0 sm:flex sm:justify-end">
+      <div className="min-w-0">
         {hasNext ? (
-          <div className="flex flex-wrap gap-2 sm:justify-end">
+          <div className="flex flex-wrap justify-end gap-2">
             {nextItems.map((item) => (
               <Button
                 key={item}
+                data-nav-chip="v2"
                 type="button"
                 variant="outline"
                 onClick={() => onNavigate?.(String(nextRecommendedNodeIds?.[0] || ""))}
                 disabled={!String(nextRecommendedNodeIds?.[0] || "").trim()}
                 title={String(nextRecommendedNodeIds?.[0] || "").trim() ? `Open ${item}` : undefined}
-                className="h-9 rounded-full border-primary/25 bg-primary/5 px-4 text-sm font-medium transition-colors hover:border-primary/50 hover:bg-primary/10"
+                className="relative inline-flex h-9 max-w-full min-w-0 items-center rounded-full border border-blue-200 bg-white px-4 text-sm font-medium leading-5 antialiased text-slate-800 transition-colors hover:border-blue-300 hover:bg-blue-50/40 focus-visible:ring-0 focus-visible:ring-offset-0"
               >
-                {item}
-                <ChevronRight className="w-4 h-4 ml-2 text-primary/70" />
+                <span className="min-w-0 truncate leading-5">{item}</span>
+                <ChevronRight className="w-4 h-4 ml-2 shrink-0 text-primary/70" />
               </Button>
             ))}
           </div>
-        ) : (
-          <div className="h-9" />
-        )}
+        ) : null}
       </div>
     </section>
   );
@@ -121,39 +119,6 @@ function SupportNoteBlock({ text }: { text?: string | null }) {
       </div>
       <p className="text-sm sm:text-base text-sky-950 whitespace-pre-line leading-relaxed">{repairBrokenFormulaBullets(value)}</p>
     </section>
-  );
-}
-
-function ChainNavButton({
-  title,
-  onClick,
-  align = "start",
-}: {
-  title?: string | null;
-  onClick: () => void;
-  align?: "start" | "end";
-}) {
-  const value = String(title || "").trim();
-  return (
-    <div className={align === "end" ? "flex justify-end" : "flex justify-start"}>
-      {value ? (
-        <Button
-          variant="outline"
-          onClick={onClick}
-          className={
-            align === "end"
-              ? "h-9 rounded-full border-primary/25 bg-primary/5 px-4 text-sm font-medium transition-colors hover:border-primary/50 hover:bg-primary/10"
-              : "h-9 rounded-full border-border bg-background px-4 text-sm font-medium transition-colors hover:border-primary/40 hover:bg-primary/5"
-          }
-        >
-          {align === "end" ? null : <ChevronLeft className="w-4 h-4 mr-2 text-primary/70" />}
-          {value}
-          {align === "end" ? <ChevronRight className="w-4 h-4 ml-2 text-primary/70" /> : null}
-        </Button>
-      ) : (
-        <div className="h-9" />
-      )}
-    </div>
   );
 }
 
@@ -362,17 +327,13 @@ export default function Subtopic() {
 
           <ExampleBlock text={structured.exampleBlock} />
           <SupportNoteBlock text={structured.supportNote} />
-          <div className="flex items-center justify-between gap-3">
-            <ChainNavButton
-              title={prerequisiteTitle}
-              onClick={() => navigateToNode(prerequisiteNodeId)}
-            />
-            <ChainNavButton
-              title={nextTitle}
-              onClick={() => navigateToNode(nextNodeId)}
-              align="end"
-            />
-          </div>
+          <PathNavBlock
+            prerequisiteTitles={prerequisiteTitle ? [prerequisiteTitle] : []}
+            nextRecommendedTitles={nextTitle ? [nextTitle] : []}
+            prerequisiteNodeIds={prerequisiteNodeId ? [prerequisiteNodeId] : []}
+            nextRecommendedNodeIds={nextNodeId ? [nextNodeId] : []}
+            onNavigate={navigateToNode}
+          />
 
           {(foundationalQuestions.length > 0 || appliedQuestions.length > 0) && (
             <section className="space-y-6">
