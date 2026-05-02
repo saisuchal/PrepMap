@@ -1,4 +1,4 @@
-﻿import { useState, useMemo, useRef, useEffect, useCallback } from "react";
+import { useState, useMemo, useRef, useEffect, useCallback } from "react";
 import { useLocation } from "wouter";
 import { motion, AnimatePresence } from "framer-motion";
 import { useQueryClient } from "@tanstack/react-query";
@@ -308,7 +308,7 @@ function isLikelyQuestionText(value: string): boolean {
   if (!text) return false;
 
   const informationalPatterns = [
-    /^part\s*[-�]?\s*[abc]\b/i,
+    /^part\s*[-?]?\s*[abc]\b/i,
     /^answer\b/i,
     /^course outcomes?\b/i,
     /^knowledge level\b/i,
@@ -316,7 +316,7 @@ function isLikelyQuestionText(value: string): boolean {
     /^marks?\b/i,
     /^q\.?\s*no\b/i,
     /^or$/i,
-    /^k[1-6]\s*[-�]?\s*(remember|understand|apply|analy[sz]e|evaluate|create)\b/i,
+    /^k[1-6]\s*[-?]?\s*(remember|understand|apply|analy[sz]e|evaluate|create)\b/i,
   ];
 
   if (informationalPatterns.some((pattern) => pattern.test(text))) {
@@ -325,8 +325,8 @@ function isLikelyQuestionText(value: string): boolean {
 
   // Common Bloom's-level listing accidentally extracted as "questions".
   if (
-    /k1\s*[-�]?\s*remember/i.test(text) &&
-    /k2\s*[-�]?\s*understand/i.test(text)
+    /k1\s*[-?]?\s*remember/i.test(text) &&
+    /k2\s*[-?]?\s*understand/i.test(text)
   ) {
     return false;
   }
@@ -356,7 +356,7 @@ function highlightCode(code: string, language: string): string {
       out = tokenChars[n % tokenChars.length] + out;
       n = Math.floor(n / tokenChars.length) - 1;
     } while (n >= 0);
-    return `�${out}�`;
+    return `?${out}?`;
   };
   let tokenIndex = 0;
 
@@ -462,7 +462,7 @@ function AnswerRenderer({ answer }: { answer: string }) {
             .map((s) => s.trim())
             .filter(Boolean);
           const numberedItemPattern = /(?:^|\s)(?:\d+[.)]|[ivxlcdm]+[.)])\s+/im;
-          const bulletMarkerPattern = /(?:^|\n)\s*[-*�]\s+/m;
+          const bulletMarkerPattern = /(?:^|\n)\s*[-*?]\s+/m;
           const listCuePattern = /\b(steps?|advantages?|disadvantages?|differences?|types?|uses?|key points?|points?)\b/i;
           const listConnectorPattern = /\b(first|second|third|next|finally)\b/i;
           const explicitListSignals =
@@ -512,7 +512,7 @@ function AnswerRenderer({ answer }: { answer: string }) {
         return (
           <div key={`code-${idx}`} className="rounded-lg overflow-hidden border border-slate-700/70 bg-slate-950">
             <div className="px-3 py-1.5 text-[11px] font-semibold tracking-wide text-slate-300 bg-slate-900 border-b border-slate-700/70">
-              Stand-alone Example � {languageLabel}
+              Stand-alone Example ? {languageLabel}
             </div>
             <pre className="p-4 overflow-x-auto text-[13px] leading-6 font-mono text-slate-100">
               <code dangerouslySetInnerHTML={{ __html: highlightCode(seg.code, seg.language) }} />
@@ -3469,6 +3469,8 @@ function QuestionBankModal({
   const [expandedEditPreview, setExpandedEditPreview] = useState(false);
   const [expandedQuestionDraft, setExpandedQuestionDraft] = useState("");
   const [expandedAnswerDraft, setExpandedAnswerDraft] = useState("");
+  const listScrollRef = useRef<HTMLDivElement>(null);
+  const listScrollTopRef = useRef(0);
 
   const questionSessionKey = useCallback(
     (questionId: number) => `tracked_qb_${configId}_${questionId}`,
@@ -3596,6 +3598,69 @@ function QuestionBankModal({
     );
   };
 
+  const openQuestionDetail = useCallback(
+    (
+      q: (typeof validQuestions)[number],
+      label: "Foundational" | "Applied",
+      number: number,
+    ) => {
+      listScrollTopRef.current = listScrollRef.current?.scrollTop ?? 0;
+      setSelectedQuestion({
+        id: q.id,
+        number,
+        label,
+        starred: !!q.isStarred,
+        codeStyle: detectCodeStyle(q.answer),
+        question: q.question,
+        context: formatQuestionContext(q.unitTitle, q.topicTitle, q.subtopicTitle),
+        answer: q.answer,
+        subtopicId: q.subtopicId,
+      });
+    },
+    [validQuestions],
+  );
+
+  const displayedOrderedQuestions = useMemo(
+    () =>
+      [
+        ...(qbSectionFilter === "all" || qbSectionFilter === "foundational"
+          ? foundational.map((q) => ({
+              q,
+              label: "Foundational" as const,
+              number: foundationalNumberById.get(q.id) ?? 0,
+            }))
+          : []),
+        ...(qbSectionFilter === "all" || qbSectionFilter === "applied"
+          ? applied.map((q) => ({
+              q,
+              label: "Applied" as const,
+              number: appliedNumberById.get(q.id) ?? 0,
+            }))
+          : []),
+      ],
+    [qbSectionFilter, foundational, applied, foundationalNumberById, appliedNumberById],
+  );
+
+  const selectedQuestionIndex = useMemo(
+    () => displayedOrderedQuestions.findIndex((row) => row.q.id === selectedQuestion?.id),
+    [displayedOrderedQuestions, selectedQuestion?.id],
+  );
+  const previousDisplayedQuestion =
+    selectedQuestionIndex > 0 ? displayedOrderedQuestions[selectedQuestionIndex - 1] : null;
+  const nextDisplayedQuestion =
+    selectedQuestionIndex >= 0 && selectedQuestionIndex < displayedOrderedQuestions.length - 1
+      ? displayedOrderedQuestions[selectedQuestionIndex + 1]
+      : null;
+
+  useEffect(() => {
+    if (selectedQuestion !== null) return;
+    requestAnimationFrame(() => {
+      if (listScrollRef.current) {
+        listScrollRef.current.scrollTop = listScrollTopRef.current;
+      }
+    });
+  }, [selectedQuestion]);
+
   return (
     <motion.div
       initial={{ opacity: 0 }}
@@ -3689,17 +3754,55 @@ function QuestionBankModal({
           )}
         </div>
 
-        <div className="flex-1 overflow-y-auto p-5 sm:p-6 space-y-6">
+        <div ref={listScrollRef} className="flex-1 overflow-y-auto p-5 sm:p-6 space-y-6">
           {selectedQuestion ? (
             <section className="space-y-3">
-              <Button
-                variant="ghost"
-                size="sm"
-                className="h-8"
-                onClick={() => setSelectedQuestion(null)}
-              >
-                {"<-Back to Question List"}
-              </Button>
+              <div className="flex items-center justify-between gap-2">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-8"
+                  onClick={() => setSelectedQuestion(null)}
+                >
+                  {"<-Back to Question List"}
+                </Button>
+                <div className="flex items-center gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-8"
+                    disabled={!previousDisplayedQuestion}
+                    onClick={() =>
+                      previousDisplayedQuestion &&
+                      openQuestionDetail(
+                        previousDisplayedQuestion.q,
+                        previousDisplayedQuestion.label,
+                        previousDisplayedQuestion.number,
+                      )
+                    }
+                  >
+                    <ChevronLeft className="w-4 h-4 mr-1" />
+                    Previous
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-8"
+                    disabled={!nextDisplayedQuestion}
+                    onClick={() =>
+                      nextDisplayedQuestion &&
+                      openQuestionDetail(
+                        nextDisplayedQuestion.q,
+                        nextDisplayedQuestion.label,
+                        nextDisplayedQuestion.number,
+                      )
+                    }
+                  >
+                    Next
+                    <ChevronRight className="w-4 h-4 ml-1" />
+                  </Button>
+                </div>
+              </div>
               <div className="relative bg-card border border-blue-200 rounded-xl overflow-hidden shadow-sm">
                 {selectedQuestion.codeStyle !== "none" && (
                   <div
@@ -3847,19 +3950,7 @@ function QuestionBankModal({
                     foundational.map((q) => (
                         <QuestionBankCard
                           key={q.id}
-                        onOpenDetail={() => {
-                          setSelectedQuestion({
-                            id: q.id,
-                            number: foundationalNumberById.get(q.id) ?? 0,
-                            label: "Foundational",
-                            starred: !!q.isStarred,
-                            codeStyle: detectCodeStyle(q.answer),
-                            question: q.question,
-                            context: formatQuestionContext(q.unitTitle, q.topicTitle, q.subtopicTitle),
-                            answer: q.answer,
-                            subtopicId: q.subtopicId,
-                          });
-                        }}
+                        onOpenDetail={() => openQuestionDetail(q, "Foundational", foundationalNumberById.get(q.id) ?? 0)}
                         cardId={`qb-card-modal-${q.id}`}
                         highlighted={highlightedQuestionId === q.id}
                         questionNumber={foundationalNumberById.get(q.id) ?? 0}
@@ -3884,19 +3975,7 @@ function QuestionBankModal({
                     applied.map((q) => (
                         <QuestionBankCard
                           key={q.id}
-                        onOpenDetail={() => {
-                          setSelectedQuestion({
-                            id: q.id,
-                            number: appliedNumberById.get(q.id) ?? 0,
-                            label: "Applied",
-                            starred: !!q.isStarred,
-                            codeStyle: detectCodeStyle(q.answer),
-                            question: q.question,
-                            context: formatQuestionContext(q.unitTitle, q.topicTitle, q.subtopicTitle),
-                            answer: q.answer,
-                            subtopicId: q.subtopicId,
-                          });
-                        }}
+                        onOpenDetail={() => openQuestionDetail(q, "Applied", appliedNumberById.get(q.id) ?? 0)}
                         cardId={`qb-card-modal-${q.id}`}
                         highlighted={highlightedQuestionId === q.id}
                         questionNumber={appliedNumberById.get(q.id) ?? 0}
@@ -4037,6 +4116,8 @@ function QuestionBankPane({
   const [expandedEditPreview, setExpandedEditPreview] = useState(false);
   const [expandedQuestionDraft, setExpandedQuestionDraft] = useState("");
   const [expandedAnswerDraft, setExpandedAnswerDraft] = useState("");
+  const listScrollRef = useRef<HTMLDivElement>(null);
+  const listScrollTopRef = useRef(0);
 
   const questionSessionKey = useCallback(
     (questionId: number) => `tracked_qb_${configId}_${questionId}`,
@@ -4149,6 +4230,69 @@ function QuestionBankPane({
     );
   };
 
+  const openQuestionDetail = useCallback(
+    (
+      q: (typeof validQuestions)[number],
+      label: "Foundational" | "Applied",
+      number: number,
+    ) => {
+      listScrollTopRef.current = listScrollRef.current?.scrollTop ?? 0;
+      setSelectedQuestion({
+        id: q.id,
+        number,
+        label,
+        starred: !!q.isStarred,
+        codeStyle: detectCodeStyle(q.answer),
+        question: q.question,
+        context: formatQuestionContext(q.unitTitle, q.topicTitle, q.subtopicTitle),
+        answer: q.answer,
+        subtopicId: q.subtopicId,
+      });
+    },
+    [validQuestions],
+  );
+
+  const displayedOrderedQuestions = useMemo(
+    () =>
+      [
+        ...(qbSectionFilter === "all" || qbSectionFilter === "foundational"
+          ? foundational.map((q) => ({
+              q,
+              label: "Foundational" as const,
+              number: foundationalNumberById.get(q.id) ?? 0,
+            }))
+          : []),
+        ...(qbSectionFilter === "all" || qbSectionFilter === "applied"
+          ? applied.map((q) => ({
+              q,
+              label: "Applied" as const,
+              number: appliedNumberById.get(q.id) ?? 0,
+            }))
+          : []),
+      ],
+    [qbSectionFilter, foundational, applied, foundationalNumberById, appliedNumberById],
+  );
+
+  const selectedQuestionIndex = useMemo(
+    () => displayedOrderedQuestions.findIndex((row) => row.q.id === selectedQuestion?.id),
+    [displayedOrderedQuestions, selectedQuestion?.id],
+  );
+  const previousDisplayedQuestion =
+    selectedQuestionIndex > 0 ? displayedOrderedQuestions[selectedQuestionIndex - 1] : null;
+  const nextDisplayedQuestion =
+    selectedQuestionIndex >= 0 && selectedQuestionIndex < displayedOrderedQuestions.length - 1
+      ? displayedOrderedQuestions[selectedQuestionIndex + 1]
+      : null;
+
+  useEffect(() => {
+    if (selectedQuestion !== null) return;
+    requestAnimationFrame(() => {
+      if (listScrollRef.current) {
+        listScrollRef.current.scrollTop = listScrollTopRef.current;
+      }
+    });
+  }, [selectedQuestion]);
+
   return (
     <div className="h-full flex flex-col border border-border bg-card overflow-hidden">
         <div className="px-5 py-4 border-b border-border shrink-0 bg-blue-50">
@@ -4226,12 +4370,50 @@ function QuestionBankPane({
         )}
       </div>
 
-      <div className="flex-1 overflow-y-auto p-5 space-y-6">
+      <div ref={listScrollRef} className="flex-1 overflow-y-auto p-5 space-y-6">
         {selectedQuestion ? (
           <section className="space-y-3">
-            <Button variant="ghost" size="sm" className="h-8" onClick={() => setSelectedQuestion(null)}>
-              {"<- Back to Question List"}
-            </Button>
+            <div className="flex items-center justify-between gap-2">
+              <Button variant="ghost" size="sm" className="h-8" onClick={() => setSelectedQuestion(null)}>
+                {"<- Back to Question List"}
+              </Button>
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-8"
+                  disabled={!previousDisplayedQuestion}
+                  onClick={() =>
+                    previousDisplayedQuestion &&
+                    openQuestionDetail(
+                      previousDisplayedQuestion.q,
+                      previousDisplayedQuestion.label,
+                      previousDisplayedQuestion.number,
+                    )
+                  }
+                >
+                  <ChevronLeft className="w-4 h-4 mr-1" />
+                  Previous
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-8"
+                  disabled={!nextDisplayedQuestion}
+                  onClick={() =>
+                    nextDisplayedQuestion &&
+                    openQuestionDetail(
+                      nextDisplayedQuestion.q,
+                      nextDisplayedQuestion.label,
+                      nextDisplayedQuestion.number,
+                    )
+                  }
+                >
+                  Next
+                  <ChevronRight className="w-4 h-4 ml-1" />
+                </Button>
+              </div>
+            </div>
             <div className="relative bg-card border border-blue-200 rounded-xl overflow-hidden shadow-sm">
               {selectedQuestion.codeStyle !== "none" && (
                 <div className="absolute top-0 right-0 z-20 bg-rose-200 text-black text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-bl-md">
@@ -4337,19 +4519,7 @@ function QuestionBankPane({
                   foundational.map((q) => (
                     <QuestionBankCard
                       key={q.id}
-                      onOpenDetail={() => {
-                        setSelectedQuestion({
-                          id: q.id,
-                          number: foundationalNumberById.get(q.id) ?? 0,
-                          label: "Foundational",
-                          starred: !!q.isStarred,
-                          codeStyle: detectCodeStyle(q.answer),
-                          question: q.question,
-                          context: formatQuestionContext(q.unitTitle, q.topicTitle, q.subtopicTitle),
-                          answer: q.answer,
-                          subtopicId: q.subtopicId,
-                        });
-                      }}
+                      onOpenDetail={() => openQuestionDetail(q, "Foundational", foundationalNumberById.get(q.id) ?? 0)}
                       cardId={`qb-card-pane-${q.id}`}
                       highlighted={highlightedQuestionId === q.id}
                       questionNumber={foundationalNumberById.get(q.id) ?? 0}
@@ -4373,19 +4543,7 @@ function QuestionBankPane({
                   applied.map((q) => (
                     <QuestionBankCard
                       key={q.id}
-                      onOpenDetail={() => {
-                        setSelectedQuestion({
-                          id: q.id,
-                          number: appliedNumberById.get(q.id) ?? 0,
-                          label: "Applied",
-                          starred: !!q.isStarred,
-                          codeStyle: detectCodeStyle(q.answer),
-                          question: q.question,
-                          context: formatQuestionContext(q.unitTitle, q.topicTitle, q.subtopicTitle),
-                          answer: q.answer,
-                          subtopicId: q.subtopicId,
-                        });
-                      }}
+                      onOpenDetail={() => openQuestionDetail(q, "Applied", appliedNumberById.get(q.id) ?? 0)}
                       cardId={`qb-card-pane-${q.id}`}
                       highlighted={highlightedQuestionId === q.id}
                       questionNumber={appliedNumberById.get(q.id) ?? 0}
