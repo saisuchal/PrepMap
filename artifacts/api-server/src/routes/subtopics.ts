@@ -333,7 +333,7 @@ router.put("/subtopics/:id", requireAdmin, async (req, res) => {
       })
       .where(eq(nodesTable.id, id));
 
-    if (content.unitSubtopicId) {
+    if (content.unitSubtopicId && Array.isArray(body.questions)) {
       await withRequestDbContext(authClaims, async (tx) => {
         await tx
           .delete(configQuestionsTable)

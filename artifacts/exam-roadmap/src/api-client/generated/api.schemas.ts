@@ -200,7 +200,7 @@ export interface UpdateQuestion {
 
 export interface UpdateSubtopicRequest {
   explanation: string;
-  questions: UpdateQuestion[];
+  questions?: UpdateQuestion[];
 }
 
 export interface EventPayload {

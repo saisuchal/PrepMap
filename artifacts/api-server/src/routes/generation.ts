@@ -23,7 +23,7 @@ import {
 } from "../db";
 import { and, eq, inArray } from "drizzle-orm";
 import { createHash, randomUUID } from "crypto";
-import { runGeneration, getProgress, buildLaneAConfigPackage, isLikelyQuestionText } from "../lib/generator";
+import { runGeneration, getProgress, buildLaneAConfigPackage, isLikelyQuestionText, type LaneAStructureUnit } from "../lib/generator";
 import { requireAdmin } from "../middleware/adminAuth";
 import { askAI } from "../lib/ai";
 import { repairBrokenFormulaBullets } from "../lib/textFormatting";
@@ -105,6 +105,198 @@ function parseCheapGenerationMode(value: unknown): CheapGenerationMode {
   if (raw === "explanations_only") return "explanations_only";
   if (raw === "questions_only") return "questions_only";
   return "explanations_only";
+}
+
+async function buildExplanationGapFilteredStructure(
+  configId: string,
+  structure: LaneAStructureUnit[],
+): Promise<{
+  filteredStructure: LaneAStructureUnit[];
+  missingTopicCount: number;
+  missingSubtopicCount: number;
+  totalTopicTargets: number;
+  totalSubtopicTargets: number;
+}> {
+  const links = await db
+    .select({
+      unitLibraryId: configUnitLinksTable.unitLibraryId,
+      sortOrder: configUnitLinksTable.sortOrder,
+    })
+    .from(configUnitLinksTable)
+    .where(eq(configUnitLinksTable.configId, configId));
+
+  links.sort((a, b) => Number(a.sortOrder || 0) - Number(b.sortOrder || 0));
+  const unitIds = links.map((l) => l.unitLibraryId);
+  if (unitIds.length === 0) {
+    return {
+      filteredStructure: structure,
+      missingTopicCount: 0,
+      missingSubtopicCount: 0,
+      totalTopicTargets: 0,
+      totalSubtopicTargets: 0,
+    };
+  }
+
+  const units = await db
+    .select({
+      id: unitLibraryTable.id,
+      unitTitle: unitLibraryTable.unitTitle,
+    })
+    .from(unitLibraryTable)
+    .where(inArray(unitLibraryTable.id, unitIds));
+  const unitById = new Map(units.map((u) => [u.id, u]));
+
+  const canonicalRows = await db
+    .select({
+      id: canonicalNodesTable.id,
+      unitLibraryId: canonicalNodesTable.unitLibraryId,
+      title: canonicalNodesTable.title,
+      type: canonicalNodesTable.type,
+      parentCanonicalNodeId: canonicalNodesTable.parentCanonicalNodeId,
+      sortOrder: canonicalNodesTable.sortOrder,
+      explanation: canonicalNodesTable.explanation,
+      learningGoal: canonicalNodesTable.learningGoal,
+      exampleBlock: canonicalNodesTable.exampleBlock,
+      supportNote: canonicalNodesTable.supportNote,
+    })
+    .from(canonicalNodesTable)
+    .where(inArray(canonicalNodesTable.unitLibraryId, unitIds));
+
+  const existingNodes = await db
+    .select({
+      id: nodesTable.id,
+      title: nodesTable.title,
+      type: nodesTable.type,
+    })
+    .from(nodesTable)
+    .where(eq(nodesTable.configId, configId));
+
+  const missingFields = (node: any) => {
+    const missing: string[] = [];
+    if (!String(node?.explanation || "").trim()) missing.push("explanation");
+    if (!String(node?.learningGoal || "").trim()) missing.push("learningGoal");
+    if (!String(node?.exampleBlock || "").trim()) missing.push("exampleBlock");
+    if (!String(node?.supportNote || "").trim()) missing.push("supportNote");
+    return missing;
+  };
+
+  const canonicalByParent = new Map<string, typeof canonicalRows>();
+  for (const n of canonicalRows) {
+    const key = String(n.parentCanonicalNodeId || "");
+    const list = canonicalByParent.get(key) ?? [];
+    list.push(n);
+    canonicalByParent.set(key, list);
+  }
+  const sortByOrderThenTitle = (a: any, b: any) =>
+    Number(a.sortOrder || 0) - Number(b.sortOrder || 0) ||
+    String(a.title || "").localeCompare(String(b.title || ""));
+
+  const scopedUnitsByLibraryId = new Map<string, typeof existingNodes>();
+  for (const n of existingNodes.filter((n) => n.type === "unit")) {
+    const normalizedTitle = normalizeText(n.title);
+    const matched = units.find((u) => normalizeText(u.unitTitle) === normalizedTitle);
+    if (!matched) continue;
+    const list = scopedUnitsByLibraryId.get(matched.id) ?? [];
+    list.push(n);
+    scopedUnitsByLibraryId.set(matched.id, list);
+  }
+
+  const missingTopicPaths = new Set<string>();
+  const missingSubtopicPaths = new Set<string>();
+  let totalTopicTargets = 0;
+  let totalSubtopicTargets = 0;
+  const structureByUnitNorm = new Map(
+    structure.map((u) => [normalizeText(u.title), u] as const)
+  );
+
+  for (const uid of unitIds) {
+    const selectedUnit = unitById.get(uid);
+    const unitTitle = String(selectedUnit?.unitTitle || "").trim() || uid;
+    const canonicalUnit = canonicalRows
+      .filter((n) => n.type === "unit" && n.unitLibraryId === uid)
+      .sort(sortByOrderThenTitle)[0];
+    if (!canonicalUnit) {
+      // Keep behavior aligned with gap report: a missing unit root is a real explanation gap.
+      // For Lane A prompt filtering, include the whole selected unit subtree from structure.
+      const structureUnit = structureByUnitNorm.get(normalizeText(unitTitle));
+      if (structureUnit) {
+        totalTopicTargets += structureUnit.topics.length;
+        for (const topic of structureUnit.topics) {
+          const topicPath = `${normalizeText(unitTitle)}|${normalizeText(topic.title)}`;
+          missingTopicPaths.add(topicPath);
+          totalSubtopicTargets += topic.subtopics.length;
+          for (const subtopic of topic.subtopics) {
+            missingSubtopicPaths.add(
+              `${normalizeText(unitTitle)}|${normalizeText(topic.title)}|${normalizeText(subtopic)}`
+            );
+          }
+        }
+      }
+      continue;
+    }
+
+    const topicNodes = (canonicalByParent.get(canonicalUnit.id) ?? [])
+      .filter((n) => n.type === "topic")
+      .sort(sortByOrderThenTitle);
+    totalTopicTargets += topicNodes.length;
+
+    const hasScopedUnitNode = (scopedUnitsByLibraryId.get(uid) ?? []).length > 0;
+    for (const topicNode of topicNodes) {
+      const topicMissing = !hasScopedUnitNode ? ["node"] : missingFields(topicNode);
+      const topicPath = `${normalizeText(unitTitle)}|${normalizeText(topicNode.title)}`;
+      if (topicMissing.length > 0) {
+        missingTopicPaths.add(topicPath);
+      }
+
+      const subtopicNodes = (canonicalByParent.get(topicNode.id) ?? [])
+        .filter((n) => n.type === "subtopic")
+        .sort(sortByOrderThenTitle);
+      totalSubtopicTargets += subtopicNodes.length;
+
+      for (const subtopicNode of subtopicNodes) {
+        const subMissing = !hasScopedUnitNode ? ["node"] : missingFields(subtopicNode);
+        if (subMissing.length > 0) {
+          missingSubtopicPaths.add(
+            `${normalizeText(unitTitle)}|${normalizeText(topicNode.title)}|${normalizeText(subtopicNode.title)}`
+          );
+        }
+      }
+    }
+  }
+
+  const filteredStructure = structure
+    .map((unit) => {
+      const unitNorm = normalizeText(unit.title);
+      const topics = unit.topics
+        .map((topic) => {
+          const topicNorm = normalizeText(topic.title);
+          const topicPath = `${unitNorm}|${topicNorm}`;
+          const topicMissing = missingTopicPaths.has(topicPath);
+          const subtopics = topic.subtopics.filter((subtopic) =>
+            missingSubtopicPaths.has(`${unitNorm}|${topicNorm}|${normalizeText(subtopic)}`)
+          );
+          if (!topicMissing && subtopics.length === 0) return null;
+          return {
+            title: topic.title,
+            subtopics,
+          };
+        })
+        .filter((topic): topic is NonNullable<typeof topic> => Boolean(topic));
+      if (topics.length === 0) return null;
+      return {
+        title: unit.title,
+        topics,
+      };
+    })
+    .filter((unit): unit is NonNullable<typeof unit> => Boolean(unit));
+
+  return {
+    filteredStructure,
+    missingTopicCount: missingTopicPaths.size,
+    missingSubtopicCount: missingSubtopicPaths.size,
+    totalTopicTargets,
+    totalSubtopicTargets,
+  };
 }
 
 const SaveReplicaQuestionsBody = z.object({
@@ -752,6 +944,7 @@ router.post("/configs/:id/clone", requireAdmin, async (req, res) => {
   try {
     const sourceConfigId = String(req.params.id || "").trim();
     const targetUniversityId = String(req.body?.targetUniversityId || "").trim();
+    const targetExam = String(req.body?.targetExam || "").trim();
     const includeQuestions = req.body?.includeQuestions !== false;
     const includeSyllabus = req.body?.includeSyllabus !== false;
     const includeReplicaQuestions = req.body?.includeReplicaQuestions !== false;
@@ -762,6 +955,10 @@ router.post("/configs/:id/clone", requireAdmin, async (req, res) => {
     }
     if (!targetUniversityId) {
       res.status(400).json({ error: "targetUniversityId is required" });
+      return;
+    }
+    if (!targetExam) {
+      res.status(400).json({ error: "targetExam is required" });
       return;
     }
 
@@ -783,7 +980,7 @@ router.post("/configs/:id/clone", requireAdmin, async (req, res) => {
         eq(configsTable.year, source.year),
         eq(configsTable.branch, source.branch),
         eq(configsTable.subject, source.subject),
-        eq(configsTable.exam, source.exam),
+        eq(configsTable.exam, targetExam),
       ));
     const hasNonDeletedConflict = conflicting.some((c) => c.status !== "deleted");
     if (hasNonDeletedConflict) {
@@ -805,7 +1002,7 @@ router.post("/configs/:id/clone", requireAdmin, async (req, res) => {
         year: source.year,
         branch: source.branch,
         subject: source.subject,
-        exam: source.exam,
+        exam: targetExam,
         status: "draft",
         createdBy: userId,
         syllabusFileUrl: includeSyllabus ? (source.syllabusFileUrl ?? null) : null,
@@ -956,12 +1153,13 @@ router.post("/configs/:id/clone", requireAdmin, async (req, res) => {
       syllabusFileUrl: cloned.syllabusFileUrl ?? null,
       paperFileUrls: cloned.paperFileUrls ?? null,
       clonedFromConfigId: sourceConfigId,
-      cloneOptions: {
-        includeQuestions,
-        includeSyllabus,
-        includeReplicaQuestions,
-      },
-    });
+        cloneOptions: {
+          targetExam,
+          includeQuestions,
+          includeSyllabus,
+          includeReplicaQuestions,
+        },
+      });
   } catch (error) {
     req.log.error(
       {
@@ -1153,10 +1351,21 @@ router.post("/configs/:id/cheap/lane-a", requireAdmin, async (req, res) => {
       0,
       totalQuestionTarget - mandatoryReplicaQuestions.length,
     );
-    const structureForPrompt = includeFactsInMasterPrompt
-      ? buildStructureWithFacts(pkg.structure, pkg.factGrounding)
-      : pkg.structure;
     const laneAWarnings = [...pkg.warnings];
+    let promptStructureBase = pkg.structure;
+    if (!isQuestionsOnly) {
+      const gapFiltered = await buildExplanationGapFilteredStructure(id, pkg.structure);
+      promptStructureBase = gapFiltered.filteredStructure;
+      laneAWarnings.push(
+        `Explanation gap filter applied: ${gapFiltered.missingTopicCount}/${gapFiltered.totalTopicTargets} topics and ${gapFiltered.missingSubtopicCount}/${gapFiltered.totalSubtopicTargets} subtopics require explanation updates.`
+      );
+      if (promptStructureBase.length === 0) {
+        laneAWarnings.push("No explanation gaps found. STRUCTURE section is empty.");
+      }
+    }
+    const structureForPrompt = includeFactsInMasterPrompt
+      ? buildStructureWithFacts(promptStructureBase, pkg.factGrounding)
+      : promptStructureBase;
     if (droppedReplicaCount > 0) {
       laneAWarnings.push(
         `Replica-first cap applied: kept ${mandatoryReplicaQuestions.length} mandatory replica questions and dropped ${droppedReplicaCount} extras to match total question target ${totalQuestionTarget}.`
@@ -1168,10 +1377,10 @@ router.post("/configs/:id/cheap/lane-a", requireAdmin, async (req, res) => {
       : `\nSTRUCTURE:\n${JSON.stringify(structureForPrompt, null, 2)}\n`;
     const structureConstraintLine = isQuestionsOnly
       ? '- questions_only: do not generate roadmap structure; set "units": [] exactly.'
-      : "- Keep the same unit/topic/subtopic structure.";
+      : "- Keep the same unit/topic/subtopic hierarchy for the provided STRUCTURE subset only.";
     const structureValidationLine = isQuestionsOnly
       ? '2) "units" is exactly [] in questions_only mode.'
-      : "2) units preserve the same hierarchy from STRUCTURE.";
+      : "2) units preserve the same hierarchy from the provided STRUCTURE subset.";
     const factsGroundingLine = includeFactsInMasterPrompt
       ? "- Use facts included inside STRUCTURE (topicFacts and subtopics[].facts) to keep explanations faithful to source material."
       : "- Do not use fact grounding in this Lane A prompt.";

@@ -164,6 +164,28 @@ export interface AppMetadataResponse {
   examTypes: { id: string; name: string }[];
 }
 
+export interface TopicContentBundleNode {
+  id: string;
+  title: string;
+  type: "topic" | "subtopic";
+  parentId: string | null;
+  sortOrder?: number | null;
+  explanation: string | null;
+  learningGoal: string | null;
+  exampleBlock: string | null;
+  supportNote: string | null;
+  prerequisiteTitles: string[];
+  prerequisiteNodeIds: string[];
+  nextRecommendedTitles: string[];
+  nextRecommendedNodeIds: string[];
+}
+
+export interface TopicContentBundleResponse {
+  configId: string;
+  topic: TopicContentBundleNode;
+  subtopics: TopicContentBundleNode[];
+}
+
 export interface LibrarySubject {
   id: string;
   name: string;
@@ -632,6 +654,7 @@ export const cloneConfigToUniversity = async (
   configId: string,
   payload: {
     targetUniversityId: string;
+    targetExam: string;
     includeQuestions?: boolean;
     includeSyllabus?: boolean;
     includeReplicaQuestions?: boolean;
@@ -672,6 +695,7 @@ export const useCloneConfigToUniversity = <
     {
       configId: string;
       targetUniversityId: string;
+      targetExam: string;
       includeQuestions?: boolean;
       includeSyllabus?: boolean;
       includeReplicaQuestions?: boolean;
@@ -685,6 +709,7 @@ export const useCloneConfigToUniversity = <
     {
       configId: string;
       targetUniversityId: string;
+      targetExam: string;
       includeQuestions?: boolean;
       includeSyllabus?: boolean;
       includeReplicaQuestions?: boolean;
@@ -695,12 +720,14 @@ export const useCloneConfigToUniversity = <
     mutationFn: ({
       configId,
       targetUniversityId,
+      targetExam,
       includeQuestions,
       includeSyllabus,
       includeReplicaQuestions,
     }) =>
       cloneConfigToUniversity(configId, {
         targetUniversityId,
+        targetExam,
         includeQuestions,
         includeSyllabus,
         includeReplicaQuestions,
@@ -897,6 +924,18 @@ export const getCheapGapReport = async (
 
 export const getCompletionState = async (configId: string, options?: RequestInit) => {
   return customFetch<CompletionStateResponse>(`/api/configs/${configId}/completion-state`, {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getTopicContentBundle = async (
+  configId: string,
+  topicId: string,
+  options?: RequestInit,
+) => {
+  const query = `configId=${encodeURIComponent(configId)}&topicId=${encodeURIComponent(topicId)}`;
+  return customFetch<TopicContentBundleResponse>(`/api/nodes/topic-content?${query}`, {
     ...options,
     method: "GET",
   });
@@ -1294,6 +1333,22 @@ export const useGetCompletionState = <
     queryKey: ["config-completion-state", configId],
     queryFn: () => getCompletionState(configId!),
     enabled: !!configId,
+    ...options,
+  });
+};
+
+export const useGetTopicContentBundle = <
+  TError = ErrorType<unknown>,
+  TData = TopicContentBundleResponse,
+>(
+  configId: string | null,
+  topicId: string | null,
+  options?: Omit<UseQueryOptions<TopicContentBundleResponse, TError, TData>, "queryKey" | "queryFn">,
+) => {
+  return useQuery<TopicContentBundleResponse, TError, TData>({
+    queryKey: ["topic-content-bundle", configId, topicId],
+    queryFn: () => getTopicContentBundle(configId!, topicId!),
+    enabled: !!configId && !!topicId,
     ...options,
   });
 };

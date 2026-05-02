@@ -227,7 +227,7 @@ export const UpdateSubtopicContentBody = zod.object({
       isStarred: zod.boolean().optional(),
       starSource: zod.enum(["none", "auto", "manual"]).optional(),
     }),
-  ),
+  ).optional(),
 });
 
 export const UpdateSubtopicContentResponse = zod.object({

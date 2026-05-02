@@ -609,6 +609,7 @@ function ConfigsTab() {
     universityId: string;
   } | null>(null);
   const [cloneUniversityId, setCloneUniversityId] = useState<string>("");
+  const [cloneTargetExam, setCloneTargetExam] = useState<string>("");
   const [cloneIncludeQuestions, setCloneIncludeQuestions] = useState(true);
   const [cloneIncludeSyllabus, setCloneIncludeSyllabus] = useState(true);
   const [cloneIncludeReplicaQuestions, setCloneIncludeReplicaQuestions] = useState(true);
@@ -890,12 +891,13 @@ function ConfigsTab() {
                                   universityId: config.universityId,
                                 });
                                 setCloneUniversityId("");
+                                setCloneTargetExam(config.exam);
                                 setCloneIncludeQuestions(true);
                                 setCloneIncludeSyllabus(true);
                                 setCloneIncludeReplicaQuestions(true);
                               }}
                               aria-label={`Clone ${config.subject}`}
-                              title="Clone to another university"
+                              title="Clone config"
                             >
                               <Copy className="w-4 h-4" />
                             </Button>
@@ -1096,6 +1098,7 @@ function ConfigsTab() {
           if (!open) {
             setCloneTarget(null);
             setCloneUniversityId("");
+            setCloneTargetExam("");
             setCloneIncludeQuestions(true);
             setCloneIncludeSyllabus(true);
             setCloneIncludeReplicaQuestions(true);
@@ -1110,7 +1113,7 @@ function ConfigsTab() {
             <div className="space-y-4">
               <p className="text-sm text-muted-foreground">
                 Clone <span className="font-medium text-foreground">{cloneTarget.subject}</span> (
-                {semExamLabel(cloneTarget.year, cloneTarget.exam)}) to another university as a new
+                {semExamLabel(cloneTarget.year, cloneTarget.exam)}) as a new
                 <span className="font-medium text-foreground"> draft </span>
                 config.
               </p>
@@ -1122,12 +1125,29 @@ function ConfigsTab() {
                   </SelectTrigger>
                   <SelectContent>
                     {universities
-                      .filter((u) => u.id !== cloneTarget.universityId)
                       .map((u) => (
                         <SelectItem key={u.id} value={u.id}>
                           {u.name}
                         </SelectItem>
                       ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label>Target Exam</Label>
+                <Select
+                  value={cloneTargetExam}
+                  onValueChange={setCloneTargetExam}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select target exam" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {examTypes.map((e) => (
+                      <SelectItem key={e.id} value={e.id}>
+                        {e.name}
+                      </SelectItem>
+                    ))}
                   </SelectContent>
                 </Select>
               </div>
@@ -1163,6 +1183,7 @@ function ConfigsTab() {
                   onClick={() => {
                     setCloneTarget(null);
                     setCloneUniversityId("");
+                    setCloneTargetExam("");
                     setCloneIncludeQuestions(true);
                     setCloneIncludeSyllabus(true);
                     setCloneIncludeReplicaQuestions(true);
@@ -1171,13 +1192,14 @@ function ConfigsTab() {
                   Cancel
                 </Button>
                 <Button
-                  disabled={!cloneUniversityId || cloneConfig.isPending}
+                  disabled={!cloneUniversityId || !cloneTargetExam || cloneConfig.isPending}
                   onClick={() => {
-                    if (!cloneTarget || !cloneUniversityId) return;
+                    if (!cloneTarget || !cloneUniversityId || !cloneTargetExam) return;
                     cloneConfig.mutate(
                       {
                         configId: cloneTarget.id,
                         targetUniversityId: cloneUniversityId,
+                        targetExam: cloneTargetExam,
                         includeQuestions: cloneIncludeQuestions,
                         includeSyllabus: cloneIncludeSyllabus,
                         includeReplicaQuestions: cloneIncludeReplicaQuestions,
@@ -1190,6 +1212,7 @@ function ConfigsTab() {
                           });
                           setCloneTarget(null);
                           setCloneUniversityId("");
+                          setCloneTargetExam("");
                           setCloneIncludeQuestions(true);
                           setCloneIncludeSyllabus(true);
                           setCloneIncludeReplicaQuestions(true);

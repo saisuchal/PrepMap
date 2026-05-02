@@ -13,7 +13,7 @@ import {
   useGetCompletionState,
   useGetNodes,
   useGetQuestionBank,
-  useGetSubtopicContent,
+  useGetTopicContentBundle,
   useUpdateSubtopicContent,
   useUpdateQuestionBankQuestion,
   useTrackEvent,
@@ -76,7 +76,9 @@ function LearningGoalBlock({ learningGoal }: { learningGoal?: string | null }) {
           <BookOpen className="w-3.5 h-3.5 text-primary" />
           <p className="text-xs font-semibold uppercase tracking-wider ">Learning Goal</p>
         </div>
-        <p className="text-sm text-foreground leading-relaxed">{goal}</p>
+        <div className="text-sm text-foreground leading-relaxed">
+          <AnswerRenderer answer={repairBrokenFormulaBullets(goal)} />
+        </div>
       </div>
     </section>
   );
@@ -194,7 +196,9 @@ function SupportNoteBlock({ text }: { text?: string | null }) {
         <Info className="w-4 h-4 text-sky-700" />
         <h3 className="text-sm font-bold text-sky-900 uppercase tracking-wider">Helpful Note</h3>
       </div>
-      <p className="text-sm text-sky-950 whitespace-pre-line leading-relaxed">{repairBrokenFormulaBullets(value)}</p>
+      <div className="text-sm text-sky-950 leading-relaxed">
+        <AnswerRenderer answer={repairBrokenFormulaBullets(value)} />
+      </div>
     </section>
   );
 }
@@ -243,8 +247,11 @@ function ChainNavButton({
 }
 
 function parseAnswerSegments(answer: string): AnswerSegment[] {
-  const src = String(answer || "");
-  const regex = /```([a-zA-Z0-9_-]+)?\n([\s\S]*?)```/g;
+  const src = String(answer || "")
+    .replace(/\\r\\n/g, "\n")
+    .replace(/\\n/g, "\n")
+    .replace(/\r\n/g, "\n");
+  const regex = /```[ \t]*([a-zA-Z0-9_-]+)?[ \t]*\n([\s\S]*?)```/g;
   const segments: AnswerSegment[] = [];
   let lastIndex = 0;
   let match: RegExpExecArray | null;
@@ -255,7 +262,10 @@ function parseAnswerSegments(answer: string): AnswerSegment[] {
     segments.push({
       type: "code",
       language: (match[1] || "text").toLowerCase(),
-      code: match[2] || "",
+      code: String(match[2] || "")
+        .replace(/\\r\\n/g, "\n")
+        .replace(/\\n/g, "\n")
+        .replace(/\r\n/g, "\n"),
     });
     lastIndex = regex.lastIndex;
   }
@@ -707,8 +717,23 @@ export default function Roadmap() {
   const examParam = searchParams.get("exam") || "";
   const returnToParam = (searchParams.get("returnTo") || "").trim();
   const backPath = returnToParam || "/home";
-  const { data: metadata } = useGetAppMetadata();
-  const { data: configs } = useGetConfigs({}, { query: { queryKey: ["configs", "roadmap", configId], enabled: !!configId } });
+  const { data: metadata } = useGetAppMetadata({
+    staleTime: 24 * 60 * 60 * 1000,
+    gcTime: 24 * 60 * 60 * 1000,
+    refetchOnWindowFocus: false,
+  });
+  const { data: configs, isLoading: isConfigsLoading } = useGetConfigs(
+    {},
+    {
+      query: {
+        queryKey: ["configs", "roadmap", configId],
+        enabled: !!configId,
+        staleTime: 5 * 60 * 1000,
+        gcTime: 5 * 60 * 1000,
+        refetchOnWindowFocus: false,
+      },
+    }
+  );
   const examTypes = metadata?.examTypes?.length ? metadata.examTypes : EXAM_TYPES;
   const universities = metadata?.universities?.length ? metadata.universities : UNIVERSITIES;
   const semesters = metadata?.semesters?.length ? metadata.semesters : SEMESTERS;
@@ -717,6 +742,7 @@ export default function Roadmap() {
     () => (configs ?? []).find((c) => c.id === configId),
     [configs, configId]
   );
+  const isConfigReady = !!configId && !!activeConfig;
   const universityLabel = activeConfig
     ? (universities.find((u) => u.id === activeConfig.universityId)?.name ?? activeConfig.universityId)
     : "";
@@ -726,9 +752,18 @@ export default function Roadmap() {
   const branchLabel = activeConfig?.branch ?? "";
   const subtitleMeta = [universityLabel, branchLabel, semesterLabel, examLabel].filter(Boolean).join(" | ");
 
-  const { data: nodes, isLoading, isError } = useGetNodes({ configId: configId! }, {
-    query: { queryKey: ["nodes", "roadmap", configId], enabled: !!configId }
-  });
+  const { data: nodes, isLoading, isError } = useGetNodes(
+    { configId: configId! },
+    {
+      query: {
+        queryKey: ["nodes", "roadmap", configId],
+        enabled: isConfigReady,
+        staleTime: 6 * 60 * 60 * 1000,
+        gcTime: 6 * 60 * 60 * 1000,
+        refetchOnWindowFocus: false,
+      },
+    }
+  );
 
   const tree = useMemo(() => (nodes ? buildTree(nodes) : []), [nodes]);
   const [collapsedTopicIds, setCollapsedTopicIds] = useState<Set<string>>(new Set());
@@ -822,10 +857,10 @@ export default function Roadmap() {
   const viewer = getStoredUser();
   const isStudentViewer = !!viewer && (viewer.role === "student" || viewer.role === "super_student");
   const { data: latestInteractionState, isLoading: isLatestInteractionLoading } = useGetLatestInteractionState(
-    isStudentViewer ? configId : null
+    isStudentViewer && isConfigReady ? configId : null
   );
   const { data: completionState } = useGetCompletionState(
-    isStudentViewer ? configId : null
+    isStudentViewer && isConfigReady ? configId : null
   );
   const [expandedListUnitIds, setExpandedListUnitIds] = useState<Set<string>>(new Set());
   const [expandedListTopicIds, setExpandedListTopicIds] = useState<Set<string>>(new Set());
@@ -1062,6 +1097,21 @@ export default function Roadmap() {
       children: [],
     } as LayoutNode;
   }, [selectedNodeId, allNodes, nodes]);
+  const selectedTopicId = useMemo(() => {
+    if (!selectedNode) return null;
+    if (selectedNode.type === "topic") return selectedNode.id;
+    if (selectedNode.type === "subtopic") return selectedNode.parentId || null;
+    return null;
+  }, [selectedNode]);
+  const { data: selectedTopicBundle } = useGetTopicContentBundle(
+    isConfigReady ? configId : null,
+    selectedTopicId,
+    {
+      staleTime: 60 * 60 * 1000,
+      gcTime: 60 * 60 * 1000,
+      refetchOnWindowFocus: false,
+    }
+  );
 
   const navigateToNodeDetail = useCallback((nodeId: string) => {
     const nextId = String(nodeId || "").trim();
@@ -1739,9 +1789,51 @@ export default function Roadmap() {
 
   if (!configId) {
     return (
-      <div className="text-center py-20">
-        <p className="text-muted-foreground mb-4">No configuration selected.</p>
-        <Button onClick={() => setLocation(backPath)}>Go Back</Button>
+      <div className="min-h-screen bg-gradient-to-br from-slate-50 via-background to-blue-50">
+        <div className="max-w-4xl mx-auto p-6">
+          <Button variant="outline" onClick={() => setLocation(backPath)} className="rounded-full px-5 mb-6">
+            <ArrowLeft className="w-4 h-4 mr-2" />
+            Back
+          </Button>
+          <div className="rounded-2xl border border-border bg-card p-8 text-center">
+            <AlertCircle className="w-10 h-10 text-muted-foreground mx-auto mb-3" />
+            <h2 className="text-lg font-semibold text-foreground">Config missing</h2>
+            <p className="text-sm text-muted-foreground mt-1">No configId was provided for this roadmap.</p>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (isConfigsLoading) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-slate-50 via-background to-blue-50">
+        <div className="max-w-4xl mx-auto p-6">
+          <div className="rounded-2xl border border-border bg-card p-8">
+            <div className="h-6 w-48 bg-muted rounded animate-pulse mb-4" />
+            <div className="h-4 w-72 bg-muted rounded animate-pulse" />
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (!activeConfig) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-slate-50 via-background to-blue-50">
+        <div className="max-w-4xl mx-auto p-6">
+          <Button variant="outline" onClick={() => setLocation(backPath)} className="rounded-full px-5 mb-6">
+            <ArrowLeft className="w-4 h-4 mr-2" />
+            Back
+          </Button>
+          <div className="rounded-2xl border border-border bg-card p-8 text-center">
+            <AlertCircle className="w-10 h-10 text-muted-foreground mx-auto mb-3" />
+            <h2 className="text-lg font-semibold text-foreground">Config unavailable</h2>
+            <p className="text-sm text-muted-foreground mt-1">
+              This config may be deleted, disabled, or not accessible for your account.
+            </p>
+          </div>
+        </div>
       </div>
     );
   }
@@ -2392,6 +2484,7 @@ export default function Roadmap() {
                 node={selectedNode}
                 configId={configId}
                 examParam={examParam}
+                topicBundle={selectedTopicBundle || null}
                 allNodesData={nodes ?? []}
                 onTracked={() => setCompletionVersion((v) => v + 1)}
                 isNodeCompleted={isNodeCompleted}
@@ -2420,6 +2513,7 @@ export default function Roadmap() {
             node={selectedNode}
             configId={configId}
             examParam={examParam}
+            topicBundle={selectedTopicBundle || null}
             allNodesData={nodes ?? []}
             onTracked={() => setCompletionVersion((v) => v + 1)}
             isNodeCompleted={isNodeCompleted}
@@ -2447,6 +2541,7 @@ function ContentModal({
   node,
   configId,
   examParam,
+  topicBundle,
   allNodesData,
   onTracked,
   isNodeCompleted,
@@ -2457,6 +2552,31 @@ function ContentModal({
   node: LayoutNode;
   configId: string;
   examParam: string;
+  topicBundle: {
+    configId: string;
+    topic: {
+      id: string;
+      explanation: string | null;
+      learningGoal: string | null;
+      exampleBlock: string | null;
+      supportNote: string | null;
+      prerequisiteTitles: string[];
+      prerequisiteNodeIds: string[];
+      nextRecommendedTitles: string[];
+      nextRecommendedNodeIds: string[];
+    };
+    subtopics: Array<{
+      id: string;
+      explanation: string | null;
+      learningGoal: string | null;
+      exampleBlock: string | null;
+      supportNote: string | null;
+      prerequisiteTitles: string[];
+      prerequisiteNodeIds: string[];
+      nextRecommendedTitles: string[];
+      nextRecommendedNodeIds: string[];
+    }>;
+  } | null;
   allNodesData?: Array<{
     id: string;
     type: string;
@@ -2474,10 +2594,13 @@ function ContentModal({
 }) {
   const isTopic = node.type === "topic";
   const isSubtopic = node.type === "subtopic";
-
-  const { data: content, isLoading } = useGetSubtopicContent(node.id, {
-    query: { queryKey: ["subtopic-content", node.id], enabled: isSubtopic }
-  });
+  const bundleSubtopicMap = useMemo(
+    () => new Map((topicBundle?.subtopics || []).map((sub) => [sub.id, sub])),
+    [topicBundle]
+  );
+  const content = isSubtopic ? (bundleSubtopicMap.get(node.id) ?? null) : null;
+  const bundleTopic = isTopic ? topicBundle?.topic ?? null : null;
+  const isLoading = (isTopic || isSubtopic) && !topicBundle;
 
   const user = getStoredUser();
   const isAdminViewer = (user?.role || "").toLowerCase() === "admin";
@@ -2564,11 +2687,12 @@ function ContentModal({
     : false;
 
   const colors = NODE_COLORS[node.type as keyof typeof NODE_COLORS] || NODE_COLORS.topic;
-  const guidanceSource = isSubtopic ? content : node;
-  const topicParts = parseStructuredExplanation(String(node.explanation || ""), {
-    learningGoal: String((node as any).learningGoal || ""),
-    exampleBlock: String((node as any).exampleBlock || ""),
-    supportNote: String((node as any).supportNote || ""),
+  const guidanceSource = isSubtopic ? content : (bundleTopic ?? node);
+  const currentTopicId = isTopic ? node.id : isSubtopic ? String(node.parentId || "").trim() : "";
+  const topicParts = parseStructuredExplanation(String(bundleTopic?.explanation || ""), {
+    learningGoal: String((bundleTopic as any)?.learningGoal || ""),
+    exampleBlock: String((bundleTopic as any)?.exampleBlock || ""),
+    supportNote: String((bundleTopic as any)?.supportNote || ""),
   });
   const subtopicParts = parseStructuredExplanation(String((content as any)?.explanation || ""), {
     learningGoal: String((content as any)?.learningGoal || ""),
@@ -2580,12 +2704,23 @@ function ContentModal({
     return Number.isFinite(n) ? n : Number.MAX_SAFE_INTEGER;
   };
   const fullNodes = allNodesData ?? [];
+  const fullNodeById = new Map(fullNodes.map((n) => [String(n.id || ""), n]));
   const topicSubtopics = isTopic
     ? fullNodes
         .filter((n) => n.type === "subtopic" && String(n.parentId || "") === node.id)
         .sort((a, b) => toOrder(a.sortOrder) - toOrder(b.sortOrder))
     : [];
   const firstSubtopicId = isTopic ? String(topicSubtopics[0]?.id || "").trim() : "";
+  const siblingTopics = isTopic
+    ? fullNodes
+        .filter((n) => n.type === "topic" && String(n.parentId || "") === String(node.parentId || ""))
+        .sort((a, b) => toOrder(a.sortOrder) - toOrder(b.sortOrder))
+    : [];
+  const topicIndex = isTopic ? siblingTopics.findIndex((t) => t.id === node.id) : -1;
+  const fallbackPrevTopic = topicIndex > 0 ? siblingTopics[topicIndex - 1] : null;
+  const fallbackNextTopic = topicIndex >= 0 && topicIndex < siblingTopics.length - 1
+    ? siblingTopics[topicIndex + 1]
+    : null;
 
   const siblingSubtopics = isSubtopic
     ? fullNodes
@@ -2598,45 +2733,53 @@ function ContentModal({
     subtopicIndex >= 0 && subtopicIndex < siblingSubtopics.length - 1
       ? siblingSubtopics[subtopicIndex + 1]
       : null;
+  const isValidTopicNeighbor = (candidateId: string) => {
+    const target = fullNodeById.get(candidateId);
+    return !!target && target.type === "topic" && String(target.parentId || "") === String(node.parentId || "");
+  };
+  const isValidSubtopicNeighbor = (candidateId: string) => {
+    const target = fullNodeById.get(candidateId);
+    return !!target && target.type === "subtopic" && String(target.parentId || "") === String(node.parentId || "");
+  };
 
-  const prerequisiteTitle = String(
-    guidanceSource?.prerequisiteTitles?.[0] || fallbackPrevSub?.title || ""
-  ).trim();
-  const prerequisiteNodeId = String(
-    guidanceSource?.prerequisiteNodeIds?.[0] || fallbackPrevSub?.id || ""
-  ).trim();
-  const nextTitle = String(
-    guidanceSource?.nextRecommendedTitles?.[0] || fallbackNextSub?.title || ""
-  ).trim();
-  const nextNodeId = String(
-    guidanceSource?.nextRecommendedNodeIds?.[0] || fallbackNextSub?.id || ""
-  ).trim();
+  const rawPrerequisiteTitle = String(guidanceSource?.prerequisiteTitles?.[0] || "").trim();
+  const rawPrerequisiteNodeId = String(guidanceSource?.prerequisiteNodeIds?.[0] || "").trim();
+  const rawNextTitle = String(guidanceSource?.nextRecommendedTitles?.[0] || "").trim();
+  const rawNextNodeId = String(guidanceSource?.nextRecommendedNodeIds?.[0] || "").trim();
+
+  const topicPrereqNodeId = isTopic
+    ? (isValidTopicNeighbor(rawPrerequisiteNodeId) ? rawPrerequisiteNodeId : String(fallbackPrevTopic?.id || "").trim())
+    : "";
+  const topicNextNodeId = isTopic
+    ? (isValidTopicNeighbor(rawNextNodeId) ? rawNextNodeId : String(fallbackNextTopic?.id || "").trim())
+    : "";
+  const topicPrereqTitle = isTopic
+    ? (topicPrereqNodeId ? String(fullNodeById.get(topicPrereqNodeId)?.title || rawPrerequisiteTitle).trim() : "")
+    : "";
+  const topicNextTitle = isTopic
+    ? (topicNextNodeId ? String(fullNodeById.get(topicNextNodeId)?.title || rawNextTitle).trim() : "")
+    : "";
+
+  const subtopicPrereqNodeId = isSubtopic
+    ? (isValidSubtopicNeighbor(rawPrerequisiteNodeId) ? rawPrerequisiteNodeId : String(fallbackPrevSub?.id || "").trim())
+    : "";
+  const subtopicNextNodeId = isSubtopic
+    ? (isValidSubtopicNeighbor(rawNextNodeId) ? rawNextNodeId : String(fallbackNextSub?.id || "").trim())
+    : "";
+  const subtopicPrereqTitle = isSubtopic
+    ? (subtopicPrereqNodeId ? String(fullNodeById.get(subtopicPrereqNodeId)?.title || rawPrerequisiteTitle).trim() : "")
+    : "";
+  const subtopicNextTitle = isSubtopic
+    ? (subtopicNextNodeId ? String(fullNodeById.get(subtopicNextNodeId)?.title || rawNextTitle).trim() : "")
+    : "";
+
+  const prerequisiteTitle = isTopic ? topicPrereqTitle : subtopicPrereqTitle;
+  const prerequisiteNodeId = isTopic ? topicPrereqNodeId : subtopicPrereqNodeId;
+  const nextTitle = isTopic ? topicNextTitle : subtopicNextTitle;
+  const nextNodeId = isTopic ? topicNextNodeId : subtopicNextNodeId;
   const prerequisiteDone = isNodeCompleted?.(prerequisiteNodeId) ?? false;
   const nextDone = isNodeCompleted?.(nextNodeId) ?? false;
-  const parentTopicNode =
-    isSubtopic && node.parentId
-      ? fullNodes.find((n) => n.id === node.parentId)
-      : null;
-  const topicSiblings = parentTopicNode?.parentId
-    ? fullNodes
-        .filter((n) => n.type === "topic" && String(n.parentId || "") === String(parentTopicNode.parentId || ""))
-        .sort((a, b) => toOrder(a.sortOrder) - toOrder(b.sortOrder))
-    : [];
-  const parentTopicIndex = parentTopicNode
-    ? topicSiblings.findIndex((t) => t.id === parentTopicNode.id)
-    : -1;
-  const fallbackNextTopic =
-    parentTopicIndex >= 0 && parentTopicIndex < topicSiblings.length - 1
-      ? topicSiblings[parentTopicIndex + 1]
-      : null;
-  const nextTopicFromParentId = String(
-    parentTopicNode?.nextRecommendedNodeIds?.[0] || fallbackNextTopic?.id || ""
-  ).trim();
-  const nextTopicFromParentTitle = String(
-    parentTopicNode?.nextRecommendedTitles?.[0] || fallbackNextTopic?.title || ""
-  ).trim();
   const showExploreAction = isTopic && !!firstSubtopicId;
-  const showGoNextTopicAction = isSubtopic && !nextNodeId && !!nextTopicFromParentId;
   const subtopicPathPrereqTitles = prerequisiteTitle ? [prerequisiteTitle] : [];
   const subtopicPathPrereqIds = prerequisiteNodeId ? [prerequisiteNodeId] : [];
   const subtopicPathNextTitles = nextTitle ? [nextTitle] : [];
@@ -2661,23 +2804,11 @@ function ContentModal({
       .replace(/\n{3,}/g, "\n\n")
       .replace(/[ \t]+\n/g, "\n")
       .trim();
-    const preservedQuestions =
-      isSubtopic && content?.questions
-        ? content.questions.map((q) => ({
-            id: q.id,
-            markType: q.markType as "Foundational" | "Applied",
-            question: q.question,
-            answer: q.answer,
-            isStarred: q.isStarred ?? false,
-            starSource: q.starSource ?? "none",
-          }))
-        : [];
     updateSubtopicContentMutation.mutate(
       {
         id: node.id,
         data: {
           explanation: normalizedExplanation,
-          questions: preservedQuestions,
         },
       },
       {
@@ -2685,6 +2816,9 @@ function ContentModal({
           setIsEditingExplanation(false);
           setShowExplanationPreview(false);
           queryClient.invalidateQueries({ queryKey: ["subtopic-content", node.id] });
+          if (currentTopicId) {
+            queryClient.invalidateQueries({ queryKey: ["topic-content-bundle", configId, currentTopicId] });
+          }
           queryClient.invalidateQueries({ queryKey: ["config-question-bank", configId] });
         },
       }
@@ -2714,17 +2848,6 @@ function ContentModal({
                 title="Explore subtopics"
               >
                 Explore
-              </Button>
-            )}
-            {showGoNextTopicAction && (
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => onNavigate(nextTopicFromParentId)}
-                className="h-8 rounded-full border-blue-300 bg-blue-50 px-3 text-blue-800 hover:bg-blue-100"
-                title={nextTopicFromParentTitle ? `Go to next topic: ${nextTopicFromParentTitle}` : "Go to next topic"}
-              >
-                Go to next topic
               </Button>
             )}
             {showDoneBadge && (
@@ -2772,10 +2895,10 @@ function ContentModal({
           {isTopic && (
             <>
               <PathNavBlock
-                prerequisiteTitles={node.prerequisiteTitles}
-                nextRecommendedTitles={node.nextRecommendedTitles}
-                prerequisiteNodeIds={node.prerequisiteNodeIds}
-                nextRecommendedNodeIds={node.nextRecommendedNodeIds}
+                prerequisiteTitles={topicPrereqTitle ? [topicPrereqTitle] : []}
+                nextRecommendedTitles={topicNextTitle ? [topicNextTitle] : []}
+                prerequisiteNodeIds={topicPrereqNodeId ? [topicPrereqNodeId] : []}
+                nextRecommendedNodeIds={topicNextNodeId ? [topicNextNodeId] : []}
                 isNodeCompleted={isNodeCompleted}
                 onNavigate={onNavigate}
               />
@@ -2816,7 +2939,16 @@ function ContentModal({
                         <h3 className="text-sm font-bold text-foreground uppercase tracking-wider">Core Idea</h3>
                         </div>
                       </div>
-                      {topicParts.coreExplanation ? (
+                      {isLoading ? (
+                        <div className="space-y-3 rounded-xl border border-border bg-secondary/20 p-5 min-h-[240px]">
+                          <div className="h-6 bg-muted animate-pulse rounded w-11/12" />
+                          <div className="h-6 bg-muted animate-pulse rounded w-10/12" />
+                          <div className="h-6 bg-muted animate-pulse rounded w-9/12" />
+                          <div className="h-6 bg-muted animate-pulse rounded w-8/12" />
+                          <div className="h-6 bg-muted animate-pulse rounded w-7/12" />
+                          <div className="h-6 bg-muted animate-pulse rounded w-6/12" />
+                        </div>
+                      ) : topicParts.coreExplanation ? (
                         <div className="text-foreground/70 font-medium">
                           <AnswerRenderer answer={topicParts.coreExplanation} />
                         </div>
@@ -2984,17 +3116,6 @@ function ContentModal({
                 Explore
               </Button>
             )}
-            {showGoNextTopicAction && (
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => onNavigate(nextTopicFromParentId)}
-                className="h-8 rounded-full border-blue-300 bg-blue-50 px-3 text-blue-800 hover:bg-blue-100"
-                title={nextTopicFromParentTitle ? `Go to next topic: ${nextTopicFromParentTitle}` : "Go to next topic"}
-              >
-                Go to next topic
-              </Button>
-            )}
             {showDoneBadge && (
               <span className="text-xs font-semibold text-green-600 bg-green-50 px-2 py-1 rounded-full border border-green-200 flex items-center gap-1">
                 <CheckCircle2 className="w-3 h-3" /> Done
@@ -3040,10 +3161,10 @@ function ContentModal({
           {isTopic && (
             <>
               <PathNavBlock
-                prerequisiteTitles={node.prerequisiteTitles}
-                nextRecommendedTitles={node.nextRecommendedTitles}
-                prerequisiteNodeIds={node.prerequisiteNodeIds}
-                nextRecommendedNodeIds={node.nextRecommendedNodeIds}
+                prerequisiteTitles={topicPrereqTitle ? [topicPrereqTitle] : []}
+                nextRecommendedTitles={topicNextTitle ? [topicNextTitle] : []}
+                prerequisiteNodeIds={topicPrereqNodeId ? [topicPrereqNodeId] : []}
+                nextRecommendedNodeIds={topicNextNodeId ? [topicNextNodeId] : []}
                 isNodeCompleted={isNodeCompleted}
                 onNavigate={onNavigate}
               />
@@ -3081,7 +3202,16 @@ function ContentModal({
                         <h3 className="text-sm font-bold text-foreground uppercase tracking-wider">Core Idea</h3>
                       </div>
                     </div>
-                    {topicParts.coreExplanation ? (
+                    {isLoading ? (
+                      <div className="space-y-3 rounded-xl border border-border bg-secondary/20 p-5 min-h-[240px]">
+                        <div className="h-6 bg-muted animate-pulse rounded w-11/12" />
+                        <div className="h-6 bg-muted animate-pulse rounded w-10/12" />
+                        <div className="h-6 bg-muted animate-pulse rounded w-9/12" />
+                        <div className="h-6 bg-muted animate-pulse rounded w-8/12" />
+                        <div className="h-6 bg-muted animate-pulse rounded w-7/12" />
+                        <div className="h-6 bg-muted animate-pulse rounded w-6/12" />
+                      </div>
+                    ) : topicParts.coreExplanation ? (
                       <AnswerRenderer answer={topicParts.coreExplanation} />
                     ) : (
                       <p className="text-muted-foreground italic">No explanation available for this topic.</p>
@@ -3215,7 +3345,9 @@ function QuestionCard({ label, question, answer }: { label: string; question: st
         </div>
       </div>
       <div className="p-4">
-        <div className="text-sm text-foreground/80 whitespace-pre-line leading-relaxed">{answer}</div>
+        <div className="text-sm text-foreground/80 leading-relaxed">
+          <AnswerRenderer answer={repairBrokenFormulaBullets(answer)} />
+        </div>
       </div>
     </div>
   );
@@ -3232,7 +3364,11 @@ function QuestionBankModal({
   initialQuestionId: number | null;
   onClose: () => void;
 }) {
-  const { data, isLoading, isError } = useGetQuestionBank(configId);
+  const { data, isLoading, isError } = useGetQuestionBank(configId, {
+    staleTime: 60 * 60 * 1000,
+    gcTime: 60 * 60 * 1000,
+    refetchOnWindowFocus: false,
+  });
   const validQuestions = useMemo(
     () => data?.questions ?? [],
     [data?.questions]
@@ -3801,7 +3937,11 @@ function QuestionBankPane({
   initialQuestionId: number | null;
   onClose: () => void;
 }) {
-  const { data, isLoading, isError } = useGetQuestionBank(configId);
+  const { data, isLoading, isError } = useGetQuestionBank(configId, {
+    staleTime: 60 * 60 * 1000,
+    gcTime: 60 * 60 * 1000,
+    refetchOnWindowFocus: false,
+  });
   const validQuestions = useMemo(
     () => data?.questions ?? [],
     [data?.questions]

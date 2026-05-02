@@ -38,7 +38,7 @@ function mergeLineContent(previous: string, current: string): string {
   return collapseSpaces(`${previous} ${current}`);
 }
 
-export function repairBrokenFormulaBullets(text: string): string {
+function repairBrokenFormulaBulletsPlainText(text: string): string {
   const source = String(text || "");
   if (!source.trim()) return source;
 
@@ -71,6 +71,33 @@ export function repairBrokenFormulaBullets(text: string): string {
   }
 
   return out.join("\n").trim();
+}
+
+export function repairBrokenFormulaBullets(text: string): string {
+  const source = String(text || "");
+  if (!source.trim()) return source;
+
+  // Preserve fenced code blocks exactly as authored; only repair prose around them.
+  const fenceRegex = /```[\s\S]*?```/g;
+  const chunks: string[] = [];
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+
+  while ((match = fenceRegex.exec(source)) !== null) {
+    const before = source.slice(lastIndex, match.index);
+    if (before) {
+      chunks.push(repairBrokenFormulaBulletsPlainText(before));
+    }
+    chunks.push(match[0]);
+    lastIndex = fenceRegex.lastIndex;
+  }
+
+  const tail = source.slice(lastIndex);
+  if (tail) {
+    chunks.push(repairBrokenFormulaBulletsPlainText(tail));
+  }
+
+  return chunks.join("\n").trim();
 }
 
 export type StructuredExplanationParts = {
