@@ -3337,7 +3337,7 @@ function QuestionCard({ label, question, answer }: { label: string; question: st
           <span className="shrink-0 px-2 py-0.5 rounded-md bg-primary/10 text-primary text-[10px] font-bold uppercase tracking-wider">
             {label}
           </span>
-          <p className="text-sm font-semibold text-foreground leading-snug">{renderInlineCodeText(question)}</p>
+          <p className="text-sm font-semibold text-foreground leading-snug whitespace-pre-line">{renderInlineCodeText(question)}</p>
         </div>
       </div>
       <div className="p-4">
@@ -3835,7 +3835,7 @@ function QuestionBankModal({
                       )}
                     </div>
                     <div className="w-full rounded-lg border border-blue-100 bg-white/70 p-3">
-                      <p className="text-sm font-semibold text-foreground leading-snug">{renderInlineCodeText(selectedQuestion.question)}</p>
+                      <p className="text-sm font-semibold text-foreground leading-snug whitespace-pre-line">{renderInlineCodeText(selectedQuestion.question)}</p>
                       {selectedQuestion.context && (
                         <p className="text-xs text-muted-foreground mt-1 break-words">{renderInlineCodeText(selectedQuestion.context)}</p>
                       )}
@@ -3863,7 +3863,7 @@ function QuestionBankModal({
                       />
                     )}
                     <div className="min-w-0">
-                      <p className="text-sm font-semibold text-foreground leading-snug">{renderInlineCodeText(selectedQuestion.question)}</p>
+                      <p className="text-sm font-semibold text-foreground leading-snug whitespace-pre-line">{renderInlineCodeText(selectedQuestion.question)}</p>
                       {selectedQuestion.context && (
                         <p className="text-xs text-muted-foreground mt-1 break-words">{renderInlineCodeText(selectedQuestion.context)}</p>
                       )}
@@ -3878,7 +3878,7 @@ function QuestionBankModal({
                 <div className="p-4">
                   {isAdminViewer && expandedEditMode ? (
                     <div className="space-y-3">
-                      <Input value={expandedQuestionDraft} onChange={(e) => setExpandedQuestionDraft(e.target.value)} className="text-sm" />
+                      <Textarea value={expandedQuestionDraft} onChange={(e) => setExpandedQuestionDraft(e.target.value)} rows={4} className="text-sm" />
                       <Textarea value={expandedAnswerDraft} onChange={(e) => setExpandedAnswerDraft(e.target.value)} rows={8} className="text-sm font-mono" />
                       {expandedEditPreview && (
                         <div className="rounded-lg border border-border bg-secondary/20 p-3">
@@ -4440,7 +4440,7 @@ function QuestionBankPane({
                 </div>
               </div>
               <div className="p-4 border-b border-blue-100 bg-white/70">
-                <p className="text-sm font-semibold text-foreground leading-snug">{renderInlineCodeText(selectedQuestion.question)}</p>
+                <p className="text-sm font-semibold text-foreground leading-snug whitespace-pre-line">{renderInlineCodeText(selectedQuestion.question)}</p>
                 {selectedQuestion.context && (
                   <p className="text-xs text-muted-foreground mt-1 break-words">{renderInlineCodeText(selectedQuestion.context)}</p>
                 )}
@@ -4448,7 +4448,7 @@ function QuestionBankPane({
               <div className="p-4">
                 {isAdminViewer && expandedEditMode ? (
                   <div className="space-y-3">
-                    <Input value={expandedQuestionDraft} onChange={(e) => setExpandedQuestionDraft(e.target.value)} className="text-sm" />
+                    <Textarea value={expandedQuestionDraft} onChange={(e) => setExpandedQuestionDraft(e.target.value)} rows={4} className="text-sm" />
                     <Textarea value={expandedAnswerDraft} onChange={(e) => setExpandedAnswerDraft(e.target.value)} rows={8} className="text-sm font-mono" />
                     {expandedEditPreview && (
                       <div className="rounded-lg border border-border bg-secondary/20 p-3">
@@ -4633,7 +4633,7 @@ function QuestionBankCard({
       </div>
 
       <div className="px-4 py-3 border-b border-blue-100 bg-white/70">
-        <p className="text-[13px] font-medium text-foreground leading-snug">{renderInlineCodeText(question)}</p>
+        <p className="text-[13px] font-medium text-foreground leading-snug whitespace-pre-line">{renderInlineCodeText(question)}</p>
         {hasContext && <p className="text-[11px] text-muted-foreground mt-1 break-words">{renderInlineCodeText(context)}</p>}
       </div>
 
