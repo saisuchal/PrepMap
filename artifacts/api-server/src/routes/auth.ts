@@ -51,6 +51,7 @@ async function issueSessionTokens(user: {
   id: string;
   role: string;
   universityId: string;
+  batch: string;
   branch: string;
   year: string;
 }) {
@@ -72,6 +73,7 @@ async function issueSessionTokens(user: {
     userId: user.id,
     role: user.role,
     universityId: user.universityId,
+    batch: user.batch,
     branch: user.branch,
     year: user.year,
   });
@@ -83,6 +85,7 @@ function buildLoginLikeResponse(user: any, tokens: { accessToken: string; refres
   return LoginResponse.parse({
     id: user.id,
     universityId: user.universityId,
+    batch: String(user.batch || "").trim() || "2025",
     branch: user.branch,
     year: user.year,
     role: user.role,
@@ -339,6 +342,7 @@ router.post("/auth/refresh", async (req, res) => {
       userId: user.id,
       role: user.role,
       universityId: user.universityId,
+      batch: String((user as any).batch || "").trim() || "2025",
       branch: user.branch,
       year: user.year,
     });

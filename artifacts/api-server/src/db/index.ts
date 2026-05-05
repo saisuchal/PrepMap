@@ -57,6 +57,7 @@ export async function withRequestDbContext<T>(
         set_config('app.user_id', ${String(claims?.sub || "")}, true),
         set_config('app.role', ${String(claims?.role || "")}, true),
         set_config('app.university_id', ${String(claims?.universityId || "")}, true),
+        set_config('app.batch', ${String(claims?.batch || "")}, true),
         set_config('app.branch', ${String(claims?.branch || "")}, true),
         set_config('app.year', ${String(claims?.year || "")}, true)
     `);
@@ -94,6 +95,16 @@ export async function initializeDatabase(): Promise<void> {
     STABLE
     AS $$
       SELECT nullif(current_setting('app.university_id', true), '')
+    $$;
+  `);
+
+  await pool.query(`
+    CREATE OR REPLACE FUNCTION public.app_batch()
+    RETURNS text
+    LANGUAGE sql
+    STABLE
+    AS $$
+      SELECT nullif(current_setting('app.batch', true), '')
     $$;
   `);
 
@@ -260,7 +271,15 @@ export async function initializeDatabase(): Promise<void> {
   `);
   await pool.query(`
     ALTER TABLE public.users
+    ADD COLUMN IF NOT EXISTS batch text NOT NULL DEFAULT '2025';
+  `);
+  await pool.query(`
+    ALTER TABLE public.users
     ADD COLUMN IF NOT EXISTS must_reset_password boolean NOT NULL DEFAULT false;
+  `);
+  await pool.query(`
+    ALTER TABLE public.users
+    ALTER COLUMN must_reset_password SET DEFAULT true;
   `);
   await pool.query(`
     ALTER TABLE public.users
@@ -316,6 +335,11 @@ export async function initializeDatabase(): Promise<void> {
   await pool.query(`
     ALTER TABLE public.users
     DROP COLUMN IF EXISTS account_type;
+  `);
+
+  await pool.query(`
+    ALTER TABLE public.users
+    ALTER COLUMN role DROP DEFAULT;
   `);
 
   await pool.query(`
@@ -492,6 +516,75 @@ export async function initializeDatabase(): Promise<void> {
 
   await pool.query(`
     ALTER TABLE IF EXISTS public.configs
+    ADD COLUMN IF NOT EXISTS batch text NOT NULL DEFAULT '2025';
+  `);
+
+  await pool.query(`
+    ALTER TABLE IF EXISTS public.events
+    ADD COLUMN IF NOT EXISTS batch text NOT NULL DEFAULT '2025';
+  `);
+
+  await pool.query(`
+    UPDATE public.users
+    SET batch = CASE
+      WHEN lower(coalesce(role, '')) IN ('student', 'super_student') THEN '2025'
+      ELSE 'ALL'
+    END
+    WHERE batch IS NULL OR btrim(batch) = '';
+  `);
+
+  await pool.query(`
+    DO $$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1
+        FROM pg_constraint
+        WHERE conname = 'users_batch_required_for_learners_chk'
+      ) THEN
+        ALTER TABLE public.users
+        ADD CONSTRAINT users_batch_required_for_learners_chk
+        CHECK (
+          CASE
+            WHEN lower(coalesce(role, '')) IN ('student', 'super_student')
+              THEN btrim(coalesce(batch, '')) <> '' AND lower(btrim(batch)) <> 'all'
+            ELSE btrim(coalesce(batch, '')) <> ''
+          END
+        );
+      END IF;
+    END $$;
+  `);
+
+  await pool.query(`
+    DO $$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1
+        FROM pg_constraint
+        WHERE conname = 'users_name_required_for_learners_chk'
+      ) THEN
+        ALTER TABLE public.users
+        ADD CONSTRAINT users_name_required_for_learners_chk
+        CHECK (
+          CASE
+            WHEN lower(coalesce(role, '')) IN ('student', 'super_student')
+              THEN btrim(coalesce(name, '')) <> ''
+            ELSE true
+          END
+        );
+      END IF;
+    END $$;
+  `);
+
+  await pool.query(`
+    UPDATE public.configs SET batch = '2025' WHERE batch IS NULL OR btrim(batch) = '';
+  `);
+
+  await pool.query(`
+    UPDATE public.events SET batch = '2025' WHERE batch IS NULL OR btrim(batch) = '';
+  `);
+
+  await pool.query(`
+    ALTER TABLE IF EXISTS public.configs
     ADD COLUMN IF NOT EXISTS updated_at timestamp without time zone NOT NULL DEFAULT now();
   `);
 
@@ -622,6 +715,7 @@ export async function initializeDatabase(): Promise<void> {
         public.app_role() = 'student'
         AND status = 'live'
         AND university_id = public.app_university_id()
+        AND public.app_normalize_token(batch) = public.app_normalize_token(public.app_batch())
         AND public.app_normalize_token(branch) = public.app_normalize_token(public.app_branch())
         AND public.app_student_year_matches_config_year(public.app_year(), year)
       )
@@ -656,6 +750,7 @@ export async function initializeDatabase(): Promise<void> {
               public.app_role() = 'student'
               AND c.status = 'live'
               AND c.university_id = public.app_university_id()
+              AND public.app_normalize_token(c.batch) = public.app_normalize_token(public.app_batch())
               AND public.app_normalize_token(c.branch) = public.app_normalize_token(public.app_branch())
               AND public.app_student_year_matches_config_year(public.app_year(), c.year)
             )
@@ -704,6 +799,7 @@ export async function initializeDatabase(): Promise<void> {
               public.app_role() = 'student'
               AND c.status = 'live'
               AND c.university_id = public.app_university_id()
+              AND public.app_normalize_token(c.batch) = public.app_normalize_token(public.app_batch())
               AND public.app_normalize_token(c.branch) = public.app_normalize_token(public.app_branch())
               AND public.app_student_year_matches_config_year(public.app_year(), c.year)
             )

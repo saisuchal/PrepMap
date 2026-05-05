@@ -819,6 +819,7 @@ async function insertValuesInChunks<T extends Record<string, any>>(
 router.post("/configs", requireAdmin, async (req, res) => {
   try {
     const body = CreateConfigBody.parse(req.body);
+    const requestedBatch = String((body as any).batch || "").trim() || "2025";
     const userId = (req as any).userId as string;
     const forceCreateNew = Boolean((req.body as any)?.forceCreateNew);
     const reuseDisabledConfigId = String((req.body as any)?.reuseDisabledConfigId || "").trim();
@@ -828,6 +829,7 @@ router.post("/configs", requireAdmin, async (req, res) => {
       .from(configsTable)
       .where(and(
         eq(configsTable.universityId, body.universityId),
+        eq(configsTable.batch, requestedBatch),
         eq(configsTable.year, body.year),
         eq(configsTable.branch, body.branch),
         eq(configsTable.subject, body.subject),
@@ -868,6 +870,7 @@ router.post("/configs", requireAdmin, async (req, res) => {
         res.status(200).json({
           id: revived.id,
           universityId: revived.universityId,
+          batch: String(revived.batch || "").trim() || "2025",
           year: revived.year,
           branch: revived.branch,
           subject: revived.subject,
@@ -907,6 +910,7 @@ router.post("/configs", requireAdmin, async (req, res) => {
     await db.insert(configsTable).values({
       id,
       universityId: body.universityId,
+      batch: requestedBatch,
       year: body.year,
       branch: body.branch,
       subject: body.subject,
@@ -924,6 +928,7 @@ router.post("/configs", requireAdmin, async (req, res) => {
     res.status(201).json({
       id: config.id,
       universityId: config.universityId,
+      batch: String(config.batch || "").trim() || "2025",
       year: config.year,
       branch: config.branch,
       subject: config.subject,
@@ -977,6 +982,7 @@ router.post("/configs/:id/clone", requireAdmin, async (req, res) => {
       .from(configsTable)
       .where(and(
         eq(configsTable.universityId, targetUniversityId),
+        eq(configsTable.batch, String(source.batch || "").trim() || "2025"),
         eq(configsTable.year, source.year),
         eq(configsTable.branch, source.branch),
         eq(configsTable.subject, source.subject),
@@ -999,6 +1005,7 @@ router.post("/configs/:id/clone", requireAdmin, async (req, res) => {
       await tx.insert(configsTable).values({
         id: clonedConfigId,
         universityId: targetUniversityId,
+        batch: String(source.batch || "").trim() || "2025",
         year: source.year,
         branch: source.branch,
         subject: source.subject,
@@ -1143,6 +1150,7 @@ router.post("/configs/:id/clone", requireAdmin, async (req, res) => {
     res.status(201).json({
       id: cloned.id,
       universityId: cloned.universityId,
+      batch: String(cloned.batch || "").trim() || "2025",
       year: cloned.year,
       branch: cloned.branch,
       subject: cloned.subject,

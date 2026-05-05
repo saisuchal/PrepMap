@@ -107,6 +107,8 @@ router.get("/configs", async (req, res) => {
     if (!isAdmin && userUniversityId) {
       conditions.push(eq(configsTable.universityId, userUniversityId));
       if (!isSuperStudent) {
+        const userBatch = String((user as any)?.batch || "").trim() || "2025";
+        conditions.push(eq(configsTable.batch, userBatch));
         const allowedYearTokens = getAllowedConfigYearTokensForStudentYear(userYear);
         if (allowedYearTokens.length > 0) {
           const normalizedConfigYear = sql<string>`regexp_replace(lower(${configsTable.year}), '\\s+', '', 'g')`;
@@ -144,6 +146,7 @@ router.get("/configs", async (req, res) => {
       configs.map((c) => ({
         id: c.id,
         universityId: c.universityId,
+        batch: String(c.batch || "").trim() || "2025",
         year: c.year,
         branch: c.branch,
         subject: c.subject,
@@ -180,10 +183,11 @@ router.get("/configs/:id/question-bank", async (req, res) => {
 
     const [config] = await withRequestDbContext(auth.claims, async (tx) =>
       tx
-        .select({
+      .select({
           id: configsTable.id,
           subject: configsTable.subject,
           universityId: configsTable.universityId,
+          batch: configsTable.batch,
           year: configsTable.year,
           branch: configsTable.branch,
           status: configsTable.status,
@@ -204,6 +208,7 @@ router.get("/configs/:id/question-bank", async (req, res) => {
         id: usersTable.id,
         role: usersTable.role,
         universityId: usersTable.universityId,
+        batch: usersTable.batch,
         year: usersTable.year,
         branch: usersTable.branch,
       })
@@ -227,6 +232,12 @@ router.get("/configs/:id/question-bank", async (req, res) => {
         return;
       }
       const isSuperStudent = (user.role || "").toLowerCase() === "super_student";
+      if (!isSuperStudent) {
+        if ((String((user as any).batch || "").trim() || "2025") !== (String((config as any).batch || "").trim() || "2025")) {
+          res.status(403).json({ error: "Access denied." });
+          return;
+        }
+      }
       const branchMismatch = normalizeToken(user.branch) !== normalizeToken(config.branch);
       if (
         !isSuperStudent &&

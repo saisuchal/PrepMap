@@ -25,6 +25,7 @@ export const LoginBody = zod.object({
 export const LoginResponse = zod.object({
   id: zod.string(),
   universityId: zod.string(),
+  batch: zod.string().optional(),
   branch: zod.string(),
   year: zod.string(),
   role: zod.enum(["admin", "student", "super_student"]),
@@ -79,6 +80,7 @@ export const GetConfigsQueryParams = zod.object({
 export const GetConfigsResponseItem = zod.object({
   id: zod.string(),
   universityId: zod.string(),
+  batch: zod.string().optional(),
   year: zod.string(),
   branch: zod.string(),
   subject: zod.string(),
@@ -96,6 +98,7 @@ export const GetConfigsResponse = zod.array(GetConfigsResponseItem);
  */
 export const CreateConfigBody = zod.object({
   universityId: zod.string(),
+  batch: zod.string().optional(),
   year: zod.string(),
   branch: zod.string(),
   subject: zod.string(),

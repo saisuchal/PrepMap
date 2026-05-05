@@ -34,6 +34,7 @@ export const LoginResponseRole = {
 export interface LoginResponse {
   id: string;
   universityId: string;
+  batch?: string;
   branch: string;
   year: string;
   role: LoginResponseRole;
@@ -61,6 +62,7 @@ export const CreateConfigRequestExam = {
 
 export interface CreateConfigRequest {
   universityId: string;
+  batch?: string;
   year: string;
   branch: string;
   subject: string;
@@ -94,6 +96,7 @@ export const ConfigStatus = {
 export interface Config {
   id: string;
   universityId: string;
+  batch?: string;
   year: string;
   branch: string;
   subject: string;

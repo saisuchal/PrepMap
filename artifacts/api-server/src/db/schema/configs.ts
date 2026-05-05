@@ -5,6 +5,7 @@ import { z } from "zod/v4";
 export const configsTable = pgTable("configs", {
   id: text("id").primaryKey(),
   universityId: text("university_id").notNull(),
+  batch: text("batch").notNull().default("2025"),
   year: text("year").notNull(),
   branch: text("branch").notNull(),
   subject: text("subject").notNull(),

@@ -48,6 +48,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { useToast } from "@/hooks/use-toast";
+import { getStoredUser } from "@/lib/auth";
 
 function CreateConfigDialog({ onCreated }: { onCreated: () => void }) {
   type DisabledConfigMatch = {
@@ -84,6 +85,7 @@ function CreateConfigDialog({ onCreated }: { onCreated: () => void }) {
   const semExamLabel = (semesterId: string, examId: string) =>
     `${semesterLabel(semesterId)} - ${examLabel(examId)}`;
   const commonBranch = metadata?.commonBranch || COMMON_BRANCH;
+  const currentBatch = String(getStoredUser()?.batch || "").trim() || "2025";
   const { data: existingConfigs } = useGetConfigs({}, { query: { queryKey: ["configs", "all"] } });
   const createConfig = useCreateConfig();
   const { data: librarySubjects } = useGetLibrarySubjects();
@@ -165,6 +167,7 @@ function CreateConfigDialog({ onCreated }: { onCreated: () => void }) {
           .filter(
             (c) =>
               c.universityId === universityId &&
+              String((c as any).batch || "2025").trim() === currentBatch &&
               c.year === year &&
               c.branch === commonBranch &&
               c.exam === exam &&
@@ -198,6 +201,7 @@ function CreateConfigDialog({ onCreated }: { onCreated: () => void }) {
           .filter(
             (c) =>
               c.universityId === universityId &&
+              String((c as any).batch || "2025").trim() === currentBatch &&
               c.year === year &&
               c.branch === commonBranch &&
               c.exam === exam &&
@@ -216,6 +220,7 @@ function CreateConfigDialog({ onCreated }: { onCreated: () => void }) {
 
         let createPayload: {
           universityId: string;
+          batch?: string;
           year: string;
           branch: string;
           subject: string;
@@ -224,6 +229,7 @@ function CreateConfigDialog({ onCreated }: { onCreated: () => void }) {
           forceCreateNew?: boolean;
         } = {
           universityId,
+          batch: currentBatch,
           year,
           branch: commonBranch,
           subject: pendingSubject,
@@ -575,6 +581,7 @@ function ConfigsTab() {
   const uniLabel = (id: string) => universities.find((u) => u.id === id)?.name ?? id;
   const semesterLabel = (id: string) => semesters.find((s) => s.id === id)?.name ?? id;
   const examLabel = (id: string) => examTypes.find((e) => e.id === id)?.name ?? id;
+  const configBatchLabel = (batch?: string | null) => `Batch ${String(batch || "").trim() || "2025"}`;
   const semExamLabel = (semesterId: string, examId: string) => `${semesterLabel(semesterId)} - ${examLabel(examId)}`;
   const [, setLocation] = useLocation();
   const [selectedUniversityId, setSelectedUniversityId] = useState<string | null>(getUniversityIdFromSearch);
@@ -930,7 +937,7 @@ function ConfigsTab() {
                         </div>
                         <h3 className="font-semibold text-foreground text-lg mb-1 line-clamp-1">{config.subject}</h3>
                         <p className="text-sm text-muted-foreground mb-3">
-                          {uniLabel(config.universityId)} &middot; {config.branch}
+                          {uniLabel(config.universityId)} &middot; {config.branch} &middot; {configBatchLabel((config as any).batch)}
                         </p>
                         <div className="flex items-center justify-between">
                           <Button
@@ -982,7 +989,7 @@ function ConfigsTab() {
                       </div>
                       <h3 className="font-semibold text-foreground text-lg mb-1 line-clamp-1">{config.subject}</h3>
                       <p className="text-sm text-muted-foreground mb-3">
-                        {uniLabel(config.universityId)} &middot; {config.branch}
+                        {uniLabel(config.universityId)} &middot; {config.branch} &middot; {configBatchLabel((config as any).batch)}
                       </p>
                       <Button
                         type="button"
@@ -994,6 +1001,7 @@ function ConfigsTab() {
                             {
                               data: {
                                 universityId: config.universityId,
+                                batch: String((config as any).batch || "").trim() || "2025",
                                 year: config.year,
                                 branch: config.branch,
                                 subject: config.subject,
@@ -1356,66 +1364,77 @@ function AnalyticsTab() {
   const [expandedExams, setExpandedExams] = useState<Record<string, boolean>>({});
 
   const groupedSelectedUniversityConfigs = useMemo(() => {
-    const semMap = new Map<
+    const statusMap = new Map<
       string,
       {
-        semesterId: string;
-        exams: Map<
+        status: string;
+        years: Map<
           string,
           {
-            examId: string;
-            statuses: Map<string, typeof selectedUniversityConfigs>;
+            yearId: string;
+            exams: Map<
+              string,
+              {
+                examId: string;
+                configs: typeof selectedUniversityConfigs;
+              }
+            >;
           }
         >;
       }
     >();
 
     for (const cfg of selectedUniversityConfigs) {
-      const semesterId = cfg.year || "other";
-      const examId = cfg.exam || "other";
       const status = String(cfg.status || "unknown").toLowerCase();
-      if (!semMap.has(semesterId)) {
-        semMap.set(semesterId, { semesterId, exams: new Map() });
+      const yearId = cfg.year || "other";
+      const examId = cfg.exam || "other";
+      if (!statusMap.has(status)) {
+        statusMap.set(status, { status, years: new Map() });
       }
-      const semEntry = semMap.get(semesterId)!;
-      if (!semEntry.exams.has(examId)) {
-        semEntry.exams.set(examId, { examId, statuses: new Map() });
+      const statusEntry = statusMap.get(status)!;
+      if (!statusEntry.years.has(yearId)) {
+        statusEntry.years.set(yearId, { yearId, exams: new Map() });
       }
-      const examEntry = semEntry.exams.get(examId)!;
-      const existing = examEntry.statuses.get(status) ?? [];
-      examEntry.statuses.set(status, [...existing, cfg]);
+      const yearEntry = statusEntry.years.get(yearId)!;
+      if (!yearEntry.exams.has(examId)) {
+        yearEntry.exams.set(examId, { examId, configs: [] });
+      }
+      const examEntry = yearEntry.exams.get(examId)!;
+      examEntry.configs = [...examEntry.configs, cfg];
     }
 
-    const sems = Array.from(semMap.values())
-      .map((sem) => {
-        const exams = Array.from(sem.exams.values())
-          .map((exam) => {
-            const statuses = Array.from(exam.statuses.entries())
-              .map(([status, configs]) => ({
-                status,
-                configs: [...configs].sort((a, b) => a.subject.localeCompare(b.subject) || a.id.localeCompare(b.id)),
+    const statuses = Array.from(statusMap.values())
+      .map((statusGroup) => {
+        const years = Array.from(statusGroup.years.values())
+          .map((yearGroup) => {
+            const exams = Array.from(yearGroup.exams.values())
+              .map((examGroup) => ({
+                examId: examGroup.examId,
+                configs: [...examGroup.configs].sort(
+                  (a, b) => a.subject.localeCompare(b.subject) || a.id.localeCompare(b.id)
+                ),
               }))
               .sort(
                 (a, b) =>
-                  (statusOrderMap.get(a.status) ?? 99) - (statusOrderMap.get(b.status) ?? 99) ||
-                  a.status.localeCompare(b.status)
+                  (examOrderMap.get(a.examId) ?? 99) - (examOrderMap.get(b.examId) ?? 99) ||
+                  a.examId.localeCompare(b.examId)
               );
-            return { examId: exam.examId, statuses };
+            return { yearId: yearGroup.yearId, exams };
           })
           .sort(
             (a, b) =>
-              (examOrderMap.get(a.examId) ?? 99) - (examOrderMap.get(b.examId) ?? 99) ||
-              a.examId.localeCompare(b.examId)
+              (semesterOrderMap.get(a.yearId) ?? 99) - (semesterOrderMap.get(b.yearId) ?? 99) ||
+              a.yearId.localeCompare(b.yearId)
           );
-        return { semesterId: sem.semesterId, exams };
+        return { status: statusGroup.status, years };
       })
       .sort(
         (a, b) =>
-          (semesterOrderMap.get(a.semesterId) ?? 99) - (semesterOrderMap.get(b.semesterId) ?? 99) ||
-          a.semesterId.localeCompare(b.semesterId)
+          (statusOrderMap.get(a.status) ?? 99) - (statusOrderMap.get(b.status) ?? 99) ||
+          a.status.localeCompare(b.status)
       );
 
-    return sems;
+    return statuses;
   }, [selectedUniversityConfigs, statusOrderMap, examOrderMap, semesterOrderMap]);
 
   const statusLabel = (status: string) => {
@@ -1579,6 +1598,7 @@ function AnalyticsTab() {
                 <th className="px-6 py-4 font-semibold">University</th>
                 <th className="px-6 py-4 font-semibold text-right">Students</th>
                 <th className="px-6 py-4 font-semibold text-right">Live Configs</th>
+                <th className="px-6 py-4 font-semibold text-right">Total Configs</th>
                 <th className="px-6 py-4 font-semibold text-right">Actions</th>
               </tr>
             </thead>
@@ -1589,17 +1609,19 @@ function AnalyticsTab() {
                     <td className="px-6 py-4"><div className="h-5 bg-muted animate-pulse rounded w-3/4" /></td>
                     <td className="px-6 py-4"><div className="h-5 bg-muted animate-pulse rounded w-1/3 ml-auto" /></td>
                     <td className="px-6 py-4"><div className="h-5 bg-muted animate-pulse rounded w-1/3 ml-auto" /></td>
+                    <td className="px-6 py-4"><div className="h-5 bg-muted animate-pulse rounded w-1/3 ml-auto" /></td>
                     <td className="px-6 py-4"><div className="h-8 bg-muted animate-pulse rounded w-24 ml-auto" /></td>
                   </tr>
                 ))
               ) : configsError ? (
                 <tr>
-                  <td colSpan={4} className="px-6 py-12 text-center text-destructive">
+                  <td colSpan={5} className="px-6 py-12 text-center text-destructive">
                     Failed to load analytics: {configsErrorDetails instanceof Error ? configsErrorDetails.message : "Unknown error"}
                   </td>
                 </tr>
               ) : (
                 universityRows.map((row, i) => {
+                  const liveConfigCount = row.configs.filter((cfg) => cfg.status === "live").length;
                   return (
                     <motion.tr
                       initial={{ opacity: 0, y: 10 }}
@@ -1615,6 +1637,9 @@ function AnalyticsTab() {
                         <span className="font-display font-bold text-foreground">
                           {studentCountByUniversity.get(row.universityId) ?? 0}
                         </span>
+                      </td>
+                      <td className="px-6 py-4 text-right">
+                        <span className="font-display font-bold text-foreground">{liveConfigCount}</span>
                       </td>
                       <td className="px-6 py-4 text-right">
                         <span className="font-display font-bold text-foreground">{row.configs.length}</span>
@@ -1668,7 +1693,7 @@ function AnalyticsTab() {
                     Student Progress
                   </DialogTitle>
                   <p className="text-base font-semibold text-foreground">
-                    {`${uniLabel(selectedUniversityId || "")} | ${selectedConfig.subject} | ${semesterLabel(selectedConfig.year)} | ${examLabel(selectedConfig.exam)}`}
+                    {`${uniLabel(selectedUniversityId || "")} | ${selectedConfig.subject} | ${semesterLabel(selectedConfig.year)} | ${examLabel(selectedConfig.exam)} | Batch ${String((selectedConfig as any).batch || "").trim() || "2025"}`}
                   </p>
                 </div>
               </div>
@@ -1714,63 +1739,63 @@ function AnalyticsTab() {
                       </td>
                     </tr>
                   ) : (
-                    groupedSelectedUniversityConfigs.flatMap((semGroup) => {
-                      const semKey = semGroup.semesterId;
-                      const semOpen = expandedSemesters[semKey] ?? true;
-                      const semTotal = semGroup.exams.reduce(
-                        (acc, exam) => acc + exam.statuses.reduce((sAcc, st) => sAcc + st.configs.length, 0),
+                    groupedSelectedUniversityConfigs.flatMap((statusGroup) => {
+                      const statusKey = statusGroup.status;
+                      const statusOpen = expandedSemesters[statusKey] ?? true;
+                      const statusTotal = statusGroup.years.reduce(
+                        (acc, year) => acc + year.exams.reduce((examAcc, exam) => examAcc + exam.configs.length, 0),
                         0
                       );
-                      const semRows = [
-                        <tr key={`sem-${semKey}`} className="bg-muted/35">
+                      const statusRows = [
+                        <tr key={`status-${statusKey}`} className="bg-muted/35">
                           <td className="px-4 py-3 font-semibold text-foreground" colSpan={8}>
                             <button
                               type="button"
                               className="inline-flex items-center gap-2"
                               onClick={() =>
-                                setExpandedSemesters((prev) => ({ ...prev, [semKey]: !semOpen }))
+                                setExpandedSemesters((prev) => ({ ...prev, [statusKey]: !statusOpen }))
                               }
                             >
-                              <ChevronRight className={`w-4 h-4 transition-transform ${semOpen ? "rotate-90" : ""}`} />
-                              <span>Semester: {semesterLabel(semGroup.semesterId)}</span>
-                              <Badge variant="secondary">{semTotal}</Badge>
+                              <ChevronRight className={`w-4 h-4 transition-transform ${statusOpen ? "rotate-90" : ""}`} />
+                              <span>Status: {statusLabel(statusGroup.status)}</span>
+                              <Badge variant="secondary">{statusTotal}</Badge>
                             </button>
                           </td>
                         </tr>,
                       ];
-                      if (!semOpen) return semRows;
+                      if (!statusOpen) return statusRows;
 
-                      for (const examGroup of semGroup.exams) {
-                        const examKey = `${semKey}::${examGroup.examId}`;
-                        const examOpen = expandedExams[examKey] ?? true;
-                        const examTotal = examGroup.statuses.reduce((acc, st) => acc + st.configs.length, 0);
-                        semRows.push(
-                          <tr key={`exam-${examKey}`} className="bg-muted/20">
+                      for (const yearGroup of statusGroup.years) {
+                        const yearKey = `${statusKey}::${yearGroup.yearId}`;
+                        const yearOpen = expandedExams[yearKey] ?? true;
+                        const yearTotal = yearGroup.exams.reduce((acc, exam) => acc + exam.configs.length, 0);
+                        statusRows.push(
+                          <tr key={`year-${yearKey}`} className="bg-muted/20">
                             <td className="px-4 py-3 pl-8 font-medium text-foreground" colSpan={8}>
                               <button
                                 type="button"
                                 className="inline-flex items-center gap-2"
                                 onClick={() =>
-                                  setExpandedExams((prev) => ({ ...prev, [examKey]: !examOpen }))
+                                  setExpandedExams((prev) => ({ ...prev, [yearKey]: !yearOpen }))
                                 }
                               >
-                                <ChevronRight className={`w-4 h-4 transition-transform ${examOpen ? "rotate-90" : ""}`} />
-                                <span>Exam: {examLabel(examGroup.examId)}</span>
-                                <Badge variant="outline">{examTotal}</Badge>
+                                <ChevronRight className={`w-4 h-4 transition-transform ${yearOpen ? "rotate-90" : ""}`} />
+                                <span>Year: {semesterLabel(yearGroup.yearId)}</span>
+                                <Badge variant="outline">{yearTotal}</Badge>
                               </button>
                             </td>
                           </tr>
                         );
-                        if (!examOpen) continue;
+                        if (!yearOpen) continue;
 
-                        for (const statusGroup of examGroup.statuses) {
-                          for (const cfg of statusGroup.configs) {
+                        for (const examGroup of yearGroup.exams) {
+                          for (const cfg of examGroup.configs) {
                             const qb = qbSummaryByConfig.get(cfg.id);
                             const percent = Math.round(qb?.interactionPercent ?? 0);
                             const uniqueStudents = qb?.uniqueStudents ?? 0;
-                            semRows.push(
+                            statusRows.push(
                               <tr key={cfg.id}>
-                                <td className="px-4 py-3 pl-12 text-muted-foreground">{statusLabel(statusGroup.status)}</td>
+                                <td className="px-4 py-3 pl-12 text-muted-foreground">{examLabel(examGroup.examId)}</td>
                                 <td className="px-4 py-3 font-medium text-foreground">{cfg.subject}</td>
                                 <td className="px-4 py-3 text-foreground">{semesterLabel(cfg.year)}</td>
                                 <td className="px-4 py-3 text-foreground">{examLabel(cfg.exam)}</td>
@@ -1796,7 +1821,7 @@ function AnalyticsTab() {
                           }
                         }
                       }
-                      return semRows;
+                      return statusRows;
                     })
                   )}
                 </tbody>

@@ -179,6 +179,7 @@ router.post("/events", async (req, res) => {
         .select({
           id: usersTable.id,
           universityId: usersTable.universityId,
+          batch: usersTable.batch,
           year: usersTable.year,
           branch: usersTable.branch,
           role: usersTable.role,
@@ -212,6 +213,7 @@ router.post("/events", async (req, res) => {
       await tx.insert(eventsTable).values({
         userId: authUser.id,
         universityId: authUser.universityId,
+        batch: String(authUser.batch || "").trim() || "2025",
         year: authUser.year,
         branch: authUser.branch,
         exam: resolvedExam,

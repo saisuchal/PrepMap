@@ -11,6 +11,7 @@ import type { ConfigStatus } from "./configStatus";
 export interface Config {
   id: string;
   universityId: string;
+  batch?: string;
   year: string;
   branch: string;
   subject: string;

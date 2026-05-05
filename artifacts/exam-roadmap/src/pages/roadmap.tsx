@@ -705,7 +705,8 @@ export default function Roadmap() {
     ? (semesters.find((s) => s.id === activeConfig.year)?.name ?? activeConfig.year)
     : "";
   const branchLabel = activeConfig?.branch ?? "";
-  const subtitleMeta = [universityLabel, branchLabel, semesterLabel, examLabel].filter(Boolean).join(" | ");
+  const batchLabel = activeConfig ? `Batch ${String((activeConfig as any)?.batch || "").trim() || "2025"}` : "";
+  const subtitleMeta = [universityLabel, branchLabel, semesterLabel, examLabel, batchLabel].filter(Boolean).join(" | ");
 
   const { data: nodes, isLoading, isError } = useGetNodes(
     { configId: configId! },

@@ -4,6 +4,7 @@ export type AccessTokenPayload = {
   sub: string;
   role: string;
   universityId: string;
+  batch: string;
   branch: string;
   year: string;
   type: "access";
@@ -43,6 +44,7 @@ export function issueAccessToken(claims: {
   userId: string;
   role: string;
   universityId: string;
+  batch: string;
   branch: string;
   year: string;
 }): { token: string; payload: AccessTokenPayload } {
@@ -55,6 +57,7 @@ export function issueAccessToken(claims: {
     sub: claims.userId,
     role: claims.role,
     universityId: claims.universityId,
+    batch: claims.batch,
     branch: claims.branch,
     year: claims.year,
     type: "access",
@@ -103,7 +106,10 @@ export function verifyAccessToken(token: string): AccessTokenPayload | null {
     if (!payload.exp || !payload.iat) return null;
     if (payload.exp <= now) return null;
 
-    return payload as AccessTokenPayload;
+    return {
+      ...(payload as AccessTokenPayload),
+      batch: String(payload.batch || "").trim() || "2025",
+    };
   } catch {
     return null;
   }

@@ -2151,7 +2151,7 @@ export default function ConfigDetail() {
         </div>
         <h1 className="text-2xl font-display font-bold text-foreground">{config.subject}</h1>
         <p className="text-muted-foreground mt-1">
-          {uniLabel(config.universityId)} &middot; {config.branch} &middot; {semesterLabel(config.year)} &middot; {examLabel(config.exam)}
+          {uniLabel(config.universityId)} &middot; {config.branch} &middot; {semesterLabel(config.year)} &middot; {examLabel(config.exam)} &middot; Batch {String((config as any).batch || "").trim() || "2025"}
         </p>
       </div>
 

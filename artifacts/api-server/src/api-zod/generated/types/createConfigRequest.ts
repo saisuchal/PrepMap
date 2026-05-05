@@ -9,6 +9,7 @@ import type { CreateConfigRequestExam } from "./createConfigRequestExam";
 
 export interface CreateConfigRequest {
   universityId: string;
+  batch?: string;
   year: string;
   branch: string;
   subject: string;

@@ -6,6 +6,7 @@ export const eventsTable = pgTable("events", {
   id: serial("id").primaryKey(),
   userId: text("user_id").notNull(),
   universityId: text("university_id").notNull(),
+  batch: text("batch").notNull().default("2025"),
   year: text("year").notNull(),
   branch: text("branch").notNull(),
   exam: text("exam").notNull(),

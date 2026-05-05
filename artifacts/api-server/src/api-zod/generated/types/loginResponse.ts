@@ -10,6 +10,7 @@ import type { LoginResponseRole } from "./loginResponseRole";
 export interface LoginResponse {
   id: string;
   universityId: string;
+  batch?: string;
   branch: string;
   year: string;
   role: LoginResponseRole;
