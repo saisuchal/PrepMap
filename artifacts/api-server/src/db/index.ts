@@ -534,24 +534,22 @@ export async function initializeDatabase(): Promise<void> {
   `);
 
   await pool.query(`
-    DO $$
-    BEGIN
-      IF NOT EXISTS (
-        SELECT 1
-        FROM pg_constraint
-        WHERE conname = 'users_batch_required_for_learners_chk'
-      ) THEN
-        ALTER TABLE public.users
-        ADD CONSTRAINT users_batch_required_for_learners_chk
-        CHECK (
-          CASE
-            WHEN lower(coalesce(role, '')) IN ('student', 'super_student')
-              THEN btrim(coalesce(batch, '')) <> '' AND lower(btrim(batch)) <> 'all'
-            ELSE btrim(coalesce(batch, '')) <> ''
-          END
-        );
-      END IF;
-    END $$;
+    ALTER TABLE public.users
+    DROP CONSTRAINT IF EXISTS users_batch_required_for_learners_chk;
+  `);
+
+  await pool.query(`
+    ALTER TABLE public.users
+    ADD CONSTRAINT users_batch_required_for_learners_chk
+    CHECK (
+      CASE
+        WHEN lower(coalesce(role, '')) = 'student'
+          THEN btrim(coalesce(batch, '')) <> '' AND lower(btrim(batch)) <> 'all'
+        WHEN lower(coalesce(role, '')) = 'super_student'
+          THEN btrim(coalesce(batch, '')) <> ''
+        ELSE btrim(coalesce(batch, '')) <> ''
+      END
+    );
   `);
 
   await pool.query(`
